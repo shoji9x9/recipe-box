@@ -6,7 +6,10 @@
 use std::fmt;
 use std::future::Future;
 
-use crate::workspace::WorkspaceId;
+use crate::{
+    recipe::{Recipe, RecipeFields, RecipeId},
+    workspace::WorkspaceId,
+};
 
 /// 外の世界とのやり取りで起きた失敗。中身はログに出すだけで、利用者には見せない。
 #[derive(Debug)]
@@ -18,10 +21,16 @@ impl fmt::Display for BackendError {
     }
 }
 
+/// `Backend` のメソッドの戻り値。
+pub type BackendResult<T> = Result<T, BackendError>;
+
 /// ハンドラーが使う外の機能。
 ///
 /// axum はハンドラーの `Future` に `Send`（別のスレッドに渡せること）を求めるので、戻り値に `+ Send` を付ける。
 /// `Clone` は、axum がリクエストごとに状態を複製するために要る。
+///
+/// レシピを扱うメソッドは、必ずワークスペースの ID を受け取る。
+/// 実装は、そのワークスペースのレシピだけを読み書きする（ほかのワークスペースのレシピには触れない）。
 pub trait Backend: Clone + Send + Sync + 'static {
     /// 暗号に使える質の 128 ビットの乱数を返す。
     fn random_128(&self) -> [u8; 16];
@@ -33,19 +42,63 @@ pub trait Backend: Clone + Send + Sync + 'static {
     fn allow_workspace_creation(
         &self,
         client_key: &str,
-    ) -> impl Future<Output = Result<bool, BackendError>> + Send;
+    ) -> impl Future<Output = BackendResult<bool>> + Send;
 
     /// ワークスペースを保存する。
     fn insert_workspace(
         &self,
         id: &WorkspaceId,
         now: i64,
-    ) -> impl Future<Output = Result<(), BackendError>> + Send;
+    ) -> impl Future<Output = BackendResult<()>> + Send;
 
-    /// ワークスペースの最終利用日時を `now` にする。ワークスペースが無ければ `false` を返す。
-    fn touch_workspace(
+    /// ワークスペースの最終利用日時を返す。ワークスペースが無ければ `None` を返す。
+    fn workspace_last_used_at(
+        &self,
+        id: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<i64>>> + Send;
+
+    /// ワークスペースの最終利用日時を `now` にする。
+    fn set_workspace_last_used_at(
         &self,
         id: &WorkspaceId,
         now: i64,
-    ) -> impl Future<Output = Result<bool, BackendError>> + Send;
+    ) -> impl Future<Output = BackendResult<()>> + Send;
+
+    /// レシピの一覧を、作った日時の新しい順に返す。
+    /// `name_pattern` があれば、料理名にその文字列を含むものだけを返す（ASCII の大文字と小文字は区別しない）。
+    fn list_recipes(
+        &self,
+        workspace: &WorkspaceId,
+        name_pattern: Option<&str>,
+    ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send;
+
+    /// レシピを保存する。
+    fn insert_recipe(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &Recipe,
+    ) -> impl Future<Output = BackendResult<()>> + Send;
+
+    /// レシピを 1 件返す。無ければ `None` を返す。
+    fn get_recipe(
+        &self,
+        workspace: &WorkspaceId,
+        id: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Option<Recipe>>> + Send;
+
+    /// レシピの内容を `fields` で置き換え、最後に変えた日時を `now` にする。レシピが無ければ `false` を返す。
+    fn update_recipe(
+        &self,
+        workspace: &WorkspaceId,
+        id: &RecipeId,
+        fields: &RecipeFields,
+        now: i64,
+    ) -> impl Future<Output = BackendResult<bool>> + Send;
+
+    /// レシピを消す。レシピが無ければ `false` を返す。
+    fn delete_recipe(
+        &self,
+        workspace: &WorkspaceId,
+        id: &RecipeId,
+    ) -> impl Future<Output = BackendResult<bool>> + Send;
 }

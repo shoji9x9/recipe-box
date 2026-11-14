@@ -40,6 +40,7 @@ run = [
   "actionlint",
   "ghalint run",
   "zizmor --offline .github",
+  "shellcheck scripts/*.sh",
 ]
 
 [tasks.audit]
@@ -60,6 +61,10 @@ run = ["cargo fetch --locked", "worker-build --release"]
 description = "ローカルの D1 にマイグレーションを当てる"
 dir = "apps/recipe-box-rs"
 run = "pnpm exec wrangler d1 migrations apply DB --local"
+
+[tasks.smoke]
+description = "起動中のローカルの Worker に API を呼んで確かめる（先に別の端末で mise run dev）"
+run = "scripts/smoke-test.sh"
 
 [tasks.dev]
 description = "ローカルの D1 にマイグレーションを当て、Worker を起動する（http://localhost:8787）"
