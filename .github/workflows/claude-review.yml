@@ -1,0 +1,62 @@
+name: Claude review
+
+# PR を Claude Code でレビューし、指摘を PR のコメントに書く。
+# 認証には Environment「claude-review」の secret の CLAUDE_CODE_OAUTH_TOKEN を使う。
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review
+    # Dependabot の PR には secret が渡らないので、レビューしない（dependabot-merge スキルで確かめる）。
+    # fork からの PR にも secret が渡らないので、同じリポジトリのブランチからの PR だけを対象にする。
+    if: >-
+      github.event.pull_request.draft == false
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # secret をこの job だけに渡すため、Environment「claude-review」に置く。
+    environment: claude-review
+    permissions:
+      contents: read # コードを読む
+      pull-requests: write # レビューのコメントを書く
+      id-token: write # claude-code-action が GitHub の OIDC トークンを使う
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: anthropics/claude-code-action@v1.0.268
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            この PR をレビューしてください。指摘は日本語で書いてください。
+            README.md の仕様と AGENTS.md の決まりに合っているかも確かめてください。
+
+            特に次の点を見てください。
+            - 不具合や、境界の値・エラーの扱いの漏れ
+            - セキュリティ（ワークスペースの ID による絞り込みの漏れ、入力の検証、秘密情報、workflow の権限と依存の固定）
+            - 標準の SQL の範囲を外れた書き方
+            - 足りないテスト
+
+            特定の行への指摘はインラインのコメントで、全体への指摘は PR のコメントで書いてください。
+            問題が無ければ、その旨を短く書いてください。
+          # リポジトリの hooks や MCP の設定を読み込まず、使える道具をレビューに要るものだけにする。
+          claude_args: >-
+            --setting-sources user
+            --strict-mcp-config
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --disallowedTools "Edit,Write,WebFetch,WebSearch,NotebookEdit"

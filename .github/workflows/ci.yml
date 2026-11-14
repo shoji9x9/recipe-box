@@ -1,0 +1,133 @@
+name: CI
+
+# PR ごとに、整形・静的解析・依存の検査・ビルドと動作確認・秘密情報の検査・PR のタイトルの検査を行う。
+# main への変更は PR を通すことをブランチルールで必須にしているので、main への push では実行しない。
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # mise.toml のツールを、mise.lock の版とチェックサムのとおりに入れる。
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Check mise.lock is up to date
+        run: |
+          mise lock
+          git diff --exit-code -- mise.lock
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: mise run lint
+      - name: Verify GitHub Actions lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh-actions-lock --verify
+
+  audit:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      - name: Audit dependencies
+        run: mise run audit
+
+  build:
+    name: Build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: mise run build
+      # ローカルで Worker を起動し、/api/health が応答するかを確かめる。
+      - name: Smoke test
+        working-directory: apps/recipe-box-rs
+        run: |
+          pnpm exec wrangler dev --port 8787 >/tmp/wrangler.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8787/api/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/wrangler.log
+          exit 1
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Scan history for secrets
+        run: gitleaks git --no-banner --redact
+
+  pr-title:
+    name: PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      # squash マージでは PR のタイトルが main の commit message になるので、commitlint で調べる。
+      # タイトルは式で run に埋め込まず、環境変数で渡す（コマンドの差し込みを防ぐ）。
+      - name: Lint PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint

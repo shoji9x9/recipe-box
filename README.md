@@ -79,7 +79,7 @@
 | DB | Cloudflare D1 |
 | 写真の保管先 | Cloudflare R2 |
 | デプロイと開発用のサーバー | wrangler |
-| リンターとフォーマッター | clippy・rustfmt・taplo（TOML） |
+| リンターとフォーマッター | clippy・rustfmt・taplo（TOML）・rumdl（Markdown） |
 | ツールの版の管理 | [mise](https://mise.jdx.dev/) |
 | Node のパッケージマネージャー | pnpm |
 | git フック | lefthook |
@@ -88,8 +88,10 @@ Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった�
 
 ## セキュリティ
 
-- コミットと CI で、gitleaks が秘密情報の混入を調べる。
-- 依存の更新と脆弱性の通知は Dependabot が担う。
+- コミットと CI で、gitleaks が秘密情報の混入を調べる。GitHub の secret scanning と push protection も有効にしている。
+- 依存の更新と脆弱性の通知は Dependabot が担う。Rust の依存は cargo-deny でも調べる。
+- workflow は、job ごとに最小の権限だけを与え、actionlint・ghalint・zizmor・CodeQL で調べる。
+- 脆弱性の報告の仕方は [SECURITY.md](SECURITY.md) にある。
 
 ### サプライチェーン攻撃の対策
 
@@ -104,4 +106,48 @@ Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった�
 
 ## 開発の始め方
 
-雛形を作った後に書く。
+### 前提
+
+- [mise](https://mise.jdx.dev/)
+- [GitHub CLI](https://cli.github.com/)（`gh auth login` で認証しておく）
+- OS のパッケージの `pkg-config` と OpenSSL の開発用ファイル。worker-build のビルドに要る。
+  Ubuntu では `sudo apt-get install -y pkg-config libssl-dev` で入る。
+
+### 準備
+
+```bash
+mise install    # mise.lock のとおりに Rust・Node・pnpm・各種の検査ツールを入れる
+pnpm install    # wrangler と commitlint を入れ、lefthook の git フックを有効にする
+```
+
+### よく使うコマンド
+
+| コマンド | 内容 |
+| --- | --- |
+| `mise run dev` | ローカルで Worker を起動する（<http://localhost:8787>） |
+| `mise run build` | Worker をビルドする |
+| `mise run fmt` | Rust・TOML・Markdown を整形する |
+| `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor） |
+| `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
+
+commit のときは、lefthook が整形・静的解析・gitleaks・commitlint を実行する。
+
+### ディレクトリ
+
+| パス | 内容 |
+| --- | --- |
+| `apps/recipe-box-rs/` | リライト前の Rust の Worker |
+| `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
+
+## CI と CD
+
+| workflow | 内容 |
+| --- | --- |
+| `ci.yml` | PR ごとに、静的解析・依存の検査・ビルドと動作確認・秘密情報の検査・PR のタイトルの検査を行う |
+| `codeql.yml` | Rust のコードと workflow を CodeQL で解析する |
+| `claude-review.yml` | PR を Claude Code でレビューする |
+| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする |
+| `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする |
+| `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
+
+main は、ブランチルールで PR を通さない変更と強制 push を禁止し、CI の成功を必須にしている。

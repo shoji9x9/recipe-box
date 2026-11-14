@@ -1,0 +1,14 @@
+# pnpm の設定。Node のパッケージは wrangler と commitlint のためだけに使う。
+
+# 公開から 7 日（10080 分）たっていない版を入れない。条件に合う版が無ければ失敗する。
+minimumReleaseAge: 10080
+minimumReleaseAgeStrict: true
+
+# 以前の版より信頼の根拠（provenance など）が弱くなった版を入れない。
+trustPolicy: no-downgrade
+
+# インストール時のスクリプトは、ここで許可したパッケージだけ実行する。
+allowBuilds:
+  # 各 OS 用のバイナリが正しく入ったかを確かめるスクリプト。
+  esbuild: true
+  workerd: true

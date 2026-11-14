@@ -1,0 +1,68 @@
+name: Outdated tools
+
+# Dependabot は mise のツールを更新しないので、週に 1 回 `mise outdated` を調べ、
+# 新しい版があれば追跡用の Issue を作るか更新し、無くなれば閉じる。
+on:
+  schedule:
+    - cron: "0 0 * * 1" # 毎週月曜 9:00（日本時間）
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  outdated:
+    name: Check outdated mise tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # mise.toml を読む
+      issues: write # 追跡用の Issue を作る・更新する・閉じる
+    env:
+      ISSUE_TITLE: "mise のツールに新しい版がある"
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Detect outdated tools
+        id: detect
+        run: |
+          # minimum_release_age により、公開から 7 日たっていない版は候補に出ない。
+          report="$(mise outdated --bump --json)"
+          printf '%s' "${report:-{\}}" >/tmp/outdated.json
+          count="$(jq 'length' /tmp/outdated.json)"
+          echo "count=$count" >>"$GITHUB_OUTPUT"
+          {
+            echo "mise で入れているツールに新しい版があります（\`mise outdated --bump\`）。"
+            echo
+            echo "| ツール | 今の版 | 新しい版 |"
+            echo "| --- | --- | --- |"
+            jq -r 'to_entries[] | "| \(.key) | \(.value.current) | \(.value.bump // .value.latest) |"' /tmp/outdated.json
+            echo
+            echo "上げるときは \`mise upgrade <ツール> --bump\` と \`mise lock\` を実行し、PR を作る。"
+          } >/tmp/issue-body.md
+      - name: Update tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COUNT: ${{ steps.detect.outputs.count }}
+        run: |
+          number="$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number // empty')"
+          if [ "$COUNT" -gt 0 ]; then
+            if [ -n "$number" ]; then
+              gh issue edit "$number" --body-file /tmp/issue-body.md
+            else
+              gh issue create --title "$ISSUE_TITLE" --body-file /tmp/issue-body.md
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" --comment "すべてのツールが最新になったので閉じます。"
+          fi

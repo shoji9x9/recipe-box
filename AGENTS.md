@@ -26,7 +26,14 @@
 - 依存を足したら lockfile（`Cargo.lock`・`pnpm-lock.yaml`）も commit する。
 - 公開から 7 日たっていない版は使わない。急ぎで必要なときは、理由を PR に書いたうえで一時的に回避する。
 - インストール時のスクリプトの実行を許可するパッケージを増やすときは、理由を PR に書く。
-- GitHub Actions の `uses:` を足すか変えたら、`gh actions-lock` で `.github/workflows/actions.lock` を作り直す。
+- GitHub Actions の `uses:` を足すか変えたら、`gh-actions-lock` を実行して `.github/workflows/actions.lock` を作り直す。
+  `uses:` にはタグを書き、commit の SHA は lockfile に記録する。
+- workflow の `permissions` は、上で `permissions: {}` にし、job ごとに要るものだけを、理由のコメント付きで与える。
+
+## 確認
+
+- commit の前に lefthook が整形と静的解析を実行する。フックを飛ばさない（`--no-verify` を使わない）。
+- PR を作る前に `mise run lint` と `mise run audit` を実行する。
 
 ## SQL
 
