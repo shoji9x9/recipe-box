@@ -10,8 +10,8 @@ mod workspace;
 use askama::Template;
 use axum::{
     Json, Router,
-    http::{StatusCode, header},
-    response::{Html, IntoResponse},
+    http::{StatusCode, Uri, header},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use serde::Serialize;
@@ -35,20 +35,28 @@ struct Health {
 ///
 /// `backend` は、ハンドラーが DB などを使うときの窓口。本番では Cloudflare の機能を、テストでは偽物を渡す。
 pub fn router<B: Backend>(backend: B) -> Router {
-    // API は、無いパスや受け付けないメソッドにも、ほかの失敗と同じ JSON の形で答える。
+    // API は、受け付けないメソッドにも、ほかの失敗と同じ JSON の形で答える。
     let api = Router::new()
         .route("/health", get(health))
         .route("/workspaces", post(workspace::create::<B>))
-        .fallback(api_not_found)
         .method_not_allowed_fallback(api_method_not_allowed);
     Router::new()
         .route("/", get(index))
         .nest("/api", api)
+        // 無いパスは、ここでまとめて扱う。`nest` した router の fallback では
+        // `/api/`（末尾のスラッシュ）に届かないので、パスを見て分ける。
+        .fallback(not_found)
         .with_state(backend)
 }
 
-async fn api_not_found() -> ApiError {
-    ApiError::NotFound
+/// 無いパスへの応答。API（`/api` とその下）には JSON の形で、画面には本文の無い 404 で答える。
+async fn not_found(uri: Uri) -> Response {
+    let path = uri.path();
+    if path == "/api" || path.starts_with("/api/") {
+        ApiError::NotFound.into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
 }
 
 async fn api_method_not_allowed() -> ApiError {
@@ -268,6 +276,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_root_and_trailing_slash_return_json_not_found() {
+        for path in ["/api", "/api/", "/api/workspaces/"] {
+            let response = get_path(path).await;
+            assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(response.content_type, "application/json", "{path}");
+            assert_eq!(response.json()["error"], "not_found", "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn workspaces_rejects_get() {
+        let response = get_path("/api/workspaces").await;
+        assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.json()["error"], "method_not_allowed");
+        assert!(response.allow.contains("POST"), "{}", response.allow);
+    }
+
+    #[tokio::test]
     async fn unknown_page_returns_not_found() {
         let response = get_path("/no-such-page").await;
         assert_eq!(response.status, StatusCode::NOT_FOUND);
@@ -291,6 +317,17 @@ mod tests {
             *backend.rate_limit_keys.lock().unwrap(),
             ["192.0.2.1", "192.0.2.1"]
         );
+    }
+
+    #[tokio::test]
+    async fn create_workspace_without_client_ip_uses_unknown_key() {
+        let backend = FakeBackend::default();
+        let request = Request::post("/api/workspaces")
+            .body(Body::empty())
+            .unwrap();
+        let response = send(router(backend.clone()), request).await;
+        assert_eq!(response.status, StatusCode::CREATED);
+        assert_eq!(*backend.rate_limit_keys.lock().unwrap(), ["unknown"]);
     }
 
     #[tokio::test]

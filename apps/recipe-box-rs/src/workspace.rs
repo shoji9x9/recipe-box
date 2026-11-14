@@ -132,7 +132,7 @@ pub async fn create<B: Backend>(
 
 /// ワークスペースを作る回数を数えるときの、作る人を表すキー。
 ///
-/// - IPv4 は、アドレスそのものをキーにする。
+/// - IPv4 は、アドレスそのものをキーにする。IPv4 射影アドレス（`::ffff:192.0.2.1`）も IPv4 として扱う。
 /// - IPv6 は、上位 64 ビットだけをキーにする。1 つの回線には /64 以上の範囲が割り当てられることが多く、
 ///   アドレスをそのまま使うと、範囲の中でアドレスを変えるだけで制限を避けられるため。
 /// - ヘッダーが無いか、IP アドレスとして読めないときは、まとめて `unknown` として数える。
@@ -142,7 +142,9 @@ fn rate_limit_key(headers: &HeaderMap) -> String {
     let ip = headers
         .get(CLIENT_IP_HEADER)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<IpAddr>().ok());
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        // `::ffff:192.0.2.1` のような IPv4 射影アドレスは、IPv4 のアドレスにそろえる。
+        .map(|ip| ip.to_canonical());
     match ip {
         Some(IpAddr::V4(v4)) => v4.to_string(),
         Some(IpAddr::V6(v6)) => {
@@ -171,6 +173,11 @@ mod tests {
     #[test]
     fn rate_limit_key_uses_ipv4_address() {
         assert_eq!(key_for(Some("192.0.2.1")), "192.0.2.1");
+    }
+
+    #[test]
+    fn rate_limit_key_treats_ipv4_mapped_address_as_ipv4() {
+        assert_eq!(key_for(Some("::ffff:192.0.2.1")), "192.0.2.1");
     }
 
     #[test]
