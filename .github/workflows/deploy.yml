@@ -1,7 +1,8 @@
 name: Deploy
 
 # main に入った変更を Cloudflare Workers の本番へデプロイする。
-# Cloudflare の API トークンとアカウント ID は、GitHub Environment「production」の secret に置く。
+# Cloudflare の API トークンは GitHub Environment「production」の secret に、
+# アカウント ID は同じ Environment の variable に置く（アカウント ID は認証情報ではないが、公開リポジトリには書かない）。
 on:
   push:
     branches: [main]
@@ -31,13 +32,13 @@ jobs:
         id: cred
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "present=true" >>"$GITHUB_OUTPUT"
           else
             echo "present=false" >>"$GITHUB_OUTPUT"
-            echo "Environment「production」に CLOUDFLARE_API_TOKEN と CLOUDFLARE_ACCOUNT_ID が無いので、デプロイしない" >>"$GITHUB_STEP_SUMMARY"
+            echo "Environment「production」に secret の CLOUDFLARE_API_TOKEN か variable の CLOUDFLARE_ACCOUNT_ID が無いので、デプロイしない" >>"$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/checkout@v7.0.1
         if: steps.cred.outputs.present == 'true'
@@ -55,5 +56,5 @@ jobs:
         working-directory: apps/recipe-box-rs
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler deploy

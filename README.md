@@ -151,3 +151,15 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
 
 main は、ブランチルールで PR を通さない変更と強制 push を禁止し、CI の成功を必須にしている。
+
+### デプロイとレビューの準備
+
+GitHub の Settings → Environments に、次の値を置く。
+
+| Environment | 種類 | 名前 | 値 |
+| --- | --- | --- | --- |
+| `production` | secret | `CLOUDFLARE_API_TOKEN` | Cloudflare のダッシュボードの「Account API tokens」で作る。権限は「Edit Cloudflare Workers」にし、対象はデプロイするアカウントだけに絞る |
+| `production` | variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID。認証情報ではないが、公開リポジトリには書かない |
+| `claude-review` | secret | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` で作る |
+
+値が無い間、`deploy.yml` は何もせずに終わり、`claude-review.yml` は失敗する。
