@@ -5,8 +5,8 @@ edition = "2024"
 publish = false
 
 [lib]
-# Workers では wasm のライブラリとして読み込まれる。
-crate-type = ["cdylib"]
+# cdylib: Workers が読み込む wasm を作る。rlib: テストからこのクレートを使えるようにする。
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 askama = "0.16.1"
@@ -16,6 +16,11 @@ serde = { version = "1.0.229", features = ["derive"] }
 tower-service = "0.3.3"
 # workers-rs の 0.9.0 は公開から 7 日たっていないので 0.8.7 に固定する。
 worker = { version = "=0.8.7", features = ["http", "axum"] }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
+tower = { version = "0.5.3", features = ["util"] }
 
 [lints]
 workspace = true

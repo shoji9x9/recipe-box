@@ -29,7 +29,6 @@ jobs:
     permissions:
       contents: read # コードを読む
       pull-requests: write # レビューのコメントを書く
-      id-token: write # claude-code-action が GitHub の OIDC トークンを使う
     steps:
       - uses: actions/checkout@v7.0.1
         with:

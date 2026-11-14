@@ -101,6 +101,7 @@ Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった�
   - pnpm: `minimumReleaseAge: 10080`（単位は分）
   - Cargo: `registry.global-min-publish-age = "7 days"`（Rust 1.100 から。Rust を 1.100 に上げるときに設定する）
 - 依存はすべて lockfile で固定する（`Cargo.lock`・`pnpm-lock.yaml`・`mise.lock`）。CI は lockfile と食い違うと失敗する。
+  mise が `cargo install` で入れる worker-build は、配布元の `Cargo.lock` に従って `--locked` でビルドされる。ただし `cargo install` は Cargo の待ち日数の設定を使わないので、worker-build の版は公開から 7 日たったものを手で選ぶ。
 - GitHub Actions は workflow lockfile（`.github/workflows/actions.lock`）で、使う action とその action が使う action を commit に固定する。
 - pnpm は、許可したパッケージのインストール時のスクリプトだけを実行する。
 
@@ -125,6 +126,7 @@ pnpm install    # wrangler と commitlint を入れ、lefthook の git フック
 | コマンド | 内容 |
 | --- | --- |
 | `mise run dev` | ローカルで Worker を起動する（<http://localhost:8787>） |
+| `mise run test` | Rust のテストを実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
 | `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor） |
@@ -143,7 +145,8 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 
 | workflow | 内容 |
 | --- | --- |
-| `ci.yml` | PR ごとに、静的解析・依存の検査・ビルドと動作確認・秘密情報の検査・PR のタイトルの検査を行う |
+| `ci.yml` | PR ごとに、静的解析・依存の検査・テスト・ビルドと動作確認・秘密情報の検査を行う |
+| `pr-title.yml` | PR のタイトルが Conventional Commits の形かを調べる（タイトルを直したときにも動く） |
 | `codeql.yml` | Rust のコードと workflow を CodeQL で解析する |
 | `claude-review.yml` | PR を Claude Code でレビューする |
 | `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする |

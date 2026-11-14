@@ -1,0 +1,40 @@
+name: PR title
+
+# squash マージでは PR のタイトルが main の commit message になるので、commitlint で形を調べる。
+# タイトルを直したときにも調べ直すため、edited でも動かす（ci.yml の重い job は動かさない）。
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pr-title:
+    name: PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # commitlint の設定を読む
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      # タイトルは式で run に埋め込まず、環境変数で渡す（コマンドの差し込みを防ぐ）。
+      - name: Lint PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint

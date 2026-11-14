@@ -26,19 +26,26 @@ jobs:
     timeout-minutes: 30
     environment: production
     permissions:
-      contents: read
+      contents: read # コードを読む
     steps:
       - name: Check Cloudflare credentials
         id: cred
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "present=true" >>"$GITHUB_OUTPUT"
           else
             echo "present=false" >>"$GITHUB_OUTPUT"
-            echo "Environment「production」に secret の CLOUDFLARE_API_TOKEN か variable の CLOUDFLARE_ACCOUNT_ID が無いので、デプロイしない" >>"$GITHUB_STEP_SUMMARY"
+            message="Environment「production」に secret の CLOUDFLARE_API_TOKEN か variable の CLOUDFLARE_ACCOUNT_ID が無いので、デプロイしない"
+            echo "::warning::$message"
+            echo "$message" >>"$GITHUB_STEP_SUMMARY"
+            # 手で実行したときは、デプロイできなかったことに気付けるよう失敗させる。
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              exit 1
+            fi
           fi
       - uses: actions/checkout@v7.0.1
         if: steps.cred.outputs.present == 'true'
