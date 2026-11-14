@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     backend::{Backend, BackendError, BackendResult},
-    recipe::{Recipe, RecipeFields, RecipeId},
+    recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
 
@@ -147,8 +147,10 @@ impl Backend for FakeBackend {
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
+        query: Option<&str>,
     ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send {
         ready(self.check().map(|()| {
+            // 本物の `instr(search_name, ?) > 0` と同じく、検索に使う形の料理名が query を含むかで絞る。
             let mut recipes: Vec<Recipe> = self
                 .recipes
                 .lock()
@@ -156,6 +158,7 @@ impl Backend for FakeBackend {
                 .iter()
                 .filter(|((ws, _), _)| ws == workspace.as_str())
                 .map(|(_, recipe)| recipe.clone())
+                .filter(|recipe| query.is_none_or(|q| search_name(&recipe.name).contains(q)))
                 .collect();
             recipes.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
             recipes

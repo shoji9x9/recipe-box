@@ -64,10 +64,13 @@ pub trait Backend: Clone + Send + Sync + 'static {
         now: i64,
     ) -> impl Future<Output = BackendResult<()>> + Send;
 
-    /// ワークスペースのレシピをすべて、作った日時の新しい順（同じ日時なら ID の順）に返す。
+    /// ワークスペースのレシピを、作った日時の新しい順（同じ日時なら ID の順）に返す。
+    /// `query` があれば、`search_name` 列がそれを含むレシピだけを返す。
+    /// `query` は呼び出し側で [`crate::recipe::search_name`] の形にしてから渡す。
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
+        query: Option<&str>,
     ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send;
 
     /// レシピを保存する。

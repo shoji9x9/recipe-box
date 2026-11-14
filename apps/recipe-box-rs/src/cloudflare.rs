@@ -16,7 +16,7 @@ use worker::{
 
 use crate::{
     backend::{Backend, BackendError, BackendResult},
-    recipe::{Recipe, RecipeFields, RecipeId},
+    recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
 
@@ -183,27 +183,49 @@ impl Backend for CloudflareBackend {
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
+        query: Option<&str>,
     ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send {
         let env = self.env.clone();
         let workspace = workspace.to_string();
+        let query = query.map(str::to_owned);
         SendFuture::new(async move {
             let action = "レシピの一覧を読めない";
             let db = database(&env)?;
             // 同じ日時に作ったレシピの順番が毎回変わらないよう、ID でも並べる。
             // 件数の上限もページ分けも無く、材料と手順を含めてすべて読む。
             // 1 ワークスペースのレシピの数の上限を #15 で入れるまでの暫定である。
-            run(
-                &db,
-                &format!(
-                    "SELECT {RECIPE_COLUMNS} FROM recipes \
-                     WHERE workspace_id = ? ORDER BY created_at DESC, id"
-                ),
-                &[workspace.into()],
-                action,
-            )
-            .await?
-            .results::<Recipe>()
-            .map_err(|e| backend_error(action, &e))
+            let result = match query {
+                // 部分一致には LIKE ではなく instr を使う（AGENTS.md の SQL の例外）。
+                // D1 は LIKE のパターンを 50 バイトまでに制限していて、日本語の検索の文字列が 16 文字ほどで通らなくなるため。
+                Some(query) => {
+                    run(
+                        &db,
+                        &format!(
+                            "SELECT {RECIPE_COLUMNS} FROM recipes \
+                             WHERE workspace_id = ? AND instr(search_name, ?) > 0 \
+                             ORDER BY created_at DESC, id"
+                        ),
+                        &[workspace.into(), query.into()],
+                        action,
+                    )
+                    .await?
+                }
+                None => {
+                    run(
+                        &db,
+                        &format!(
+                            "SELECT {RECIPE_COLUMNS} FROM recipes \
+                             WHERE workspace_id = ? ORDER BY created_at DESC, id"
+                        ),
+                        &[workspace.into()],
+                        action,
+                    )
+                    .await?
+                }
+            };
+            result
+                .results::<Recipe>()
+                .map_err(|e| backend_error(action, &e))
         })
     }
 
@@ -217,6 +239,7 @@ impl Backend for CloudflareBackend {
             workspace.to_string().into(),
             recipe.id.clone().into(),
             recipe.name.clone().into(),
+            search_name(&recipe.name).into(),
             int_to_js(recipe.servings),
             recipe.ingredients.clone().into(),
             recipe.steps.clone().into(),
@@ -230,8 +253,8 @@ impl Backend for CloudflareBackend {
             run(
                 &db,
                 "INSERT INTO recipes \
-                 (workspace_id, id, name, servings, ingredients, steps, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (workspace_id, id, name, search_name, servings, ingredients, steps, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 &values.0,
                 "レシピを保存できない",
             )
@@ -272,6 +295,7 @@ impl Backend for CloudflareBackend {
         let env = self.env.clone();
         let values = SendWrapper::new([
             fields.name.clone().into(),
+            search_name(&fields.name).into(),
             int_to_js(fields.servings),
             fields.ingredients.clone().into(),
             fields.steps.clone().into(),
@@ -284,7 +308,7 @@ impl Backend for CloudflareBackend {
             let db = database(&env)?;
             let result = run(
                 &db,
-                "UPDATE recipes SET name = ?, servings = ?, ingredients = ?, steps = ?, updated_at = ? \
+                "UPDATE recipes SET name = ?, search_name = ?, servings = ?, ingredients = ?, steps = ?, updated_at = ? \
                  WHERE workspace_id = ? AND id = ?",
                 &values.0,
                 action,

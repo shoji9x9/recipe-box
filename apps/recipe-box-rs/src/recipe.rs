@@ -75,16 +75,13 @@ pub struct Recipe {
     pub updated_at: i64,
 }
 
-/// 料理名が検索の文字列を含むかを返す。ASCII の英字の大文字と小文字だけを区別しない部分一致。
+/// 検索に使う形にする。ASCII の英字だけを小文字にし、ほかの文字は変えない。
 ///
-/// 検索は DB の `LIKE` ではなく、ここで行う。理由は 2 つある。
-/// - DB の `LOWER` や `LIKE` の大文字と小文字の扱いは、SQLite と PostgreSQL で違う（リライトの後に結果が変わる）。
-/// - D1 は `LIKE` のパターンを 50 バイトまでに制限していて、日本語の長い検索の文字列が通らない。
-///
-/// 検索しない一覧でもワークスペースのレシピをすべて読むので、ここで絞り込んでも DB から読む量は変わらない。
-pub fn name_matches(name: &str, query: &str) -> bool {
-    name.to_ascii_lowercase()
-        .contains(&query.to_ascii_lowercase())
+/// 料理名を保存するときは `search_name` 列にこの形も入れ、検索の文字列もこの形にしてから比べる。
+/// 両側をそろえるので、ASCII の大文字と小文字だけを区別しない検索になる。
+/// DB の `LOWER` を使わないのは、SQLite は ASCII だけ、PostgreSQL は ASCII 以外も小文字にして、結果が変わるため。
+pub fn search_name(text: &str) -> String {
+    text.to_ascii_lowercase()
 }
 
 /// 検証を通った、レシピの中身。
@@ -219,10 +216,10 @@ pub async fn list<B: Backend>(
             message: "検索の条件（q）は 100 文字までです",
         });
     }
-    let mut recipes = backend.list_recipes(&workspace.id).await?;
-    if let Some(q) = pattern {
-        recipes.retain(|recipe| name_matches(&recipe.name, &q));
-    }
+    let query = pattern.as_deref().map(search_name);
+    let recipes = backend
+        .list_recipes(&workspace.id, query.as_deref())
+        .await?;
     Ok(Json(RecipeList { recipes }))
 }
 

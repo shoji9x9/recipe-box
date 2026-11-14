@@ -86,7 +86,7 @@ expect 200 "GET /api/recipes?q=CURRY"
 request GET '/api/recipes?q=%25' "$workspace_a"
 expect 200 "GET /api/recipes?q=%"
 [ "$(json '[.recipes[].name] | join(",")')" = "100% Juice" ] || fail "% を文字として検索しない"
-# _ と \ を含む料理名も、文字そのものとして探せる（D1 から読んだ結果をアプリで絞り込む）。
+# _ と \ を含む料理名も、文字そのものとして探せる（instr はワイルドカードを持たない）。
 request POST /api/recipes "$workspace_a" '{"name":"A_B","servings":1}'
 expect 201 "POST /api/recipes（A_B）"
 request POST /api/recipes "$workspace_a" '{"name":"AxB","servings":1}'
@@ -99,7 +99,7 @@ expect 200 "GET /api/recipes?q=_"
 request GET '/api/recipes?q=%5C' "$workspace_a"
 expect 200 "GET /api/recipes?q=\\"
 [ "$(json '[.recipes[].name] | join(",")')" = 'a\b' ] || fail "\\ を文字として検索しない"
-# 上限いっぱい（100 文字）の日本語でも検索できる（D1 の LIKE のパターンの上限 50 バイトに当たらない）。
+# 上限いっぱい（100 文字）の日本語でも検索できる（instr は D1 の LIKE のパターンの上限 50 バイトを受けない）。
 long_name="$(printf 'あ%.0s' $(seq 1 100))"
 request POST /api/recipes "$workspace_a" "{\"name\":\"$long_name\",\"servings\":1}"
 expect 201 "POST /api/recipes（100 文字の料理名）"
