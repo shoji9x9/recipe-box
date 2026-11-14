@@ -28,8 +28,12 @@ pub const MAX_INGREDIENTS_CHARS: usize = 5_000;
 pub const MAX_STEPS_CHARS: usize = 10_000;
 /// 検索の文字列の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_QUERY_CHARS: usize = 100;
-/// リクエストの本文の大きさの上限（バイト）。上の上限いっぱいの JSON が収まる大きさにする。
-pub const MAX_BODY_BYTES: usize = 128 * 1024;
+/// リクエストの本文の大きさの上限（バイト）。
+///
+/// 上の上限いっぱいの JSON が収まる大きさにする。最も大きくなるのは、すべての文字を
+/// `\uXXXX` のエスケープの組（絵文字なら 1 文字 12 バイト）で送ったときで、
+/// 15,200 文字 × 12 バイト = 182,400 バイトに項目名などを足しても 256 KiB に収まる。
+pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// レシピの ID。ワークスペースの ID と同じ形（16 進数の小文字 32 文字）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +73,14 @@ pub struct Recipe {
     pub created_at: i64,
     /// 最後に変えた日時（UNIX 時間のミリ秒）。
     pub updated_at: i64,
+}
+
+/// 検索に使う料理名を作る。ASCII の英字だけを小文字にし、ほかの文字は変えない。
+///
+/// 検索の文字列にも同じ変換をしてから部分一致で比べるので、ASCII の大文字と小文字だけを区別しない検索になる。
+/// DB の `LOWER` を使わないのは、SQLite は ASCII だけ、PostgreSQL は ASCII 以外も小文字にして、結果が変わるため。
+pub fn search_name(name: &str) -> String {
+    name.to_ascii_lowercase()
 }
 
 /// 検証を通った、レシピの中身。

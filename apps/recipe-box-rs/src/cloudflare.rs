@@ -16,7 +16,7 @@ use worker::{
 
 use crate::{
     backend::{Backend, BackendError, BackendResult},
-    recipe::{Recipe, RecipeFields, RecipeId},
+    recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
 
@@ -94,17 +94,17 @@ fn changed_rows(result: &D1Result, action: &str) -> BackendResult<usize> {
 
 /// 料理名の部分一致の検索に使う `LIKE` の形を作る。
 ///
+/// 検索の文字列を [`search_name`] と同じ変換（ASCII の英字だけを小文字にする）にかけ、
+/// 同じ変換をして保存した `search_name` 列と比べる。両側を同じ形にそろえるので、DB による違いが出ない。
 /// `%`・`_`・`\` は `LIKE` で特別な意味を持つので、`\` を前に付けて文字そのものとして扱う（SQL の `ESCAPE '\'`）。
-/// ASCII の大文字と小文字を区別しないよう、ここで ASCII を小文字にし、SQL でも `LOWER(name)` と比べる。
-/// D1（SQLite）の `LOWER` は ASCII だけを小文字にするので、ASCII 以外の大文字と小文字は区別する。
 fn like_pattern(text: &str) -> String {
     let mut pattern = String::with_capacity(text.len() + 2);
     pattern.push('%');
-    for c in text.chars() {
+    for c in search_name(text).chars() {
         if matches!(c, '%' | '_' | '\\') {
             pattern.push('\\');
         }
-        pattern.push(c.to_ascii_lowercase());
+        pattern.push(c);
     }
     pattern.push('%');
     pattern
@@ -216,7 +216,7 @@ impl Backend for CloudflareBackend {
                         &db,
                         &format!(
                             "SELECT {RECIPE_COLUMNS} FROM recipes \
-                             WHERE workspace_id = ? AND LOWER(name) LIKE ? ESCAPE '\\' \
+                             WHERE workspace_id = ? AND search_name LIKE ? ESCAPE '\\' \
                              ORDER BY created_at DESC, id"
                         ),
                         &[workspace.into(), pattern.into()],
@@ -253,6 +253,7 @@ impl Backend for CloudflareBackend {
             workspace.to_string().into(),
             recipe.id.clone().into(),
             recipe.name.clone().into(),
+            search_name(&recipe.name).into(),
             int_to_js(recipe.servings),
             recipe.ingredients.clone().into(),
             recipe.steps.clone().into(),
@@ -266,8 +267,8 @@ impl Backend for CloudflareBackend {
             run(
                 &db,
                 "INSERT INTO recipes \
-                 (workspace_id, id, name, servings, ingredients, steps, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (workspace_id, id, name, search_name, servings, ingredients, steps, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 &values.0,
                 "レシピを保存できない",
             )
@@ -308,6 +309,7 @@ impl Backend for CloudflareBackend {
         let env = self.env.clone();
         let values = SendWrapper::new([
             fields.name.clone().into(),
+            search_name(&fields.name).into(),
             int_to_js(fields.servings),
             fields.ingredients.clone().into(),
             fields.steps.clone().into(),
@@ -320,7 +322,7 @@ impl Backend for CloudflareBackend {
             let db = database(&env)?;
             let result = run(
                 &db,
-                "UPDATE recipes SET name = ?, servings = ?, ingredients = ?, steps = ?, updated_at = ? \
+                "UPDATE recipes SET name = ?, search_name = ?, servings = ?, ingredients = ?, steps = ?, updated_at = ? \
                  WHERE workspace_id = ? AND id = ?",
                 &values.0,
                 action,

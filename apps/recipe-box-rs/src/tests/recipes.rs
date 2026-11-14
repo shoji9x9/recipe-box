@@ -193,6 +193,84 @@ async fn create_rejects_too_large_body() {
 }
 
 #[tokio::test]
+async fn create_accepts_maximum_fields_sent_as_escaped_json() {
+    // すべての文字を \uXXXX のエスケープの組（絵文字は 1 文字 12 バイト）で送っても、本文の上限に収まる。
+    let emoji = "\\ud83c\\udf5b";
+    let raw = format!(
+        r#"{{"name":"{}","servings":100,"ingredients":"{}","steps":"{}"}}"#,
+        emoji.repeat(100),
+        emoji.repeat(5_000),
+        emoji.repeat(10_000),
+    );
+    assert!(raw.len() > 128 * 1024, "{}", raw.len());
+    let backend = backend_with_workspaces();
+    let request = Request::post("/api/recipes")
+        .header("x-workspace-id", WORKSPACE_A)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(raw))
+        .unwrap();
+    let response = send(router(backend), request).await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+    assert_eq!(response.json()["steps"], "🍛".repeat(10_000));
+}
+
+#[tokio::test]
+async fn update_rejects_unreadable_or_too_large_body() {
+    let backend = backend_with_workspaces();
+    let created = create(&backend, WORKSPACE_A, &curry()).await;
+    let path = format!("/api/recipes/{}", created["id"].as_str().unwrap());
+
+    let request = Request::put(path.as_str())
+        .header("x-workspace-id", WORKSPACE_A)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"name":"カレー","servings":"2"}"#))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_error(&response, StatusCode::BAD_REQUEST, "invalid_body", None);
+
+    let body = json!({"name": "カレー", "servings": 2, "steps": "a".repeat(MAX_BODY_BYTES)});
+    let response = call(&backend, Method::PUT, &path, Some(WORKSPACE_A), Some(&body)).await;
+    assert_error(
+        &response,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "payload_too_large",
+        None,
+    );
+
+    let response = call(
+        &backend,
+        Method::PUT,
+        &path,
+        Some(WORKSPACE_A),
+        Some(&json!({"name": "カレー", "servings": 0})),
+    )
+    .await;
+    assert_error(
+        &response,
+        StatusCode::BAD_REQUEST,
+        "invalid_field",
+        Some("servings"),
+    );
+
+    // どれも失敗したので、レシピは変わっていない。
+    let response = call(&backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.json(), created);
+}
+
+#[tokio::test]
+async fn null_ingredients_and_steps_are_treated_as_empty() {
+    let backend = backend_with_workspaces();
+    let body = create(
+        &backend,
+        WORKSPACE_A,
+        &json!({"name": "水", "servings": 1, "ingredients": null, "steps": null}),
+    )
+    .await;
+    assert_eq!(body["ingredients"], "");
+    assert_eq!(body["steps"], "");
+}
+
+#[tokio::test]
 async fn list_returns_newest_first() {
     let backend = backend_with_workspaces();
     let first = create(&backend, WORKSPACE_A, &curry()).await;
@@ -259,6 +337,57 @@ async fn list_filters_by_name() {
     assert_eq!(search(&backend, "ラーメン").await, Vec::<String>::new());
     // 空なら絞り込まない。
     assert_eq!(search(&backend, "").await.len(), 4);
+}
+
+#[tokio::test]
+async fn list_handles_unusual_queries() {
+    let backend = backend_with_workspaces();
+    create(
+        &backend,
+        WORKSPACE_A,
+        &json!({"name": "A_B", "servings": 1}),
+    )
+    .await;
+    create(
+        &backend,
+        WORKSPACE_A,
+        &json!({"name": "AxB", "servings": 1}),
+    )
+    .await;
+    create(
+        &backend,
+        WORKSPACE_A,
+        &json!({"name": "a\\b", "servings": 1}),
+    )
+    .await;
+    // _ と \ も文字そのものとして探す。
+    assert_eq!(search(&backend, "_").await, ["A_B"]);
+    assert_eq!(search(&backend, "\\").await, ["a\\b"]);
+    // UTF-8 として読めないバイトは置き換え文字になり、エラーにはしない。
+    let response = call(
+        &backend,
+        Method::GET,
+        "/api/recipes?q=%FF",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    // q が 2 つあると、どちらで探すか決められないので受け付けない。
+    let response = call(
+        &backend,
+        Method::GET,
+        "/api/recipes?q=a&q=b",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_error(
+        &response,
+        StatusCode::BAD_REQUEST,
+        "invalid_field",
+        Some("q"),
+    );
 }
 
 #[tokio::test]

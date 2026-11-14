@@ -79,6 +79,19 @@ expect 200 "GET /api/recipes?q=CURRY"
 request GET '/api/recipes?q=%25' "$workspace_a"
 expect 200 "GET /api/recipes?q=%"
 [ "$(json '[.recipes[].name] | join(",")')" = "100% Juice" ] || fail "% を文字として検索しない"
+# _ と \ も、LIKE の特別な文字ではなく文字そのものとして探す（ESCAPE の書き方を実際の D1 で確かめる）。
+request POST /api/recipes "$workspace_a" '{"name":"A_B","servings":1}'
+expect 201 "POST /api/recipes（A_B）"
+request POST /api/recipes "$workspace_a" '{"name":"AxB","servings":1}'
+expect 201 "POST /api/recipes（AxB）"
+request POST /api/recipes "$workspace_a" '{"name":"a\\b","servings":1}'
+expect 201 "POST /api/recipes（a\\b）"
+request GET '/api/recipes?q=_' "$workspace_a"
+expect 200 "GET /api/recipes?q=_"
+[ "$(json '[.recipes[].name] | join(",")')" = "A_B" ] || fail "_ を文字として検索しない"
+request GET '/api/recipes?q=%5C' "$workspace_a"
+expect 200 "GET /api/recipes?q=\\"
+[ "$(json '[.recipes[].name] | join(",")')" = 'a\b' ] || fail "\\ を文字として検索しない"
 
 echo "取得・更新"
 request GET "/api/recipes/$recipe_id" "$workspace_a"
