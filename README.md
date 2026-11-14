@@ -63,7 +63,7 @@
   ヘッダーが無ければ `400`（`workspace_id_missing`）、形が正しくないか 2 つ以上あれば `400`（`workspace_id_invalid`）、そのワークスペースが無ければ `404`（`workspace_not_found`）を返す。
 - ワークスペースを使うたびに、最終利用日時を更新する。
 - すべてのクエリを `workspace_id` で絞り込む。ID を知っている人だけが、そのワークスペースのデータを読み書きできる。
-- 最後に使われてから 30 日たったワークスペースは、定期実行（Cron Trigger）で消す。
+- 最後に使われてから 14 日たったワークスペースは、定期実行（Cron Trigger）で消す。
 
 ### 写真
 
@@ -181,7 +181,7 @@ GitHub の Settings → Environments に、次の値を置く。
 | Environment | 種類 | 名前 | 値 |
 | --- | --- | --- | --- |
 | `production` | secret | `CLOUDFLARE_API_TOKEN` | Cloudflare のダッシュボードの「Account API tokens」で作る。権限は「Edit Cloudflare Workers」と「D1 Edit」にし、対象はデプロイするアカウントだけに絞る |
-| `production` | variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID。認証情報ではないが、公開リポジトリには書かない |
+| `production` | secret | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID。認証情報ではないが、公開リポジトリの Actions のログに出さないよう secret にする |
 | `claude-review` | secret | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` で作る |
 
 値が無い間、`deploy.yml` は何もせずに終わり、`claude-review.yml` は失敗する。
