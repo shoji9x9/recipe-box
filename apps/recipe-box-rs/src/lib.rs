@@ -105,6 +105,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn health_rejects_post() {
+        let request = Request::post("/api/health").body(Body::empty()).unwrap();
+        let response = router().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
     async fn unknown_path_returns_not_found() {
         let (status, _, _) = get("/no-such-page").await;
         assert_eq!(status, StatusCode::NOT_FOUND);

@@ -53,5 +53,10 @@
 - `dependabot-alert-issue`: Dependabot の alert から Issue を作る。
 
 入れ方は `gh skill install shoji9x9/skills <スキル名> --agent claude-code --scope project`。
+
+`pr-finalize-loop` の再レビューの依頼先は `claude-code` にしている（`.config/skills/shoji9x9/common.jsonc`）。
+このリポジトリの Claude のレビュー（`claude-review.yml`）は、push のたびに自動で動き、`@claude review` のコメントには反応しない。
+コメントで起動する `issue_comment` のトリガーは、secret のある job を PR のコメントから動かせてしまうので使わない。
+push せずに再レビューが要るときは、`@claude review` を投稿する代わりに `gh workflow run claude-review.yml -f pr=<番号>` を実行する。
 スキルなしでどこまでできるかも見るため、必要かどうか迷うスキルは入れない。
 `replace-strategy` とその姉妹スキルは、リライトを始めるときに入れる。
