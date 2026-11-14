@@ -57,7 +57,7 @@
 | --- | --- | --- |
 | `400` | `workspace_id_missing` | `X-Workspace-Id` ヘッダーが無い |
 | `400` | `workspace_id_invalid` | `X-Workspace-Id` の形が正しくないか、2 つ以上ある |
-| `400` | `invalid_body` | 本文が JSON として読めない、項目の型が違う（`servings` が文字列など）、`Content-Type: application/json` が無い |
+| `400` | `invalid_body` | 本文が JSON として読めない、項目の型が違う（`servings` が文字列など）、`Content-Type: application/json` が無い。JSON として正しくても、64 ビットの浮動小数点数で表せない大きさの数（`1e400` など）と、対になっていないサロゲートのエスケープ（`"\ud800"` など）も、読めないものとして扱う |
 | `400` | `invalid_field` | 項目の値が正しくない（下の「レシピの項目」） |
 | `404` | `workspace_not_found` | そのワークスペースが無い |
 | `404` | `recipe_not_found` | そのワークスペースに、その ID のレシピが無い（ID の形が正しくないときと、ほかのワークスペースのレシピを含む） |
@@ -176,6 +176,7 @@ Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった�
 - [mise](https://mise.jdx.dev/)
 - [GitHub CLI](https://cli.github.com/)（`gh auth login` で認証しておく）
 - Google Chrome（エージェントが chrome-devtools MCP で画面を確かめるときだけ要る）
+- `curl` と `jq`（`mise run smoke` のスモークテストで使う）
 - OS のパッケージの `pkg-config` と OpenSSL の開発用ファイル。worker-build のビルドに要る。
   Ubuntu では `sudo apt-get install -y pkg-config libssl-dev` で入る。
 

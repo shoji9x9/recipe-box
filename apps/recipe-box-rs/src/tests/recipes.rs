@@ -186,6 +186,17 @@ async fn create_rejects_unreadable_body() {
             true,
         ),
         ("name が数値", r#"{"name":1,"servings":2}"#, true),
+        // f64 で表せない数と、対になっていないサロゲートは、JSON として読めないものとして扱う（README）。
+        (
+            "servings が 1e400",
+            r#"{"name":"カレー","servings":1e400}"#,
+            true,
+        ),
+        (
+            "対になっていないサロゲート",
+            r#"{"name":"\ud800","servings":2}"#,
+            true,
+        ),
         (
             "Content-Type が無い",
             r#"{"name":"カレー","servings":2}"#,

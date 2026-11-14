@@ -65,6 +65,8 @@ request POST /api/recipes "$workspace_a" '{"name":"Beef Curry","servings":4,"ing
 expect 201 "POST /api/recipes"
 recipe_id="$(json .id)"
 [ "$(json .ingredients)" = $'牛肉\n玉ねぎ' ] || fail "材料の改行が保たれていない"
+# 一覧の並び順（作った日時の新しい順）を確かめるため、作った日時が同じミリ秒にならないよう少し待つ。
+sleep 0.01
 request POST /api/recipes "$workspace_a" '{"name":"100% Juice","servings":1}'
 expect 201 "POST /api/recipes（2 件目）"
 
