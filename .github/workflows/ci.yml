@@ -110,7 +110,7 @@ jobs:
             fi
             sleep 2
           done
-          if ! ../../scripts/smoke-test.sh http://localhost:8787; then
+          if ! CHECK_RATE_LIMIT=1 ../../scripts/smoke-test.sh http://localhost:8787; then
             echo "--- wrangler のログ ---"
             cat /tmp/wrangler.log
             exit 1

@@ -87,7 +87,7 @@
 
 | メソッドとパス | 成功したとき |
 | --- | --- |
-| `GET /api/recipes?q=<文字列>` | `200` と `{"recipes": [<レシピ>, ...]}`。作った日時の新しい順（同じ日時なら ID の順） |
+| `GET /api/recipes?q=<文字列>` | `200` と `{"recipes": [<レシピ>, ...]}`。作った日時の新しい順（同じ日時なら ID の順）。ページ分けはせず、当てはまるレシピをすべて返す |
 | `POST /api/recipes` | `201` と登録したレシピ。`Location` ヘッダーに `/api/recipes/<ID>` |
 | `GET /api/recipes/:id` | `200` とレシピ |
 | `PUT /api/recipes/:id` | `200` と変えた後のレシピ。中身をすべて置き換える（省いた `ingredients`・`steps` は空になる） |
@@ -193,7 +193,7 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp を入れ、leftho
 | --- | --- |
 | `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
 | `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
-| `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 を通して確かめる（先に別の端末で `mise run dev`） |
+| `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う |
 | `mise run test` | Rust のテストを実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |

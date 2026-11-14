@@ -4,6 +4,8 @@
 #
 # 使い方: scripts/smoke-test.sh [ベースの URL]（省略すると http://localhost:8787）
 # ワークスペースとレシピを作るので、本番には使わない。
+# 環境変数 CHECK_RATE_LIMIT=1 のときだけ、最後にワークスペースを作る回数の制限を確かめる（CI で使う）。
+# この確認は 60 秒の枠を使い切るので、続けて実行すると最初のワークスペースの作成が 429 になる。
 set -euo pipefail
 
 base_url="${1:-http://localhost:8787}"
@@ -53,6 +55,9 @@ grep -q '<h1>recipe-box</h1>' "$body_file" || fail "/ が期待した HTML を�
 
 echo "ワークスペースを 2 つ作る"
 request POST /api/workspaces
+if [ "$status" = 429 ]; then
+  fail "ワークスペースを作る回数の制限に当たった。60 秒待ってから、もう一度実行する"
+fi
 expect 201 "POST /api/workspaces"
 workspace_a="$(json .id)"
 [[ "$workspace_a" =~ ^[0-9a-f]{32}$ ]] || fail "ワークスペースの ID の形が違う"
@@ -152,16 +157,18 @@ expect 404 "消したレシピ"
 
 # 最後に、ワークスペースを作る回数の制限（60 秒に 10 回）を確かめる。
 # 上で 2 回作ったので、続けて作ると 10 回以内に 429 になる。
-echo "ワークスペースを作る回数の制限"
-limited=false
-for _ in $(seq 1 10); do
-  request POST /api/workspaces
-  if [ "$status" = 429 ]; then
-    limited=true
-    break
-  fi
-  expect 201 "POST /api/workspaces（制限の確認）"
-done
-[ "$limited" = true ] || fail "回数の制限を超えても 429 にならない"
+if [ "${CHECK_RATE_LIMIT:-}" = 1 ]; then
+  echo "ワークスペースを作る回数の制限"
+  limited=false
+  for _ in $(seq 1 10); do
+    request POST /api/workspaces
+    if [ "$status" = 429 ]; then
+      limited=true
+      break
+    fi
+    expect 201 "POST /api/workspaces（制限の確認）"
+  done
+  [ "$limited" = true ] || fail "回数の制限を超えても 429 にならない"
+fi
 
 echo "すべて通った"

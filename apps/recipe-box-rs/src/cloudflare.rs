@@ -190,6 +190,8 @@ impl Backend for CloudflareBackend {
             let action = "レシピの一覧を読めない";
             let db = database(&env)?;
             // 同じ日時に作ったレシピの順番が毎回変わらないよう、ID でも並べる。
+            // 件数の上限もページ分けも無く、材料と手順を含めてすべて読む。
+            // 1 ワークスペースのレシピの数の上限を #15 で入れるまでの暫定である。
             run(
                 &db,
                 &format!(
