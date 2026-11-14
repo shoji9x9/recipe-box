@@ -6,6 +6,7 @@ mod backend;
 mod cloudflare;
 mod error;
 mod id;
+mod limits;
 mod recipe;
 mod workspace;
 
@@ -14,6 +15,7 @@ use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
     http::{StatusCode, Uri, header},
+    middleware,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -42,13 +44,7 @@ pub fn router<B: Backend>(backend: B) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/workspaces", post(workspace::create::<B>))
-        .route("/recipes", get(recipe::list::<B>).post(recipe::create::<B>))
-        .route(
-            "/recipes/{id}",
-            get(recipe::get::<B>)
-                .put(recipe::update::<B>)
-                .delete(recipe::delete::<B>),
-        )
+        .merge(recipe_routes(backend.clone()))
         // 本文の大きさの上限。超えると、本文を読む前に 413 になる。
         .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
         .method_not_allowed_fallback(api_method_not_allowed);
@@ -59,6 +55,24 @@ pub fn router<B: Backend>(backend: B) -> Router {
         // `/api/`（末尾のスラッシュ）に届かないので、パスを見て分ける。
         .fallback(not_found)
         .with_state(backend)
+}
+
+/// レシピの API。書き込む API の前に、回数と本文の大きさを確かめる（[`limits::limit_writes`]）。
+///
+/// `route_layer` にするので、無いパス（404）には効かない。
+fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
+    Router::new()
+        .route("/recipes", get(recipe::list::<B>).post(recipe::create::<B>))
+        .route(
+            "/recipes/{id}",
+            get(recipe::get::<B>)
+                .put(recipe::update::<B>)
+                .delete(recipe::delete::<B>),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            backend,
+            limits::limit_writes::<B>,
+        ))
 }
 
 /// 無いパスへの応答。API（`/api` とその下）には JSON の形で、画面には本文の無い 404 で答える。

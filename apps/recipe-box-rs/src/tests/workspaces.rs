@@ -15,7 +15,9 @@ use super::{
 };
 use crate::{
     router,
-    workspace::{LAST_USED_UPDATE_INTERVAL_MILLIS, WorkspaceId},
+    workspace::{
+        LAST_USED_UPDATE_INTERVAL_MILLIS, MAX_WORKSPACES, MAX_WORKSPACES_PER_DAY, WorkspaceId,
+    },
 };
 
 fn create_workspace_request() -> Request<Body> {
@@ -191,4 +193,65 @@ async fn workspace_header_hides_backend_errors() {
     assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(response.json()["error"], "internal_error");
     assert!(!response.body.contains("壊れた DB"));
+}
+
+/// `NOW` の `days` 日前の時刻。
+const fn days_before(days: i64) -> i64 {
+    NOW - days * 24 * 60 * 60 * 1000
+}
+
+/// `NOW` の日（UTC）の 0 時。
+fn start_of_today() -> i64 {
+    NOW - NOW.rem_euclid(24 * 60 * 60 * 1000)
+}
+
+#[tokio::test]
+async fn create_workspace_stops_at_total_limit() {
+    let backend = FakeBackend::default();
+    // 昨日までに作った分で、全体の上限の 1 つ手前まで埋める（1 日の上限には数えない）。
+    for n in 0..MAX_WORKSPACES - 1 {
+        backend.add_workspace(&format!("{n:032x}"), days_before(1));
+    }
+    let response = send(router(backend.clone()), create_workspace_request()).await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+    // 上限に達したら、503 で断り、保存しない。
+    let response = send(router(backend.clone()), create_workspace_request()).await;
+    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.json()["error"], "capacity_reached");
+    assert_eq!(
+        i64::try_from(backend.workspaces.lock().unwrap().len()).unwrap(),
+        MAX_WORKSPACES
+    );
+}
+
+#[tokio::test]
+async fn create_workspace_stops_at_daily_limit() {
+    let backend = FakeBackend::default();
+    // 昨日の最後の瞬間に作った分は、今日の数に入らない。
+    backend.add_workspace(&format!("{:032x}", 9999), start_of_today() - 1);
+    for _ in 0..MAX_WORKSPACES_PER_DAY {
+        let response = send(router(backend.clone()), create_workspace_request()).await;
+        assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+    }
+    let response = send(router(backend.clone()), create_workspace_request()).await;
+    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.json()["error"], "capacity_reached");
+
+    // UTC の日付が変われば、また作れる。
+    backend.advance(start_of_today() + 24 * 60 * 60 * 1000 - NOW);
+    let response = send(router(backend.clone()), create_workspace_request()).await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+}
+
+#[tokio::test]
+async fn create_workspace_checks_rate_limit_before_capacity() {
+    let backend = FakeBackend {
+        rate_limited: true,
+        ..FakeBackend::default()
+    };
+    for n in 0..MAX_WORKSPACES {
+        backend.add_workspace(&format!("{n:032x}"), days_before(1));
+    }
+    let response = send(router(backend), create_workspace_request()).await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
 }

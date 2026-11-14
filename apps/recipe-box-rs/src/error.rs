@@ -37,8 +37,12 @@ pub enum ApiError {
     },
     /// そのワークスペースに、その ID のレシピが無い。
     RecipeNotFound,
+    /// ワークスペースのレシピの数が上限に達している。
+    RecipeLimitReached,
     /// 短い間に呼ばれすぎた。
     TooManyRequests,
+    /// アプリ全体の量が上限に達していて、新しく作れない（費用を守るための上限）。
+    CapacityReached,
     /// サーバーの中の失敗。詳しいことはログにだけ出す。
     Internal,
 }
@@ -92,6 +96,16 @@ impl ApiError {
                 StatusCode::NOT_FOUND,
                 "recipe_not_found",
                 "レシピが見つかりません",
+            ),
+            Self::RecipeLimitReached => (
+                StatusCode::CONFLICT,
+                "recipe_limit_reached",
+                "レシピの数が上限に達しています。いらないレシピを消してから登録してください",
+            ),
+            Self::CapacityReached => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "capacity_reached",
+                "利用が多いため、今は新しく作れません。日を改めて試してください",
             ),
             Self::TooManyRequests => (
                 StatusCode::TOO_MANY_REQUESTS,

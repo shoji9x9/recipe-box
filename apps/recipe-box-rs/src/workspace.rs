@@ -1,9 +1,6 @@
 //! ワークスペース。ログインの代わりに、推測できない ID でデータの持ち主を分ける。
 
-use std::{
-    fmt,
-    net::{IpAddr, Ipv6Addr},
-};
+use std::fmt;
 
 use axum::{
     Json,
@@ -12,13 +9,28 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{backend::Backend, error::ApiError, id};
+use crate::{
+    backend::{Backend, WorkspaceLimits},
+    error::ApiError,
+    id,
+    limits::client_key,
+};
 
 /// API がワークスペースの ID を受け取るヘッダー。
 pub const WORKSPACE_ID_HEADER: &str = "x-workspace-id";
 
-/// ワークスペースを作る人を見分けるのに使うヘッダー。Cloudflare が接続元の IP アドレスを入れる。
-const CLIENT_IP_HEADER: &str = "cf-connecting-ip";
+/// アプリ全体のワークスペースの数の上限。
+///
+/// 費用を守るための上限で、攻撃者が IP アドレスを変えても超えられない（D1 の行を数えて判定する）。
+/// レシピの数の上限（[`crate::recipe::MAX_RECIPES_PER_WORKSPACE`]）と掛け合わせた量が、
+/// D1 の保存量の上限に余裕を持って収まるようにする（README の「費用の対策」）。
+pub const MAX_WORKSPACES: i64 = 200;
+/// アプリ全体で 1 日（UTC の日付）に作れるワークスペースの数。
+///
+/// 上限いっぱいまで一度に作られるのを遅らせる。
+pub const MAX_WORKSPACES_PER_DAY: i64 = 20;
+/// 1 日のミリ秒。
+const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
 
 /// 最終利用日時を書き換える間隔（1 時間）。
 ///
@@ -105,79 +117,26 @@ pub async fn create<B: Backend>(
     State(backend): State<B>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CreatedWorkspace>), ApiError> {
-    let client_key = rate_limit_key(&headers);
-    if !backend.allow_workspace_creation(&client_key).await? {
+    // IP アドレスごとの回数を先に確かめる。全体の上限を数える D1 の読み取りを、連打で増やさないため。
+    if !backend
+        .allow_workspace_creation(&client_key(&headers))
+        .await?
+    {
         return Err(ApiError::TooManyRequests);
     }
     let id = WorkspaceId::from_bytes(backend.random_128());
-    backend.insert_workspace(&id, backend.now_millis()).await?;
+    let now = backend.now_millis();
+    let limits = WorkspaceLimits {
+        max_total: MAX_WORKSPACES,
+        max_created_since: MAX_WORKSPACES_PER_DAY,
+        // UTC の今日の 0 時。
+        since: now - now.rem_euclid(DAY_MILLIS),
+    };
+    if !backend.insert_workspace(&id, now, &limits).await? {
+        return Err(ApiError::CapacityReached);
+    }
     Ok((
         StatusCode::CREATED,
         Json(CreatedWorkspace { id: id.to_string() }),
     ))
-}
-
-/// ワークスペースを作る回数を数えるときの、作る人を表すキー。
-///
-/// - IPv4 は、アドレスそのものをキーにする。IPv4 射影アドレス（`::ffff:192.0.2.1`）も IPv4 として扱う。
-/// - IPv6 は、上位 64 ビットだけをキーにする。1 つの回線には /64 以上の範囲が割り当てられることが多く、
-///   アドレスをそのまま使うと、範囲の中でアドレスを変えるだけで制限を避けられるため。
-/// - ヘッダーが無いか、IP アドレスとして読めないときは、まとめて `unknown` として数える。
-///   Cloudflare を通るリクエストには必ずヘッダーが付くので、これに当たるのはローカルでの開発だけである。
-///   IP アドレスとして読んだ値だけを使うので、キーの長さは限られる。
-fn rate_limit_key(headers: &HeaderMap) -> String {
-    let ip = headers
-        .get(CLIENT_IP_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<IpAddr>().ok())
-        // `::ffff:192.0.2.1` のような IPv4 射影アドレスは、IPv4 のアドレスにそろえる。
-        .map(|ip| ip.to_canonical());
-    match ip {
-        Some(IpAddr::V4(v4)) => v4.to_string(),
-        Some(IpAddr::V6(v6)) => {
-            // to_bits() は 128 ビットの整数を返す。下位 64 ビットを 0 にして、/64 の範囲の先頭にする。
-            let prefix = Ipv6Addr::from_bits(v6.to_bits() & !u128::from(u64::MAX));
-            format!("{prefix}/64")
-        }
-        None => "unknown".to_owned(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::http::HeaderMap;
-
-    use super::rate_limit_key;
-
-    fn key_for(value: Option<&str>) -> String {
-        let mut headers = HeaderMap::new();
-        if let Some(value) = value {
-            headers.insert("cf-connecting-ip", value.parse().unwrap());
-        }
-        rate_limit_key(&headers)
-    }
-
-    #[test]
-    fn rate_limit_key_uses_ipv4_address() {
-        assert_eq!(key_for(Some("192.0.2.1")), "192.0.2.1");
-    }
-
-    #[test]
-    fn rate_limit_key_treats_ipv4_mapped_address_as_ipv4() {
-        assert_eq!(key_for(Some("::ffff:192.0.2.1")), "192.0.2.1");
-    }
-
-    #[test]
-    fn rate_limit_key_uses_ipv6_prefix() {
-        assert_eq!(key_for(Some("2001:db8:1:2:3:4:5:6")), "2001:db8:1:2::/64");
-        // 同じ /64 の中の別のアドレスは、同じキーになる。
-        assert_eq!(key_for(Some("2001:db8:1:2:ffff::1")), "2001:db8:1:2::/64");
-    }
-
-    #[test]
-    fn rate_limit_key_falls_back_to_unknown() {
-        assert_eq!(key_for(None), "unknown");
-        assert_eq!(key_for(Some("not-an-ip")), "unknown");
-        assert_eq!(key_for(Some(&"1".repeat(1000))), "unknown");
-    }
 }

@@ -4,8 +4,10 @@
 #
 # 使い方: scripts/smoke-test.sh [ベースの URL]（省略すると http://localhost:8787）
 # ワークスペースとレシピを作るので、本番には使わない。
-# 環境変数 CHECK_RATE_LIMIT=1 のときだけ、最後にワークスペースを作る回数の制限を確かめる（CI で使う）。
+# 環境変数 CHECK_RATE_LIMIT=1 のときだけ、最後に回数の制限を確かめる（CI で使う）。
 # この確認は 60 秒の枠を使い切るので、続けて実行すると最初のワークスペースの作成が 429 になる。
+# 1 回の実行でワークスペースを最大 22 個作りうるので、同じローカルの D1 で同じ日に 2 回以上実行すると、
+# アプリ全体の 1 日の上限（20 個）に当たることがある。そのときは 503 で止まり、作り直し方を示す。
 set -euo pipefail
 
 base_url="${1:-http://localhost:8787}"
@@ -19,6 +21,10 @@ fail() {
   exit 1
 }
 
+# 書き込む API が回数の制限（60 秒に 30 回）で 429 になったら、待ってからやり直すか。
+# 制限そのものを確かめるときだけ false にする。
+retry_on_write_limit=true
+
 # request <メソッド> <パス> [ワークスペースの ID] [JSON の本文]
 # 応答の本文を $body_file に書き、状態コードを $status に入れる。
 request() {
@@ -30,7 +36,16 @@ request() {
   if [ -n "$body" ]; then
     args+=(-H 'Content-Type: application/json' --data "$body")
   fi
-  status="$(curl "${args[@]}" "$base_url$path")"
+  local attempt
+  for attempt in $(seq 1 8); do
+    status="$(curl "${args[@]}" "$base_url$path")"
+    if [ "$status" != 429 ] || [ "$retry_on_write_limit" != true ] \
+      || [ "$method" = GET ] || [[ "$path" != /api/recipes* ]]; then
+      return
+    fi
+    echo "  書き込みの回数の制限に当たったので、10 秒待ってやり直す（$attempt 回目）"
+    sleep 10
+  done
 }
 
 # expect <状態コード> <説明>
@@ -57,6 +72,9 @@ echo "ワークスペースを 2 つ作る"
 request POST /api/workspaces
 if [ "$status" = 429 ]; then
   fail "ワークスペースを作る回数の制限に当たった。60 秒待ってから、もう一度実行する"
+fi
+if [ "$status" = 503 ]; then
+  fail "アプリ全体のワークスペースの上限（1 日 20 個）に当たった。ローカルの D1 を作り直す（apps/recipe-box-rs/.wrangler/state/v3/d1 を消す）か、UTC の翌日に実行する"
 fi
 expect 201 "POST /api/workspaces"
 workspace_a="$(json .id)"
@@ -107,28 +125,35 @@ request GET "/api/recipes?q=$(jq -rn --arg q "$long_name" '$q | @uri')" "$worksp
 expect 200 "GET /api/recipes?q=<100 文字の日本語>"
 [ "$(json '.recipes | length')" = 1 ] || fail "100 文字の日本語で検索できない"
 
-echo "ページ分け"
-# 別のワークスペースに 21 件作り、1 ページ（20 件）に収まらない分が 2 ページ目に出るかを確かめる。
-for n in $(seq 1 21); do
-  request POST /api/recipes "$workspace_b" "{\"name\":\"料理 $n\",\"servings\":1}"
+echo "ページ分けと、レシピの数の上限（40 件）"
+# 別のワークスペースに、項目の長さも上限いっぱい（材料 2,000 文字・手順 5,000 文字）のレシピを 40 件作る。
+ingredients="$(printf 'あ%.0s' $(seq 1 2000))"
+steps="$(printf 'い%.0s' $(seq 1 5000))"
+for n in $(seq 1 40); do
+  request POST /api/recipes "$workspace_b" \
+    "{\"name\":\"料理 $n\",\"servings\":1,\"ingredients\":\"$ingredients\",\"steps\":\"$steps\"}"
   expect 201 "POST /api/recipes（料理 $n）"
   # 並びを確かめるため、作った日時が同じミリ秒にならないよう少し待つ。
   sleep 0.01
 done
+request POST /api/recipes "$workspace_b" '{"name":"41 件目","servings":1}'
+expect 409 "41 件目のレシピ"
+[ "$(json .error)" = recipe_limit_reached ] || fail "41 件目のエラーのコードが recipe_limit_reached でない"
 request GET /api/recipes "$workspace_b"
 expect 200 "GET /api/recipes（1 ページ目）"
 [ "$(json '.recipes | length')" = 20 ] || fail "1 ページ目が 20 件でない"
-[ "$(json .total)" = 21 ] || fail "総数が 21 でない"
-[ "$(json '.recipes[0].name')" = "料理 21" ] || fail "1 ページ目が新しい順でない"
+[ "$(json .total)" = 40 ] || fail "総数が 40 でない"
+[ "$(json '.recipes[0].name')" = "料理 40" ] || fail "1 ページ目が新しい順でない"
 request GET '/api/recipes?page=2' "$workspace_b"
 expect 200 "GET /api/recipes?page=2"
-[ "$(json '[.recipes[].name] | join(",")')" = "料理 1" ] || fail "2 ページ目が最も古い 1 件でない"
+[ "$(json '.recipes | length')" = 20 ] || fail "2 ページ目が 20 件でない"
+[ "$(json '.recipes[19].name')" = "料理 1" ] || fail "2 ページ目の最後が最も古いレシピでない"
 request GET '/api/recipes?q=%E6%96%99%E7%90%86%201&page=1' "$workspace_b"
 expect 200 "GET /api/recipes?q=料理 1"
 [ "$(json .total)" = 11 ] || fail "検索の総数が 11（料理 1・10〜19）でない"
-request GET '/api/recipes?page=0' "$workspace_b"
-expect 400 "page が 0"
-[ "$(json .field)" = page ] || fail "page が 0 のエラーの項目が page でない"
+request GET '/api/recipes?page=3' "$workspace_b"
+expect 400 "page が 3（上限の 2 を超える）"
+[ "$(json .field)" = page ] || fail "page が 3 のエラーの項目が page でない"
 
 echo "取得・更新"
 request GET "/api/recipes/$recipe_id" "$workspace_a"
@@ -185,12 +210,26 @@ expect 204 "DELETE /api/recipes/{id}"
 request GET "/api/recipes/$recipe_id" "$workspace_a"
 expect 404 "消したレシピ"
 
-# 最後に、ワークスペースを作る回数の制限（60 秒に 10 回）を確かめる。
-# 上で 2 回作ったので、続けて作ると 10 回以内に 429 になる。
+# 最後に、回数の制限（Rate Limiting）を確かめる。
 if [ "${CHECK_RATE_LIMIT:-}" = 1 ]; then
+  # 数え始めが 60 秒の枠の途中でも確かめられるよう、枠 2 つ分より 1 回多く試す。
+  echo "書き込む API の回数の制限（60 秒に 30 回）"
+  retry_on_write_limit=false
+  limited=false
+  for _ in $(seq 1 61); do
+    request DELETE "/api/recipes/$recipe_id" "$workspace_a"
+    if [ "$status" = 429 ]; then
+      limited=true
+      break
+    fi
+    expect 404 "DELETE /api/recipes/{id}（制限の確認）"
+  done
+  [ "$limited" = true ] || fail "書き込みの回数の制限を超えても 429 にならない"
+
+  # ワークスペースを作る回数の制限（60 秒に 10 回）。上と同じく、枠 2 つ分より 1 回多く試す。
   echo "ワークスペースを作る回数の制限"
   limited=false
-  for _ in $(seq 1 10); do
+  for _ in $(seq 1 21); do
     request POST /api/workspaces
     if [ "$status" = 429 ]; then
       limited=true

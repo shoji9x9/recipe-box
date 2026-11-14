@@ -24,6 +24,17 @@ impl fmt::Display for BackendError {
 /// `Backend` のメソッドの戻り値。
 pub type BackendResult<T> = Result<T, BackendError>;
 
+/// ワークスペースを作るときに確かめる、アプリ全体の上限。
+#[derive(Debug, Clone, Copy)]
+pub struct WorkspaceLimits {
+    /// ワークスペースの数の上限。
+    pub max_total: i64,
+    /// `since` 以後に作ったワークスペースの数の上限。
+    pub max_created_since: i64,
+    /// 数え始める日時（UNIX 時間のミリ秒）。
+    pub since: i64,
+}
+
 /// レシピの一覧の 1 ページ分。
 #[derive(Debug)]
 pub struct RecipePage {
@@ -53,12 +64,17 @@ pub trait Backend: Clone + Send + Sync + 'static {
         client_key: &str,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
 
-    /// ワークスペースを保存する。
+    /// 書き込む API を呼んでよいかを、呼ぶ人を表すキー（IP アドレスなど）ごとの回数で決める。
+    fn allow_write(&self, client_key: &str) -> impl Future<Output = BackendResult<bool>> + Send;
+
+    /// ワークスペースを保存する。`limits` のどれかに達していれば保存せずに `false` を返す。
+    /// 数えることと保存することを 1 つの SQL で行い、同時に作られても上限を超えないようにする。
     fn insert_workspace(
         &self,
         id: &WorkspaceId,
         now: i64,
-    ) -> impl Future<Output = BackendResult<()>> + Send;
+        limits: &WorkspaceLimits,
+    ) -> impl Future<Output = BackendResult<bool>> + Send;
 
     /// ワークスペースの最終利用日時を返す。ワークスペースが無ければ `None` を返す。
     fn workspace_last_used_at(
@@ -85,12 +101,14 @@ pub trait Backend: Clone + Send + Sync + 'static {
         offset: i64,
     ) -> impl Future<Output = BackendResult<RecipePage>> + Send;
 
-    /// レシピを保存する。
+    /// レシピを保存する。ワークスペースのレシピがすでに `max_recipes` 件あれば、保存せずに `false` を返す。
+    /// 数えることと保存することを 1 つの SQL で行い、同時に登録されても上限を超えないようにする。
     fn insert_recipe(
         &self,
         workspace: &WorkspaceId,
         recipe: &Recipe,
-    ) -> impl Future<Output = BackendResult<()>> + Send;
+        max_recipes: i64,
+    ) -> impl Future<Output = BackendResult<bool>> + Send;
 
     /// レシピを 1 件返す。無ければ `None` を返す。
     fn get_recipe(

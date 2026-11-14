@@ -11,7 +11,10 @@ use super::{
     fake::{FakeBackend, NOW},
     send,
 };
-use crate::{recipe::MAX_BODY_BYTES, router};
+use crate::{
+    recipe::{MAX_BODY_BYTES, MAX_RECIPES_PER_WORKSPACE},
+    router,
+};
 
 /// ワークスペース A と B を持つ偽物を作る。
 fn backend_with_workspaces() -> FakeBackend {
@@ -242,10 +245,10 @@ async fn create_accepts_maximum_fields_sent_as_escaped_json() {
     let raw = format!(
         r#"{{"name":"{}","servings":100,"ingredients":"{}","steps":"{}"}}"#,
         emoji.repeat(100),
+        emoji.repeat(2_000),
         emoji.repeat(5_000),
-        emoji.repeat(10_000),
     );
-    assert!(raw.len() > 128 * 1024, "{}", raw.len());
+    assert!(raw.len() > 64 * 1024, "{}", raw.len());
     let backend = backend_with_workspaces();
     let request = Request::post("/api/recipes")
         .header("x-workspace-id", WORKSPACE_A)
@@ -254,7 +257,7 @@ async fn create_accepts_maximum_fields_sent_as_escaped_json() {
         .unwrap();
     let response = send(router(backend), request).await;
     assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
-    assert_eq!(response.json()["steps"], "🍛".repeat(10_000));
+    assert_eq!(response.json()["steps"], "🍛".repeat(5_000));
 }
 
 #[tokio::test]
@@ -388,12 +391,20 @@ async fn list_is_split_into_pages() {
     assert_eq!(names_of(&second), expected);
     assert_eq!(list_page(&backend, "/api/recipes?page=02").await, second);
 
-    // 最後のページより後ろは、空の一覧（総数はそのまま）。上限の番号も受け付ける。
-    for path in ["/api/recipes?page=3", "/api/recipes?page=10000"] {
-        let body = list_page(&backend, path).await;
-        assert_eq!(names_of(&body), Vec::<String>::new());
-        assert_eq!(body["total"], 25);
-    }
+    // レシピが少なく、上限の番号までページが無いときは、空の一覧（総数はそのまま）。
+    let response = call(
+        &backend,
+        Method::GET,
+        "/api/recipes?page=2",
+        Some(WORKSPACE_B),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    assert_eq!(
+        response.json(),
+        json!({"recipes": [], "total": 0, "page": 2, "per_page": 20})
+    );
 }
 
 #[tokio::test]
@@ -829,4 +840,141 @@ async fn recipe_routes_hide_backend_errors() {
         "internal_error",
         None,
     );
+}
+
+#[tokio::test]
+async fn create_stops_at_recipe_limit() {
+    let backend = backend_with_workspaces();
+    for _ in 0..MAX_RECIPES_PER_WORKSPACE {
+        create(&backend, WORKSPACE_A, &curry()).await;
+    }
+    let response = call(
+        &backend,
+        Method::POST,
+        "/api/recipes",
+        Some(WORKSPACE_A),
+        Some(&curry()),
+    )
+    .await;
+    assert_error(
+        &response,
+        StatusCode::CONFLICT,
+        "recipe_limit_reached",
+        None,
+    );
+    // 上限はワークスペースごとなので、ほかのワークスペースには登録できる。
+    create(&backend, WORKSPACE_B, &curry()).await;
+    // 1 件消せば、また登録できる。
+    let body = list_page(&backend, "/api/recipes").await;
+    let id = body["recipes"][0]["id"].as_str().unwrap().to_owned();
+    let response = call(
+        &backend,
+        Method::DELETE,
+        &format!("/api/recipes/{id}"),
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+    create(&backend, WORKSPACE_A, &curry()).await;
+}
+
+#[tokio::test]
+async fn list_and_search_work_at_recipe_limit_with_maximum_fields() {
+    let backend = backend_with_workspaces();
+    // 上限いっぱいの数を、項目の長さも上限いっぱい（4 バイトの絵文字）で登録する。
+    let recipe = json!({
+        "name": format!("Curry{}", "🍛".repeat(95)),
+        "servings": 100,
+        "ingredients": "🍛".repeat(2_000),
+        "steps": "🍛".repeat(5_000),
+    });
+    for _ in 0..MAX_RECIPES_PER_WORKSPACE {
+        create(&backend, WORKSPACE_A, &recipe).await;
+    }
+    for path in [
+        "/api/recipes",
+        "/api/recipes?page=2",
+        "/api/recipes?q=curry&page=2",
+    ] {
+        let body = list_page(&backend, path).await;
+        assert_eq!(body["total"], MAX_RECIPES_PER_WORKSPACE, "{path}");
+        assert_eq!(body["recipes"].as_array().unwrap().len(), 20, "{path}");
+    }
+}
+
+/// 書き込む API の一覧（メソッドとパス）。
+fn write_requests(id: &str) -> [(Method, String); 3] {
+    [
+        (Method::POST, "/api/recipes".to_owned()),
+        (Method::PUT, format!("/api/recipes/{id}")),
+        (Method::DELETE, format!("/api/recipes/{id}")),
+    ]
+}
+
+#[tokio::test]
+async fn write_apis_are_rate_limited_before_workspace_check() {
+    let backend = FakeBackend {
+        write_limited: true,
+        ..backend_with_workspaces()
+    };
+    let id = "0".repeat(32);
+    for (method, path) in write_requests(&id) {
+        // ワークスペースの ID が無くても、先に回数の制限で断る（D1 を読ませない）。
+        let request = Request::builder()
+            .method(method.clone())
+            .uri(&path)
+            .header("cf-connecting-ip", "192.0.2.1")
+            .body(Body::empty())
+            .unwrap();
+        let response = send(router(backend.clone()), request).await;
+        assert_error(
+            &response,
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_requests",
+            None,
+        );
+    }
+    assert_eq!(
+        *backend.write_limit_keys.lock().unwrap(),
+        ["192.0.2.1", "192.0.2.1", "192.0.2.1"]
+    );
+    // 読むだけの API は、書き込みの回数の制限を受けない。
+    let response = call(
+        &backend,
+        Method::GET,
+        "/api/recipes",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(backend.write_limit_keys.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn too_large_content_length_is_rejected_before_reading() {
+    let backend = backend_with_workspaces();
+    let id = "0".repeat(32);
+    for (method, path) in write_requests(&id) {
+        for length in [
+            (MAX_BODY_BYTES + 1).to_string(),
+            "99999999999999999999999".to_owned(),
+        ] {
+            // ワークスペースの ID が無くても、本文が無くても、Content-Length だけで断る。
+            let request = Request::builder()
+                .method(method.clone())
+                .uri(&path)
+                .header(header::CONTENT_LENGTH, &length)
+                .body(Body::empty())
+                .unwrap();
+            let response = send(router(backend.clone()), request).await;
+            assert_error(
+                &response,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                None,
+            );
+        }
+    }
 }
