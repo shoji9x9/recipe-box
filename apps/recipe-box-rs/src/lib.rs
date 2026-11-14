@@ -2,16 +2,23 @@
 //!
 //! Cloudflare Workers から届いたリクエストを axum の `Router` に渡して処理する。
 
+mod backend;
+mod cloudflare;
+mod error;
+mod workspace;
+
 use askama::Template;
 use axum::{
     Json, Router,
     http::{StatusCode, header},
     response::{Html, IntoResponse},
-    routing::get,
+    routing::{get, post},
 };
 use serde::Serialize;
 use tower_service::Service;
 use worker::{Context, Env, HttpRequest, event};
+
+use crate::{backend::Backend, cloudflare::CloudflareBackend};
 
 /// トップページのテンプレート（`templates/index.html`）。
 #[derive(Template)]
@@ -25,22 +32,26 @@ struct Health {
 }
 
 /// URL のパスと処理する関数の対応を作る。
-pub fn router() -> Router {
+///
+/// `backend` は、ハンドラーが DB などを使うときの窓口。本番では Cloudflare の機能を、テストでは偽物を渡す。
+pub fn router<B: Backend>(backend: B) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/api/health", get(health))
+        .route("/api/workspaces", post(workspace::create::<B>))
+        .with_state(backend)
 }
 
 /// Workers がリクエストを受け取るたびに呼ぶ入口。
 #[event(fetch)]
 async fn fetch(
     req: HttpRequest,
-    _env: Env,
+    env: Env,
     _ctx: Context,
 ) -> worker::Result<axum::http::Response<axum::body::Body>> {
     // panic したときに、原因をログに出す。
     console_error_panic_hook::set_once();
-    Ok(router().call(req).await?)
+    Ok(router(CloudflareBackend::new(env)).call(req).await?)
 }
 
 async fn index() -> impl IntoResponse {
@@ -61,18 +72,112 @@ async fn health() -> Json<Health> {
 
 #[cfg(test)]
 mod tests {
-    use super::router;
+    use std::{
+        collections::HashMap,
+        future::{Future, ready},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU8, Ordering},
+        },
+    };
+
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode, header},
+        routing::get,
     };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    /// `GET <path>` を router に送り、状態コード・Content-Type・本文を返す。
-    async fn get(path: &str) -> (StatusCode, String, String) {
-        let request = Request::get(path).body(Body::empty()).unwrap();
-        let response = router().oneshot(request).await.unwrap();
+    use super::router;
+    use crate::{
+        backend::{Backend, BackendError},
+        workspace::{Workspace, WorkspaceId},
+    };
+
+    /// メモリの中で動く、テスト用の [`Backend`]。
+    #[derive(Clone, Default)]
+    struct FakeBackend {
+        /// ワークスペースの ID と最終利用日時。
+        workspaces: Arc<Mutex<HashMap<String, i64>>>,
+        /// 次に返す乱数の 1 バイト目。呼ぶたびに 1 増やし、毎回ちがう ID になるようにする。
+        next_random: Arc<AtomicU8>,
+        /// `true` なら、ワークスペースを作る回数の制限を超えたことにする。
+        rate_limited: bool,
+        /// `true` なら、DB が失敗したことにする。
+        broken: bool,
+    }
+
+    /// テストの中の「今」の時刻。
+    const NOW: i64 = 1_800_000_000_000;
+
+    /// 偽物は待つ必要が無いので、`ready` ですぐに終わる `Future` を返す。
+    impl Backend for FakeBackend {
+        fn random_128(&self) -> [u8; 16] {
+            let mut bytes = [0xab; 16];
+            bytes[0] = self.next_random.fetch_add(1, Ordering::Relaxed);
+            bytes
+        }
+
+        fn now_millis(&self) -> i64 {
+            NOW
+        }
+
+        fn allow_workspace_creation(
+            &self,
+            _client_key: &str,
+        ) -> impl Future<Output = Result<bool, BackendError>> + Send {
+            ready(Ok(!self.rate_limited))
+        }
+
+        fn insert_workspace(
+            &self,
+            id: &WorkspaceId,
+            now: i64,
+        ) -> impl Future<Output = Result<(), BackendError>> + Send {
+            if self.broken {
+                return ready(Err(BackendError("壊れた DB".into())));
+            }
+            self.workspaces.lock().unwrap().insert(id.to_string(), now);
+            ready(Ok(()))
+        }
+
+        fn touch_workspace(
+            &self,
+            id: &WorkspaceId,
+            now: i64,
+        ) -> impl Future<Output = Result<bool, BackendError>> + Send {
+            if self.broken {
+                return ready(Err(BackendError("壊れた DB".into())));
+            }
+            let found = self
+                .workspaces
+                .lock()
+                .unwrap()
+                .get_mut(id.as_str())
+                .map(|last_used_at| *last_used_at = now)
+                .is_some();
+            ready(Ok(found))
+        }
+    }
+
+    /// 応答の状態コード・Content-Type・本文。
+    struct TestResponse {
+        status: StatusCode,
+        content_type: String,
+        body: String,
+    }
+
+    impl TestResponse {
+        fn json(&self) -> serde_json::Value {
+            serde_json::from_str(&self.body).unwrap()
+        }
+    }
+
+    /// `request` を `app` に送り、応答を返す。
+    async fn send(app: Router, request: Request<Body>) -> TestResponse {
+        let response = app.oneshot(request).await.unwrap();
         let status = response.status();
         // 404 などでは Content-Type が付かないので、無ければ空にする。
         let content_type = response
@@ -81,39 +186,157 @@ mod tests {
             .map(|value| value.to_str().unwrap().to_owned())
             .unwrap_or_default();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (
+        TestResponse {
             status,
             content_type,
-            String::from_utf8(bytes.to_vec()).unwrap(),
-        )
+            body: String::from_utf8(bytes.to_vec()).unwrap(),
+        }
+    }
+
+    async fn get_path(path: &str) -> TestResponse {
+        let request = Request::get(path).body(Body::empty()).unwrap();
+        send(router(FakeBackend::default()), request).await
+    }
+
+    fn create_workspace_request() -> Request<Body> {
+        Request::post("/api/workspaces")
+            .header("cf-connecting-ip", "192.0.2.1")
+            .body(Body::empty())
+            .unwrap()
     }
 
     #[tokio::test]
     async fn index_returns_html() {
-        let (status, content_type, body) = get("/").await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(content_type.starts_with("text/html"));
-        assert!(body.contains("<h1>recipe-box</h1>"));
+        let response = get_path("/").await;
+        assert_eq!(response.status, StatusCode::OK);
+        assert!(response.content_type.starts_with("text/html"));
+        assert!(response.body.contains("<h1>recipe-box</h1>"));
     }
 
     #[tokio::test]
     async fn health_returns_ok() {
-        let (status, content_type, body) = get("/api/health").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(content_type, "application/json");
-        assert_eq!(body, r#"{"status":"ok"}"#);
+        let response = get_path("/api/health").await;
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(response.content_type, "application/json");
+        assert_eq!(response.body, r#"{"status":"ok"}"#);
     }
 
     #[tokio::test]
     async fn health_rejects_post() {
         let request = Request::post("/api/health").body(Body::empty()).unwrap();
-        let response = router().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let response = send(router(FakeBackend::default()), request).await;
+        assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]
     async fn unknown_path_returns_not_found() {
-        let (status, _, _) = get("/no-such-page").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        let response = get_path("/no-such-page").await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_workspace_returns_new_id() {
+        let backend = FakeBackend::default();
+        let first = send(router(backend.clone()), create_workspace_request()).await;
+        let second = send(router(backend.clone()), create_workspace_request()).await;
+
+        assert_eq!(first.status, StatusCode::CREATED);
+        assert_eq!(first.content_type, "application/json");
+        let id = first.json()["id"].as_str().unwrap().to_owned();
+        assert!(WorkspaceId::parse(&id).is_some(), "{id}");
+        assert_ne!(second.json()["id"].as_str().unwrap(), id);
+        // 作ったワークスペースが保存され、最終利用日時が今になっている。
+        assert_eq!(backend.workspaces.lock().unwrap().get(&id), Some(&NOW));
+    }
+
+    #[tokio::test]
+    async fn create_workspace_rejects_when_rate_limited() {
+        let backend = FakeBackend {
+            rate_limited: true,
+            ..FakeBackend::default()
+        };
+        let response = send(router(backend.clone()), create_workspace_request()).await;
+        assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.json()["error"], "too_many_requests");
+        assert!(backend.workspaces.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_workspace_hides_backend_errors() {
+        let backend = FakeBackend {
+            broken: true,
+            ..FakeBackend::default()
+        };
+        let response = send(router(backend), create_workspace_request()).await;
+        assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.json()["error"], "internal_error");
+        assert!(!response.body.contains("壊れた DB"));
+    }
+
+    /// [`Workspace`] を引数に取るハンドラーを持つ、テスト用の router。
+    /// ワークスペースを使う API はまだ無いので、ここで ID の受け取り方を確かめる。
+    fn workspace_echo_router(backend: FakeBackend) -> Router {
+        Router::new()
+            .route(
+                "/echo",
+                get(|workspace: Workspace| async move { workspace.id.to_string() }),
+            )
+            .with_state(backend)
+    }
+
+    fn echo_request(workspace_id: Option<&str>) -> Request<Body> {
+        let mut builder = Request::get("/echo");
+        if let Some(id) = workspace_id {
+            builder = builder.header("X-Workspace-Id", id);
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn workspace_extractor_accepts_existing_id_and_updates_last_used_at() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let backend = FakeBackend::default();
+        backend.workspaces.lock().unwrap().insert(id.into(), 0);
+
+        let response = send(
+            workspace_echo_router(backend.clone()),
+            echo_request(Some(id)),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(response.body, id);
+        assert_eq!(backend.workspaces.lock().unwrap().get(id), Some(&NOW));
+    }
+
+    #[tokio::test]
+    async fn workspace_extractor_rejects_bad_requests() {
+        let cases = [
+            (None, StatusCode::BAD_REQUEST, "workspace_id_missing"),
+            (
+                Some("not-an-id"),
+                StatusCode::BAD_REQUEST,
+                "workspace_id_invalid",
+            ),
+            (
+                Some("0123456789ABCDEF0123456789ABCDEF"),
+                StatusCode::BAD_REQUEST,
+                "workspace_id_invalid",
+            ),
+            (
+                Some("ffffffffffffffffffffffffffffffff"),
+                StatusCode::NOT_FOUND,
+                "workspace_not_found",
+            ),
+        ];
+        for (id, status, error) in cases {
+            let response = send(
+                workspace_echo_router(FakeBackend::default()),
+                echo_request(id),
+            )
+            .await;
+            assert_eq!(response.status, status, "{id:?}");
+            assert_eq!(response.content_type, "application/json", "{id:?}");
+            assert_eq!(response.json()["error"], error, "{id:?}");
+        }
     }
 }
