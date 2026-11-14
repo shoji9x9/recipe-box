@@ -1,6 +1,9 @@
 //! ワークスペース。ログインの代わりに、推測できない ID でデータの持ち主を分ける。
 
-use std::fmt::{self, Write as _};
+use std::{
+    fmt::{self, Write as _},
+    net::{IpAddr, Ipv6Addr},
+};
 
 use axum::{
     Json,
@@ -115,12 +118,8 @@ pub async fn create<B: Backend>(
     State(backend): State<B>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CreatedWorkspace>), ApiError> {
-    // IP アドレスが分からないとき（ローカルでの開発など）は、まとめて 1 人として数える。
-    let client_key = headers
-        .get(CLIENT_IP_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("unknown");
-    if !backend.allow_workspace_creation(client_key).await? {
+    let client_key = rate_limit_key(&headers);
+    if !backend.allow_workspace_creation(&client_key).await? {
         return Err(ApiError::TooManyRequests);
     }
     let id = WorkspaceId::from_bytes(backend.random_128());
@@ -131,9 +130,62 @@ pub async fn create<B: Backend>(
     ))
 }
 
+/// ワークスペースを作る回数を数えるときの、作る人を表すキー。
+///
+/// - IPv4 は、アドレスそのものをキーにする。
+/// - IPv6 は、上位 64 ビットだけをキーにする。1 つの回線には /64 以上の範囲が割り当てられることが多く、
+///   アドレスをそのまま使うと、範囲の中でアドレスを変えるだけで制限を避けられるため。
+/// - ヘッダーが無いか、IP アドレスとして読めないときは、まとめて `unknown` として数える。
+///   Cloudflare を通るリクエストには必ずヘッダーが付くので、これに当たるのはローカルでの開発だけである。
+///   IP アドレスとして読んだ値だけを使うので、キーの長さは限られる。
+fn rate_limit_key(headers: &HeaderMap) -> String {
+    let ip = headers
+        .get(CLIENT_IP_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<IpAddr>().ok());
+    match ip {
+        Some(IpAddr::V4(v4)) => v4.to_string(),
+        Some(IpAddr::V6(v6)) => {
+            // to_bits() は 128 ビットの整数を返す。下位 64 ビットを 0 にして、/64 の範囲の先頭にする。
+            let prefix = Ipv6Addr::from_bits(v6.to_bits() & !u128::from(u64::MAX));
+            format!("{prefix}/64")
+        }
+        None => "unknown".to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::WorkspaceId;
+    use axum::http::HeaderMap;
+
+    use super::{WorkspaceId, rate_limit_key};
+
+    fn key_for(value: Option<&str>) -> String {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = value {
+            headers.insert("cf-connecting-ip", value.parse().unwrap());
+        }
+        rate_limit_key(&headers)
+    }
+
+    #[test]
+    fn rate_limit_key_uses_ipv4_address() {
+        assert_eq!(key_for(Some("192.0.2.1")), "192.0.2.1");
+    }
+
+    #[test]
+    fn rate_limit_key_uses_ipv6_prefix() {
+        assert_eq!(key_for(Some("2001:db8:1:2:3:4:5:6")), "2001:db8:1:2::/64");
+        // 同じ /64 の中の別のアドレスは、同じキーになる。
+        assert_eq!(key_for(Some("2001:db8:1:2:ffff::1")), "2001:db8:1:2::/64");
+    }
+
+    #[test]
+    fn rate_limit_key_falls_back_to_unknown() {
+        assert_eq!(key_for(None), "unknown");
+        assert_eq!(key_for(Some("not-an-ip")), "unknown");
+        assert_eq!(key_for(Some(&"1".repeat(1000))), "unknown");
+    }
 
     #[test]
     fn from_bytes_makes_lowercase_hex() {

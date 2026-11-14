@@ -125,6 +125,15 @@ jobs:
             cat /tmp/wrangler.log
             exit 1
           fi
+          # 回数の制限（60 秒に 10 回）を超えると 429 になる。上で 1 回作ったので、あと 10 回のうち最後が 429 になる。
+          for _ in $(seq 1 10); do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:8787/api/workspaces)
+          done
+          if [ "$status" != "429" ]; then
+            echo "::error::回数の制限を超えても POST /api/workspaces が 429 を返さない（$status）"
+            cat /tmp/wrangler.log
+            exit 1
+          fi
 
   secrets:
     name: Secret scan

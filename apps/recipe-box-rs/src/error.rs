@@ -28,6 +28,10 @@ pub enum ApiError {
     WorkspaceIdInvalid,
     /// その ID のワークスペースが無い（消された場合も含む）。
     WorkspaceNotFound,
+    /// API にそのパスが無い。
+    NotFound,
+    /// そのパスは、そのメソッドを受け付けない。
+    MethodNotAllowed,
     /// 短い間に呼ばれすぎた。
     TooManyRequests,
     /// サーバーの中の失敗。詳しいことはログにだけ出す。
@@ -57,6 +61,12 @@ impl ApiError {
                 StatusCode::NOT_FOUND,
                 "workspace_not_found",
                 "ワークスペースが見つかりません",
+            ),
+            Self::NotFound => (StatusCode::NOT_FOUND, "not_found", "API が見つかりません"),
+            Self::MethodNotAllowed => (
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method_not_allowed",
+                "このメソッドは使えません",
             ),
             Self::TooManyRequests => (
                 StatusCode::TOO_MANY_REQUESTS,

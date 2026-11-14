@@ -18,7 +18,7 @@ use serde::Serialize;
 use tower_service::Service;
 use worker::{Context, Env, HttpRequest, event};
 
-use crate::{backend::Backend, cloudflare::CloudflareBackend};
+use crate::{backend::Backend, cloudflare::CloudflareBackend, error::ApiError};
 
 /// トップページのテンプレート（`templates/index.html`）。
 #[derive(Template)]
@@ -35,11 +35,24 @@ struct Health {
 ///
 /// `backend` は、ハンドラーが DB などを使うときの窓口。本番では Cloudflare の機能を、テストでは偽物を渡す。
 pub fn router<B: Backend>(backend: B) -> Router {
+    // API は、無いパスや受け付けないメソッドにも、ほかの失敗と同じ JSON の形で答える。
+    let api = Router::new()
+        .route("/health", get(health))
+        .route("/workspaces", post(workspace::create::<B>))
+        .fallback(api_not_found)
+        .method_not_allowed_fallback(api_method_not_allowed);
     Router::new()
         .route("/", get(index))
-        .route("/api/health", get(health))
-        .route("/api/workspaces", post(workspace::create::<B>))
+        .nest("/api", api)
         .with_state(backend)
+}
+
+async fn api_not_found() -> ApiError {
+    ApiError::NotFound
+}
+
+async fn api_method_not_allowed() -> ApiError {
+    ApiError::MethodNotAllowed
 }
 
 /// Workers がリクエストを受け取るたびに呼ぶ入口。
@@ -107,6 +120,8 @@ mod tests {
         rate_limited: bool,
         /// `true` なら、DB が失敗したことにする。
         broken: bool,
+        /// レート制限に渡されたキー。
+        rate_limit_keys: Arc<Mutex<Vec<String>>>,
     }
 
     /// テストの中の「今」の時刻。
@@ -126,8 +141,12 @@ mod tests {
 
         fn allow_workspace_creation(
             &self,
-            _client_key: &str,
+            client_key: &str,
         ) -> impl Future<Output = Result<bool, BackendError>> + Send {
+            self.rate_limit_keys
+                .lock()
+                .unwrap()
+                .push(client_key.to_owned());
             ready(Ok(!self.rate_limited))
         }
 
@@ -166,6 +185,8 @@ mod tests {
     struct TestResponse {
         status: StatusCode,
         content_type: String,
+        /// Allow ヘッダー。無ければ空。
+        allow: String,
         body: String,
     }
 
@@ -185,10 +206,16 @@ mod tests {
             .get(header::CONTENT_TYPE)
             .map(|value| value.to_str().unwrap().to_owned())
             .unwrap_or_default();
+        let allow = response
+            .headers()
+            .get(header::ALLOW)
+            .map(|value| value.to_str().unwrap().to_owned())
+            .unwrap_or_default();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         TestResponse {
             status,
             content_type,
+            allow,
             body: String::from_utf8(bytes.to_vec()).unwrap(),
         }
     }
@@ -226,10 +253,22 @@ mod tests {
         let request = Request::post("/api/health").body(Body::empty()).unwrap();
         let response = send(router(FakeBackend::default()), request).await;
         assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.content_type, "application/json");
+        assert_eq!(response.json()["error"], "method_not_allowed");
+        // 受け付けるメソッドを、Allow ヘッダーで知らせる。
+        assert!(response.allow.contains("GET"), "{}", response.allow);
     }
 
     #[tokio::test]
-    async fn unknown_path_returns_not_found() {
+    async fn unknown_api_path_returns_json_not_found() {
+        let response = get_path("/api/no-such-api").await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+        assert_eq!(response.content_type, "application/json");
+        assert_eq!(response.json()["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn unknown_page_returns_not_found() {
         let response = get_path("/no-such-page").await;
         assert_eq!(response.status, StatusCode::NOT_FOUND);
     }
@@ -247,6 +286,11 @@ mod tests {
         assert_ne!(second.json()["id"].as_str().unwrap(), id);
         // 作ったワークスペースが保存され、最終利用日時が今になっている。
         assert_eq!(backend.workspaces.lock().unwrap().get(&id), Some(&NOW));
+        // 接続元の IP アドレスが、レート制限のキーとして渡っている。
+        assert_eq!(
+            *backend.rate_limit_keys.lock().unwrap(),
+            ["192.0.2.1", "192.0.2.1"]
+        );
     }
 
     #[tokio::test]
@@ -306,6 +350,22 @@ mod tests {
         assert_eq!(response.status, StatusCode::OK);
         assert_eq!(response.body, id);
         assert_eq!(backend.workspaces.lock().unwrap().get(id), Some(&NOW));
+    }
+
+    #[tokio::test]
+    async fn workspace_extractor_hides_backend_errors() {
+        let backend = FakeBackend {
+            broken: true,
+            ..FakeBackend::default()
+        };
+        let response = send(
+            workspace_echo_router(backend),
+            echo_request(Some("0123456789abcdef0123456789abcdef")),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.json()["error"], "internal_error");
+        assert!(!response.body.contains("壊れた DB"));
     }
 
     #[tokio::test]
