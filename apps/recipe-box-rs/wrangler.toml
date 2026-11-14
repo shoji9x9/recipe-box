@@ -1,6 +1,10 @@
 name = "recipe-box"
 main = "build/index.js"
 compatibility_date = "2026-11-01"
+# <名前>.workers.dev で公開する。
+workers_dev = true
+# 版ごとのプレビューの URL は使わないので作らない（誰でも開ける URL を増やさない）。
+preview_urls = false
 
 [build]
 # worker-build は mise で入れる（版は mise.toml で固定する）。

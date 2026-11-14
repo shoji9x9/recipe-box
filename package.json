@@ -9,6 +9,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
+    "chrome-devtools-mcp": "^1.12.0",
     "wrangler": "^4.158.0"
   }
 }
