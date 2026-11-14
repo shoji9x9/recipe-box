@@ -111,6 +111,7 @@ Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった�
 
 - [mise](https://mise.jdx.dev/)
 - [GitHub CLI](https://cli.github.com/)（`gh auth login` で認証しておく）
+- Google Chrome（エージェントが chrome-devtools MCP で画面を確かめるときだけ要る）
 - OS のパッケージの `pkg-config` と OpenSSL の開発用ファイル。worker-build のビルドに要る。
   Ubuntu では `sudo apt-get install -y pkg-config libssl-dev` で入る。
 
@@ -118,7 +119,7 @@ Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった�
 
 ```bash
 mise install    # mise.lock のとおりに Rust・Node・pnpm・各種の検査ツールを入れる
-pnpm install    # wrangler と commitlint を入れ、lefthook の git フックを有効にする
+pnpm install    # wrangler・commitlint・chrome-devtools-mcp を入れ、lefthook の git フックを有効にする
 ```
 
 ### よく使うコマンド
@@ -154,6 +155,8 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
 
 main は、ブランチルールで PR を通さない変更と強制 push を禁止し、CI の成功を必須にしている。
+
+本番は `<名前>.workers.dev` で公開する（`wrangler.toml` の `workers_dev = true`）。版ごとのプレビューの URL は、誰でも開ける URL を増やさないよう作らない（`preview_urls = false`）。
 
 ### デプロイとレビューの準備
 

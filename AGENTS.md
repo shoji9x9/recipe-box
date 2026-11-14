@@ -42,7 +42,14 @@
 
 ## MCP
 
-- 今は使わない。使うときは、プロジェクトの `.mcp.json` に定義する（誰が clone しても同じ MCP が使えるようにするため）。
+- MCP は、プロジェクトの `.mcp.json` に定義する（誰が clone しても同じ MCP が使えるようにするため）。
+- chrome-devtools MCP: 画面をブラウザで確かめる `browser-test` スキルが使う。エージェントがブラウザを操作できるので、`package.json` で版を完全に固定する（`^` を付けない）。
+  MCP から外部への送信は、次の設定で止めている。設定を足すときは `--help` で送信にかかわるものが増えていないかを確かめる。
+  - `--isolated`: ブラウザのプロファイルを毎回使い捨てにする。
+  - `--no-usage-statistics`: MCP の利用統計を Google に送らない。
+  - `--no-performance-crux`: 性能の計測で開いた URL を Google の CrUX API に送らない。
+  - 環境変数 `CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS=1`: 新しい版の確認をしない（版は Dependabot で上げる）。
+  - ブラウザ（Google Chrome）そのものが Google と行う通信は、これらの設定では止まらない。
 
 ## スキル
 
@@ -51,6 +58,7 @@
 - `pr-finalize-loop`: PR の CI の失敗とレビューの指摘が無くなるまで対応を繰り返す。
 - `dependabot-merge`: Dependabot の PR を確かめてマージする。
 - `dependabot-alert-issue`: Dependabot の alert から Issue を作る。
+- `browser-test`: 画面の変更を、chrome-devtools MCP で実際のブラウザを操作して確かめる。
 
 入れ方は `gh skill install shoji9x9/skills <スキル名> --agent claude-code --scope project`。
 
