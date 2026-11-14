@@ -71,8 +71,14 @@
 `pr-finalize-loop` の再レビューの依頼先は `claude-code` にしている（`.config/skills/shoji9x9/common.jsonc`）。
 このリポジトリの Claude のレビュー（`claude-review.yml`）は、push のたびに自動で動き、`@claude review` のコメントには反応しない。
 コメントで起動する `issue_comment` のトリガーは、secret のある job を PR のコメントから動かせてしまうので使わない。
-push せずに再レビューが要るときは、`@claude review` を投稿する代わりに、PR からラベル `claude-review` を外してから付け直す。
-付けたときにだけ動くので、付いたままのラベルは先に外す（`gh pr edit <番号> --remove-label claude-review` の後に `--add-label claude-review`）。
-`gh workflow run` で動かす方法は、インラインのコメントを書けないので使わない（Issue #18）。
+レビューは指摘に【要対応】か【参考】を付ける。レビューへの対応は、`pr-finalize-loop` の手順を次のとおり変えて行う。
+
+- 【参考】には PR で返信しない。残す価値があれば、関係する Issue にコメントする。【参考】は、対応していない指摘に数えない。
+- push せずに返信だけをしたときは、再レビューを依頼しない。ループは「返信済み・再レビューなし」で止まり、どの返信をしたかを利用者に報告する。
+  返信はその後の push で動くレビューが読む。
+- 利用者に求められたときだけ、push せずに再レビューする。PR からラベル `claude-review` を外してから付け直す
+  （付けたときにだけ動くので、`gh pr edit <番号> --remove-label claude-review` の後に `--add-label claude-review`）。
+  `gh workflow run` で動かす方法は、インラインのコメントを書けないので使わない（Issue #18）。
+
 スキルなしでどこまでできるかも見るため、必要かどうか迷うスキルは入れない。
 `replace-strategy` とその姉妹スキルは、リライトを始めるときに入れる。
