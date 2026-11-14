@@ -23,3 +23,10 @@ name = "WORKSPACE_CREATION_LIMITER"
 # アカウントの中で重ならない正の整数。
 namespace_id = "1001"
 simple = { limit = 10, period = 60 }
+
+# 書き込む API（レシピの登録・更新・削除）の回数の制限。1 つの IP アドレスから 60 秒に 30 回まで。
+# ワークスペースを調べる前に断り、D1 の読み書きを連打で増やさせない。おおよその制限である。
+[[ratelimits]]
+name = "WRITE_LIMITER"
+namespace_id = "1002"
+simple = { limit = 30, period = 60 }

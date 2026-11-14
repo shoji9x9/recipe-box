@@ -15,15 +15,17 @@ use worker::{
 };
 
 use crate::{
-    backend::{Backend, BackendError, BackendResult, RecipePage},
+    backend::{Backend, BackendError, BackendResult, RecipePage, WorkspaceLimits},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
 
 /// `wrangler.toml` の D1 の binding の名前。
 const DB_BINDING: &str = "DB";
-/// `wrangler.toml` のレート制限の binding の名前。
+/// `wrangler.toml` のレート制限の binding の名前（ワークスペースを作る回数）。
 const WORKSPACE_CREATION_LIMITER: &str = "WORKSPACE_CREATION_LIMITER";
+/// `wrangler.toml` のレート制限の binding の名前（書き込む API の回数）。
+const WRITE_LIMITER: &str = "WRITE_LIMITER";
 
 /// レシピを読むときの列。`Recipe` の項目と同じ名前・順番にする。
 const RECIPE_COLUMNS: &str = "id, name, servings, ingredients, steps, created_at, updated_at";
@@ -65,6 +67,26 @@ fn int_to_js(value: i64) -> JsValue {
 #[derive(serde::Deserialize)]
 struct Total {
     total: i64,
+}
+
+/// レート制限の binding `binding` で、`key` の回数が制限の中かを確かめる。
+fn limit(
+    env: &SendWrapper<Env>,
+    binding: &'static str,
+    key: &str,
+) -> impl Future<Output = BackendResult<bool>> + Send {
+    let env = env.clone();
+    let key = key.to_owned();
+    SendFuture::new(async move {
+        let limiter = env
+            .rate_limiter(binding)
+            .map_err(|e| backend_error("レート制限の binding を取れない", &e))?;
+        let outcome = limiter
+            .limit(key)
+            .await
+            .map_err(|e| backend_error("レート制限を確かめられない", &e))?;
+        Ok(outcome.success)
+    })
 }
 
 /// D1 のデータベースを取る。
@@ -114,37 +136,45 @@ impl Backend for CloudflareBackend {
         &self,
         client_key: &str,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        let env = self.env.clone();
-        let key = client_key.to_owned();
-        SendFuture::new(async move {
-            let limiter = env
-                .rate_limiter(WORKSPACE_CREATION_LIMITER)
-                .map_err(|e| backend_error("レート制限の binding を取れない", &e))?;
-            let outcome = limiter
-                .limit(key)
-                .await
-                .map_err(|e| backend_error("レート制限を確かめられない", &e))?;
-            Ok(outcome.success)
-        })
+        limit(&self.env, WORKSPACE_CREATION_LIMITER, client_key)
+    }
+
+    fn allow_write(&self, client_key: &str) -> impl Future<Output = BackendResult<bool>> + Send {
+        limit(&self.env, WRITE_LIMITER, client_key)
     }
 
     fn insert_workspace(
         &self,
         id: &WorkspaceId,
         now: i64,
-    ) -> impl Future<Output = BackendResult<()>> + Send {
+        limits: &WorkspaceLimits,
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
         let env = self.env.clone();
-        let id = id.to_string();
+        let values = SendWrapper::new([
+            id.to_string().into(),
+            int_to_js(now),
+            int_to_js(now),
+            int_to_js(limits.max_total),
+            int_to_js(limits.since),
+            int_to_js(limits.max_created_since),
+        ]);
         SendFuture::new(async move {
+            let action = "ワークスペースを保存できない";
             let db = database(&env)?;
-            run(
+            // 上限の判定と保存を 1 つの文にして、同時に作られても上限を超えないようにする。
+            // FROM の (VALUES (0)) は、1 行だけの表として使う（標準の SQL の書き方）。
+            // 全体を数えるので、workspace_id では絞り込まない（AGENTS.md のワークスペースを作るクエリ）。
+            let result = run(
                 &db,
-                "INSERT INTO workspaces (id, created_at, last_used_at) VALUES (?, ?, ?)",
-                &[id.into(), int_to_js(now), int_to_js(now)],
-                "ワークスペースを保存できない",
+                "INSERT INTO workspaces (id, created_at, last_used_at) \
+                 SELECT ?, ?, ? FROM (VALUES (0)) AS one \
+                 WHERE (SELECT COUNT(*) FROM workspaces) < ? \
+                 AND (SELECT COUNT(*) FROM workspaces WHERE created_at >= ?) < ?",
+                &values.0,
+                action,
             )
             .await?;
-            Ok(())
+            Ok(changed_rows(&result, action)? > 0)
         })
     }
 
@@ -251,7 +281,8 @@ impl Backend for CloudflareBackend {
         &self,
         workspace: &WorkspaceId,
         recipe: &Recipe,
-    ) -> impl Future<Output = BackendResult<()>> + Send {
+        max_recipes: i64,
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
         let env = self.env.clone();
         let values = [
             workspace.to_string().into(),
@@ -263,21 +294,26 @@ impl Backend for CloudflareBackend {
             recipe.steps.clone().into(),
             int_to_js(recipe.created_at),
             int_to_js(recipe.updated_at),
+            workspace.to_string().into(),
+            int_to_js(max_recipes),
         ];
         // JsValue は Send でないので、値ごと SendWrapper で包んで async の中へ持ち込む。
         let values = SendWrapper::new(values);
         SendFuture::new(async move {
+            let action = "レシピを保存できない";
             let db = database(&env)?;
-            run(
+            // 上限の判定と保存を 1 つの文にして、同時に登録されても上限を超えないようにする。
+            let result = run(
                 &db,
                 "INSERT INTO recipes \
                  (workspace_id, id, name, search_name, servings, ingredients, steps, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM (VALUES (0)) AS one \
+                 WHERE (SELECT COUNT(*) FROM recipes WHERE workspace_id = ?) < ?",
                 &values.0,
-                "レシピを保存できない",
+                action,
             )
             .await?;
-            Ok(())
+            Ok(changed_rows(&result, action)? > 0)
         })
     }
 

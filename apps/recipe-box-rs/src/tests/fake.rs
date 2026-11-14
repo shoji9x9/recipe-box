@@ -13,7 +13,7 @@ use std::{
 };
 
 use crate::{
-    backend::{Backend, BackendError, BackendResult, RecipePage},
+    backend::{Backend, BackendError, BackendResult, RecipePage, WorkspaceLimits},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -28,6 +28,8 @@ type RecipeKey = (String, String);
 pub struct FakeBackend {
     /// ワークスペースの ID と最終利用日時。
     pub workspaces: Arc<Mutex<HashMap<String, i64>>>,
+    /// ワークスペースの ID と作った日時。
+    pub workspace_created_at: Arc<Mutex<HashMap<String, i64>>>,
     /// レシピ。
     pub recipes: Arc<Mutex<HashMap<RecipeKey, Recipe>>>,
     /// 次に返す乱数の 1 バイト目。呼ぶたびに 1 増やし、毎回ちがう ID になるようにする。
@@ -38,8 +40,12 @@ pub struct FakeBackend {
     pub rate_limited: bool,
     /// `true` なら、DB が失敗したことにする。
     pub broken: bool,
+    /// `true` なら、書き込む API の回数の制限を超えたことにする。
+    pub write_limited: bool,
     /// レート制限に渡されたキー。
     pub rate_limit_keys: Arc<Mutex<Vec<String>>>,
+    /// 書き込む API の回数の制限に渡されたキー。
+    pub write_limit_keys: Arc<Mutex<Vec<String>>>,
     /// 最終利用日時を書き換えた回数。
     pub last_used_writes: Arc<AtomicUsize>,
 }
@@ -48,20 +54,27 @@ impl Default for FakeBackend {
     fn default() -> Self {
         Self {
             workspaces: Arc::default(),
+            workspace_created_at: Arc::default(),
             recipes: Arc::default(),
             next_random: Arc::default(),
             now: Arc::new(AtomicI64::new(NOW)),
             rate_limited: false,
             broken: false,
+            write_limited: false,
             rate_limit_keys: Arc::default(),
+            write_limit_keys: Arc::default(),
             last_used_writes: Arc::default(),
         }
     }
 }
 
 impl FakeBackend {
-    /// 最終利用日時が `last_used_at` のワークスペースを足し、その ID を返す。
+    /// 最終利用日時が `last_used_at` のワークスペースを足し、その ID を返す。作った日時も `last_used_at` にする。
     pub fn add_workspace(&self, id: &str, last_used_at: i64) -> String {
+        self.workspace_created_at
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), last_used_at);
         self.workspaces
             .lock()
             .unwrap()
@@ -111,13 +124,32 @@ impl Backend for FakeBackend {
         ready(Ok(!self.rate_limited))
     }
 
+    fn allow_write(&self, client_key: &str) -> impl Future<Output = BackendResult<bool>> + Send {
+        self.write_limit_keys
+            .lock()
+            .unwrap()
+            .push(client_key.to_owned());
+        ready(Ok(!self.write_limited))
+    }
+
     fn insert_workspace(
         &self,
         id: &WorkspaceId,
         now: i64,
-    ) -> impl Future<Output = BackendResult<()>> + Send {
+        limits: &WorkspaceLimits,
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
         ready(self.check().map(|()| {
+            // 本物の SQL と同じく、全体の数と since 以後に作った数を数えてから保存する。
+            let mut created_at = self.workspace_created_at.lock().unwrap();
+            let total = i64::try_from(created_at.len()).unwrap();
+            let recent =
+                i64::try_from(created_at.values().filter(|&&t| t >= limits.since).count()).unwrap();
+            if total >= limits.max_total || recent >= limits.max_created_since {
+                return false;
+            }
+            created_at.insert(id.to_string(), now);
             self.workspaces.lock().unwrap().insert(id.to_string(), now);
+            true
         }))
     }
 
@@ -177,12 +209,19 @@ impl Backend for FakeBackend {
         &self,
         workspace: &WorkspaceId,
         recipe: &Recipe,
-    ) -> impl Future<Output = BackendResult<()>> + Send {
+        max_recipes: i64,
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
         ready(self.check().map(|()| {
-            self.recipes
-                .lock()
-                .unwrap()
-                .insert(Self::key(workspace, &recipe.id), recipe.clone());
+            let mut recipes = self.recipes.lock().unwrap();
+            let count = recipes
+                .keys()
+                .filter(|(ws, _)| ws == workspace.as_str())
+                .count();
+            if i64::try_from(count).unwrap() >= max_recipes {
+                return false;
+            }
+            recipes.insert(Self::key(workspace, &recipe.id), recipe.clone());
+            true
         }))
     }
 

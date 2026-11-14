@@ -23,24 +23,26 @@ pub const MAX_NAME_CHARS: usize = 100;
 /// 何人分かの範囲。
 pub const SERVINGS_RANGE: std::ops::RangeInclusive<f64> = 1.0..=100.0;
 /// 材料の長さの上限（Unicode のコードポイントの数）。
-pub const MAX_INGREDIENTS_CHARS: usize = 5_000;
+pub const MAX_INGREDIENTS_CHARS: usize = 2_000;
 /// 手順の長さの上限（Unicode のコードポイントの数）。
-pub const MAX_STEPS_CHARS: usize = 10_000;
+pub const MAX_STEPS_CHARS: usize = 5_000;
+/// 1 ワークスペースのレシピの数の上限。
+///
+/// 費用を守るための上限。アプリ全体のワークスペースの数の上限（[`crate::workspace::MAX_WORKSPACES`]）と
+/// 掛け合わせ、1 件の最大の大きさ（約 29 KB）を掛けた量が、D1 の保存量の上限に余裕を持って収まるようにする。
+pub const MAX_RECIPES_PER_WORKSPACE: i64 = 40;
 /// 検索の文字列の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_QUERY_CHARS: usize = 100;
 /// 一覧の 1 ページのレシピの数。
 pub const PAGE_SIZE: i64 = 20;
-/// 一覧のページの番号の上限。
-///
-/// OFFSET で飛ばす行も D1 は読むので、大きすぎる番号を受け付けない。
-/// 1 ワークスペースのレシピの数の上限（#15）を決めたら、それに合わせて下げる。
-pub const MAX_PAGE: i64 = 10_000;
+/// 一覧のページの番号の上限。レシピの数の上限いっぱいでも、すべてのレシピがこの番号までに収まる。
+pub const MAX_PAGE: i64 = (MAX_RECIPES_PER_WORKSPACE + PAGE_SIZE - 1) / PAGE_SIZE;
 /// リクエストの本文の大きさの上限（バイト）。
 ///
 /// 上の上限いっぱいの JSON が収まる大きさにする。最も大きくなるのは、すべての文字を
 /// `\uXXXX` のエスケープの組（絵文字なら 1 文字 12 バイト）で送ったときで、
-/// 15,100 文字 × 12 バイト = 181,200 バイトに項目名などを足しても 256 KiB に収まる。
-pub const MAX_BODY_BYTES: usize = 256 * 1024;
+/// 7,100 文字 × 12 バイト = 85,200 バイトに項目名などを足しても 128 KiB に収まる。
+pub const MAX_BODY_BYTES: usize = 128 * 1024;
 
 /// レシピの ID。ワークスペースの ID と同じ形（16 進数の小文字 32 文字）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,12 +150,12 @@ pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
     if ingredients.chars().count() > MAX_INGREDIENTS_CHARS {
         return Err(invalid(
             "ingredients",
-            "材料（ingredients）は 5,000 文字までです",
+            "材料（ingredients）は 2,000 文字までです",
         ));
     }
     let steps = input.steps.unwrap_or_default();
     if steps.chars().count() > MAX_STEPS_CHARS {
-        return Err(invalid("steps", "手順（steps）は 10,000 文字までです"));
+        return Err(invalid("steps", "手順（steps）は 5,000 文字までです"));
     }
 
     Ok(RecipeFields {
@@ -257,7 +259,7 @@ pub async fn list<B: Backend>(
         .and_then(parse_page)
         .ok_or(ApiError::InvalidField {
             field: "page",
-            message: "ページ（page）は 1 から 10000 までの整数です",
+            message: "ページ（page）は 1 から 2 までの整数です",
         })?;
     let query = pattern.map(search_name);
     let result = backend
@@ -295,7 +297,12 @@ pub async fn create<B: Backend>(
         created_at: now,
         updated_at: now,
     };
-    backend.insert_recipe(&workspace.id, &recipe).await?;
+    if !backend
+        .insert_recipe(&workspace.id, &recipe, MAX_RECIPES_PER_WORKSPACE)
+        .await?
+    {
+        return Err(ApiError::RecipeLimitReached);
+    }
     let location = format!("/api/recipes/{id}");
     Ok((
         StatusCode::CREATED,
@@ -391,6 +398,12 @@ mod tests {
     }
 
     #[test]
+    fn page_error_message_matches_max_page() {
+        // page のエラーの文（"1 から 2 までの整数"）は定数から作れないので、上限を変えたら文も直す。
+        assert_eq!(super::MAX_PAGE, 2);
+    }
+
+    #[test]
     fn validate_accepts_minimum_and_maximum() {
         let fields = validate(input(Some("カレー"), Some(1.0))).unwrap();
         assert_eq!(fields.ingredients, "");
@@ -399,8 +412,8 @@ mod tests {
         validate(RecipeInput {
             name: Some("カレー".into()),
             servings: Some(2.0),
-            ingredients: Some("🍛".repeat(5_000)),
-            steps: Some("手".repeat(10_000)),
+            ingredients: Some("🍛".repeat(2_000)),
+            steps: Some("手".repeat(5_000)),
         })
         .unwrap();
     }
