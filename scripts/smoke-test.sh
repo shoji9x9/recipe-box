@@ -137,6 +137,13 @@ request PUT "/api/recipes/$recipe_id" "$workspace_a" '{"name":"辛口カレー",
 expect 200 "PUT /api/recipes/{id}"
 [ "$(json .name)" = "辛口カレー" ] || fail "更新した料理名が返らない"
 [ "$(json .ingredients)" = "" ] || fail "PUT で省いた材料が空にならない"
+# 更新で検索用の列（search_name）も作り直される（偽物の Backend では確かめられないので、ここで確かめる）。
+request GET '/api/recipes?q=%E8%BE%9B%E5%8F%A3' "$workspace_a"
+expect 200 "GET /api/recipes?q=辛口（A、更新の後）"
+[ "$(json .total)" = 1 ] || fail "更新した料理名で検索できない（search_name が更新されていない）"
+request GET '/api/recipes?q=beef' "$workspace_a"
+expect 200 "GET /api/recipes?q=beef（A、更新の後）"
+[ "$(json .total)" = 0 ] || fail "更新前の料理名で検索に当たる"
 
 echo "入力の検証"
 request POST /api/recipes "$workspace_a" '{"name":"","servings":2}'
