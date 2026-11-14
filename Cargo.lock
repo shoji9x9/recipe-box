@@ -518,9 +518,11 @@ dependencies = [
  "console_error_panic_hook",
  "http-body-util",
  "serde",
+ "serde_json",
  "tokio",
  "tower",
  "tower-service",
+ "wasm-bindgen",
  "worker",
 ]
 

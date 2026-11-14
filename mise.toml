@@ -56,7 +56,13 @@ dir = "apps/recipe-box-rs"
 # worker-build は --locked を受け取らないので、先に Cargo.lock が最新かを確かめる。
 run = ["cargo fetch --locked", "worker-build --release"]
 
-[tasks.dev]
-description = "ローカルで Worker を起動する（http://localhost:8787）"
+[tasks.migrate]
+description = "ローカルの D1 にマイグレーションを当てる"
 dir = "apps/recipe-box-rs"
+run = "pnpm exec wrangler d1 migrations apply DB --local"
+
+[tasks.dev]
+description = "ローカルの D1 にマイグレーションを当て、Worker を起動する（http://localhost:8787）"
+dir = "apps/recipe-box-rs"
+depends = ["migrate"]
 run = "pnpm exec wrangler dev"

@@ -46,10 +46,22 @@
 
 写真の一覧・取得・削除のパスは、実装のときに決める。
 
+失敗したときは、状態コードと次の形の本文を返す。`error` は機械向けのコード、`message` は人向けの説明である。
+
+```json
+{"error": "workspace_not_found", "message": "ワークスペースが見つかりません"}
+```
+
+`/api` で始まるが定義されていないパスには `404`（`not_found`）を、パスが受け付けないメソッドには `405`（`method_not_allowed`）を返す。
+
 ### ワークスペースによるデータの分離
 
-- `POST /api/workspaces` が、推測できない 128 ビットの乱数の ID を発行する。発行の回数には制限を設ける。
+- `POST /api/workspaces` が、推測できない 128 ビットの乱数の ID を発行し、`201` と `{"id": "<ID>"}` を返す。ID は 16 進数の小文字 32 文字。
+- 発行の回数は、1 つの IP アドレス（IPv6 は上位 64 ビットの範囲）から 60 秒に 10 回までにする。超えたら `429`（`too_many_requests`）を返す。
+  Cloudflare の Rate Limiting は拠点ごとにおおよそで数えるので、厳密な上限ではない（複数の拠点を通れば、拠点の数だけ増えうる）。
 - API は `X-Workspace-Id` ヘッダーで、画面は Cookie（HttpOnly・Secure・SameSite=Lax）で ID を受け取る。
+  ヘッダーが無ければ `400`（`workspace_id_missing`）、形が正しくないか 2 つ以上あれば `400`（`workspace_id_invalid`）、そのワークスペースが無ければ `404`（`workspace_not_found`）を返す。
+- ワークスペースを使うたびに、最終利用日時を更新する。
 - すべてのクエリを `workspace_id` で絞り込む。ID を知っている人だけが、そのワークスペースのデータを読み書きできる。
 - 最後に使われてから 30 日たったワークスペースは、定期実行（Cron Trigger）で消す。
 
@@ -126,7 +138,8 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp を入れ、leftho
 
 | コマンド | 内容 |
 | --- | --- |
-| `mise run dev` | ローカルで Worker を起動する（<http://localhost:8787>） |
+| `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
+| `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
 | `mise run test` | Rust のテストを実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
@@ -140,6 +153,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | パス | 内容 |
 | --- | --- |
 | `apps/recipe-box-rs/` | リライト前の Rust の Worker |
+| `apps/recipe-box-rs/migrations/` | D1 のマイグレーション（テーブルを作る・変える SQL） |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
 
 ## CI と CD
@@ -150,11 +164,13 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `pr-title.yml` | PR のタイトルが Conventional Commits の形かを調べる（タイトルを直したときにも動く） |
 | `codeql.yml` | Rust のコードと workflow を CodeQL で解析する |
 | `claude-review.yml` | PR を Claude Code でレビューする |
-| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする |
+| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。先に D1 にマイグレーションを当てる |
 | `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする |
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
 
 main は、ブランチルールで PR を通さない変更と強制 push を禁止し、CI の成功を必須にしている。
+
+D1 のデータベース（`recipe-box`）は、無ければ `deploy.yml` が作る。`wrangler.toml` にはアカウントごとの `database_id` を書かず、wrangler に名前で探させる。
 
 本番は `<名前>.workers.dev` で公開する（`wrangler.toml` の `workers_dev = true`）。版ごとのプレビューの URL は、誰でも開ける URL を増やさないよう作らない（`preview_urls = false`）。
 
@@ -164,7 +180,7 @@ GitHub の Settings → Environments に、次の値を置く。
 
 | Environment | 種類 | 名前 | 値 |
 | --- | --- | --- | --- |
-| `production` | secret | `CLOUDFLARE_API_TOKEN` | Cloudflare のダッシュボードの「Account API tokens」で作る。権限は「Edit Cloudflare Workers」にし、対象はデプロイするアカウントだけに絞る |
+| `production` | secret | `CLOUDFLARE_API_TOKEN` | Cloudflare のダッシュボードの「Account API tokens」で作る。権限は「Edit Cloudflare Workers」と「D1 Edit」にし、対象はデプロイするアカウントだけに絞る |
 | `production` | variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID。認証情報ではないが、公開リポジトリには書かない |
 | `claude-review` | secret | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` で作る |
 
