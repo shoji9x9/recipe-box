@@ -52,14 +52,15 @@
 {"error": "workspace_not_found", "message": "ワークスペースが見つかりません"}
 ```
 
-`/api/` の下に無いパスには `404`（`not_found`）を、パスが受け付けないメソッドには `405`（`method_not_allowed`）を返す。
+`/api` で始まるが定義されていないパスには `404`（`not_found`）を、パスが受け付けないメソッドには `405`（`method_not_allowed`）を返す。
 
 ### ワークスペースによるデータの分離
 
 - `POST /api/workspaces` が、推測できない 128 ビットの乱数の ID を発行し、`201` と `{"id": "<ID>"}` を返す。ID は 16 進数の小文字 32 文字。
 - 発行の回数は、1 つの IP アドレス（IPv6 は上位 64 ビットの範囲）から 60 秒に 10 回までにする。超えたら `429`（`too_many_requests`）を返す。
+  Cloudflare の Rate Limiting は拠点ごとにおおよそで数えるので、厳密な上限ではない（複数の拠点を通れば、拠点の数だけ増えうる）。
 - API は `X-Workspace-Id` ヘッダーで、画面は Cookie（HttpOnly・Secure・SameSite=Lax）で ID を受け取る。
-  ヘッダーが無ければ `400`（`workspace_id_missing`）、形が正しくなければ `400`（`workspace_id_invalid`）、そのワークスペースが無ければ `404`（`workspace_not_found`）を返す。
+  ヘッダーが無ければ `400`（`workspace_id_missing`）、形が正しくないか 2 つ以上あれば `400`（`workspace_id_invalid`）、そのワークスペースが無ければ `404`（`workspace_not_found`）を返す。
 - ワークスペースを使うたびに、最終利用日時を更新する。
 - すべてのクエリを `workspace_id` で絞り込む。ID を知っている人だけが、そのワークスペースのデータを読み書きできる。
 - 最後に使われてから 30 日たったワークスペースは、定期実行（Cron Trigger）で消す。

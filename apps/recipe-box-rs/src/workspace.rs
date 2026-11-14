@@ -89,10 +89,13 @@ impl<B: Backend> FromRequestParts<B> for Workspace {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, backend: &B) -> Result<Self, Self::Rejection> {
-        let value = parts
-            .headers
-            .get(WORKSPACE_ID_HEADER)
-            .ok_or(ApiError::WorkspaceIdMissing)?;
+        let mut values = parts.headers.get_all(WORKSPACE_ID_HEADER).iter();
+        let value = values.next().ok_or(ApiError::WorkspaceIdMissing)?;
+        // 同じヘッダーが 2 つ以上あると、どちらのワークスペースか決められないので受け付けない。
+        if values.next().is_some() {
+            return Err(ApiError::WorkspaceIdInvalid);
+        }
+        // ASCII でない値（to_str が失敗する）・空・前後の空白も、ID の形でないので受け付けない。
         let id = value
             .to_str()
             .ok()

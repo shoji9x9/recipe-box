@@ -105,7 +105,7 @@ mod tests {
     use axum::{
         Router,
         body::Body,
-        http::{Request, StatusCode, header},
+        http::{HeaderValue, Request, StatusCode, header},
         routing::get,
     };
     use http_body_util::BodyExt;
@@ -363,6 +363,41 @@ mod tests {
                 get(|workspace: Workspace| async move { workspace.id.to_string() }),
             )
             .with_state(backend)
+    }
+
+    #[tokio::test]
+    async fn workspace_extractor_rejects_unusual_header_values() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let backend = FakeBackend::default();
+        backend.workspaces.lock().unwrap().insert(id.into(), 0);
+        let requests = [
+            ("空", vec![HeaderValue::from_static("")]),
+            (
+                "ASCII でない",
+                vec![HeaderValue::from_bytes(&[0xff; 32]).unwrap()],
+            ),
+            (
+                "前の空白",
+                vec![HeaderValue::from_str(&format!(" {id}")).unwrap()],
+            ),
+            (
+                "後ろの空白",
+                vec![HeaderValue::from_str(&format!("{id} ")).unwrap()],
+            ),
+            (
+                "2 つ",
+                vec![HeaderValue::from_static(id), HeaderValue::from_static(id)],
+            ),
+        ];
+        for (label, values) in requests {
+            let mut request = Request::get("/echo").body(Body::empty()).unwrap();
+            for value in values {
+                request.headers_mut().append("x-workspace-id", value);
+            }
+            let response = send(workspace_echo_router(backend.clone()), request).await;
+            assert_eq!(response.status, StatusCode::BAD_REQUEST, "{label}");
+            assert_eq!(response.json()["error"], "workspace_id_invalid", "{label}");
+        }
     }
 
     fn echo_request(workspace_id: Option<&str>) -> Request<Body> {

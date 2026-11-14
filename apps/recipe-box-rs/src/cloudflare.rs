@@ -125,11 +125,14 @@ impl Backend for CloudflareBackend {
                 .await
                 .map_err(|e| backend_error("ワークスペースを更新できない", &e))?;
             // 更新した行の数が 1 なら、ワークスペースが在る。
+            // 行の数が取れないときに「無い」とみなすと、在るワークスペースが 404 になって原因も残らないので、失敗にする。
             let changes = result
                 .meta()
                 .map_err(|e| backend_error("更新の結果を読めない", &e))?
                 .and_then(|meta| meta.changes)
-                .unwrap_or(0);
+                .ok_or_else(|| {
+                    BackendError("ワークスペースの更新の結果に、変えた行の数が無い".to_owned())
+                })?;
             Ok(changes > 0)
         })
     }
