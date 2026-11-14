@@ -1,0 +1,26 @@
+# cargo-deny の設定。Rust の依存の脆弱性・ライセンス・取得元を調べる。
+[graph]
+# Workers で動かすターゲットだけを見る。
+targets = ["wasm32-unknown-unknown"]
+
+[advisories]
+# 脆弱性・メンテナンス終了・取り下げ（yanked）の版を拒否する。
+yanked = "deny"
+unmaintained = "workspace"
+
+[licenses]
+# 使ってよいライセンス。足すときは理由を PR に書く。
+allow = ["Apache-2.0", "BSD-3-Clause", "MIT", "Unicode-3.0"]
+
+[licenses.private]
+# 公開しない自分のクレート（publish = false）はライセンスの検査から外す。
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# crates.io 以外（git や別のレジストリ）からの取得を拒否する。
+unknown-registry = "deny"
+unknown-git = "deny"

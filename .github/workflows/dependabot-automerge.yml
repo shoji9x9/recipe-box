@@ -1,0 +1,85 @@
+name: Dependabot auto-merge
+
+# Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新だけを、CI が通ったら自動でマージする。
+# major・0.x の依存・GitHub Actions の更新は、ラベルを付けて手で確かめる（dependabot-merge スキル）。
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  automerge:
+    name: Dependabot auto-merge
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # 自動マージを予約する
+      pull-requests: write # ラベルを付ける
+      issues: write # ラベルを作る
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v3.1.0
+        with:
+          github-token: ${{ github.token }}
+      - name: Decide routing
+        id: route
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEPS_JSON: ${{ steps.meta.outputs.updated-dependencies-json }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+        run: |
+          set -euo pipefail
+          decision=review
+          case "$ECOSYSTEM" in
+            github-actions | github_actions)
+              echo "GitHub Actions の更新は手で確かめる"
+              ;;
+            *)
+              case "$UPDATE_TYPE" in
+                version-update:semver-minor | version-update:semver-patch)
+                  all_ge_1="$(printf '%s' "$DEPS_JSON" | jq -r '
+                    (length > 0) and all(.[];
+                      ((.newVersion // "") | sub("^[^0-9]*"; "") | split(".")[0] | (tonumber? // 0)) >= 1)')"
+                  if [ "$all_ge_1" = "true" ]; then
+                    decision=automerge
+                  else
+                    echo "0.x の依存を含むので手で確かめる"
+                  fi
+                  ;;
+                *)
+                  echo "major か、種類が分からない更新（$UPDATE_TYPE）なので手で確かめる"
+                  ;;
+              esac
+              ;;
+          esac
+          echo "decision=$decision" >>"$GITHUB_OUTPUT"
+      - name: Enable auto-merge
+        id: enable
+        if: steps.route.outputs.decision == 'automerge'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Label for manual review
+        if: steps.route.outputs.decision == 'review' || steps.enable.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create "dependabot/needs-review" --repo "$REPO" \
+            --description "Dependabot の PR を手で確かめる（major・0.x・GitHub Actions・自動マージの失敗）" \
+            --color "D93F0B" --force
+          gh pr edit "$PR_URL" --add-label "dependabot/needs-review"

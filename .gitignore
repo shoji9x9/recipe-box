@@ -1,0 +1,15 @@
+# Rust のビルド結果
+/target/
+
+# Node の依存
+node_modules/
+
+# worker-build と wrangler が作るファイル
+/apps/*/build/
+.wrangler/
+
+# ローカル用の秘密情報（wrangler dev が読む）
+.dev.vars
+.dev.vars.*
+.env
+.env.*

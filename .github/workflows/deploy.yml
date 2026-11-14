@@ -1,0 +1,67 @@
+name: Deploy
+
+# main に入った変更を Cloudflare Workers の本番へデプロイする。
+# Cloudflare の API トークンは GitHub Environment「production」の secret に、
+# アカウント ID は同じ Environment の variable に置く（アカウント ID は認証情報ではないが、公開リポジトリには書かない）。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions: {}
+
+# デプロイは途中で止めず、順番に 1 つずつ実行する。
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    name: Deploy to Cloudflare Workers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read # コードを読む
+    steps:
+      - name: Check Cloudflare credentials
+        id: cred
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "present=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "present=false" >>"$GITHUB_OUTPUT"
+            message="Environment「production」に secret の CLOUDFLARE_API_TOKEN か variable の CLOUDFLARE_ACCOUNT_ID が無いので、デプロイしない"
+            echo "::warning::$message"
+            echo "$message" >>"$GITHUB_STEP_SUMMARY"
+            # 手で実行したときは、デプロイできなかったことに気付けるよう失敗させる。
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+          fi
+      - uses: actions/checkout@v7.0.1
+        if: steps.cred.outputs.present == 'true'
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        if: steps.cred.outputs.present == 'true'
+        with:
+          cache: true
+      - name: Install Node packages
+        if: steps.cred.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Deploy
+        if: steps.cred.outputs.present == 'true'
+        working-directory: apps/recipe-box-rs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy

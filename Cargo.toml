@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["apps/recipe-box-rs"]
+
+# Workers へ送る wasm を小さくする（workers-rs のテンプレートと同じ設定）。
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# 一般的な指摘に加えて、細かい書き方の指摘も受ける。
+pedantic = { level = "warn", priority = -1 }

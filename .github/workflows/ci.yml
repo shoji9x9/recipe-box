@@ -1,0 +1,137 @@
+name: CI
+
+# PR ごとに、整形・静的解析・依存の検査・テスト・ビルドと動作確認・秘密情報の検査を行う。
+# PR のタイトルの検査は、タイトルを直したときにも動かすため pr-title.yml に分けている。
+# main への変更は PR を通すことをブランチルールで必須にしているので、main への push では実行しない。
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # コードを読む
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # mise.toml のツールを、mise.lock の版とチェックサムのとおりに入れる。
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Check mise.lock is up to date
+        run: |
+          mise lock
+          git diff --exit-code -- mise.lock
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: mise run lint
+      - name: Verify GitHub Actions lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh-actions-lock --verify
+
+  audit:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # コードを読む
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      - name: Audit dependencies
+        run: mise run audit
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # コードを読む
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Test
+        run: mise run test
+
+  build:
+    name: Build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # コードを読む
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: mise run build
+      # ローカルで Worker を起動し、/api/health の本文と / の HTML を確かめる。
+      - name: Smoke test
+        working-directory: apps/recipe-box-rs
+        run: |
+          pnpm exec wrangler dev --port 8787 >/tmp/wrangler.log 2>&1 &
+          trap 'kill %1 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8787/api/health >/tmp/health.json 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          if ! grep -qx '{"status":"ok"}' /tmp/health.json 2>/dev/null; then
+            echo "::error::/api/health が期待した本文を返さない"
+            cat /tmp/wrangler.log
+            exit 1
+          fi
+          if ! curl -fsS http://localhost:8787/ | grep -q '<h1>recipe-box</h1>'; then
+            echo "::error::/ が期待した HTML を返さない"
+            cat /tmp/wrangler.log
+            exit 1
+          fi
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # コードと履歴を読む
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.6
+        with:
+          cache: true
+      - name: Scan history for secrets
+        run: gitleaks git --no-banner --redact

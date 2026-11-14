@@ -1,0 +1,45 @@
+# Dependabot の設定。mise で入れるツールは Dependabot の対象外なので、outdated.yml で追う。
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "chore(deps)"
+    # 公開から 7 日たっていない版は使わない（mise・pnpm・Cargo の設定とそろえる）。
+    cooldown:
+      default-days: 7
+
+  # pnpm の依存も "npm" として扱われる。
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    cooldown:
+      default-days: 7
+
+  # action を更新するときは、.github/workflows/actions.lock も同じ PR で更新される。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "ci(deps)"
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-and-patch:
+        update-types: ["minor", "patch"]

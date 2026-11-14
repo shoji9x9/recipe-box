@@ -1,0 +1,88 @@
+name: Claude review
+
+# PR を Claude Code でレビューし、指摘を PR のコメントに書く。
+# push のたびに自動で動くほか、`gh workflow run claude-review.yml -f pr=<番号>` で手でも動かせる
+# （pr-finalize-loop スキルが、push せずに返信だけをしたときの再レビューの依頼に使う）。
+# 手で動かせるのは、リポジトリへの書き込み権限を持つ人だけである（GitHub の仕様）。
+# 認証には Environment「claude-review」の secret の CLAUDE_CODE_OAUTH_TOKEN を使う。
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "レビューする PR の番号"
+        type: number
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review
+    # pull_request: Dependabot と fork からの PR には secret が渡らないので、同じリポジトリの人のブランチだけを対象にする
+    # （Dependabot の PR は dependabot-merge スキルで確かめる）。
+    # workflow_dispatch: 下の「Check pull request」で、同じリポジトリのブランチからの PR かを確かめる。
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.draft == false
+        && github.event.pull_request.user.login != 'dependabot[bot]'
+        && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # secret をこの job だけに渡すため、Environment「claude-review」に置く。
+    environment: claude-review
+    permissions:
+      contents: read # コードを読む
+      pull-requests: write # レビューのコメントを書く
+    steps:
+      # 手で動かしたときは、fork からの PR のコードを secret のある job で読ませないよう、ここで止める。
+      - name: Check pull request
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          head_repo="$(gh api "repos/$REPO/pulls/$PR" --jq '.head.repo.full_name')"
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "::error::PR #$PR は同じリポジトリのブランチからの PR ではないので、レビューしない（head: $head_repo）"
+            exit 1
+          fi
+      # workflow_dispatch では既定で実行したブランチが checkout されるので、PR の head を明示する。
+      # コードは読むだけで実行しない。
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number || inputs.pr }}/head
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: anthropics/claude-code-action@v1.0.268
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+
+            この PR をレビューしてください。指摘は日本語で書いてください。
+            README.md の仕様と AGENTS.md の決まりに合っているかも確かめてください。
+
+            特に次の点を見てください。
+            - 不具合や、境界の値・エラーの扱いの漏れ
+            - セキュリティ（ワークスペースの ID による絞り込みの漏れ、入力の検証、秘密情報、workflow の権限と依存の固定）
+            - 標準の SQL の範囲を外れた書き方
+            - 足りないテスト
+
+            特定の行への指摘はインラインのコメントで、全体への指摘は PR のコメントで書いてください。
+            問題が無ければ、その旨を短く書いてください。
+          # リポジトリの hooks や MCP の設定を読み込まず、使える道具をレビューに要るものだけにする。
+          claude_args: >-
+            --setting-sources user
+            --strict-mcp-config
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --disallowedTools "Edit,Write,WebFetch,WebSearch,NotebookEdit"

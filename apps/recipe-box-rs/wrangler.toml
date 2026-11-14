@@ -1,0 +1,7 @@
+name = "recipe-box"
+main = "build/index.js"
+compatibility_date = "2026-11-01"
+
+[build]
+# worker-build は mise で入れる（版は mise.toml で固定する）。
+command = "worker-build --release"
