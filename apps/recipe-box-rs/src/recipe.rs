@@ -9,7 +9,7 @@ use axum::{
     Json,
     extract::{
         Path, Query, State,
-        rejection::{JsonRejection, QueryRejection},
+        rejection::{JsonRejection, PathRejection, QueryRejection},
     },
     http::{StatusCode, header},
     response::{IntoResponse, Response},
@@ -180,8 +180,10 @@ fn body_error(rejection: &JsonRejection) -> ApiError {
 }
 
 /// パスの ID を読む。形が正しくない ID のレシピは在りえないので、404 にする。
-fn parse_recipe_id(value: &str) -> Result<RecipeId, ApiError> {
-    RecipeId::parse(value).ok_or(ApiError::RecipeNotFound)
+/// パーセントエンコーディングを外すと UTF-8 にならない ID（`%ff` など）も、axum の既定の 400 ではなく 404 にする。
+fn parse_recipe_id(path: Result<Path<String>, PathRejection>) -> Result<RecipeId, ApiError> {
+    let Path(value) = path.map_err(|_| ApiError::RecipeNotFound)?;
+    RecipeId::parse(&value).ok_or(ApiError::RecipeNotFound)
 }
 
 /// `GET /api/recipes` のクエリ。
@@ -257,9 +259,9 @@ pub async fn create<B: Backend>(
 pub async fn get<B: Backend>(
     State(backend): State<B>,
     workspace: Workspace,
-    Path(id): Path<String>,
+    id: Result<Path<String>, PathRejection>,
 ) -> Result<Json<Recipe>, ApiError> {
-    let id = parse_recipe_id(&id)?;
+    let id = parse_recipe_id(id)?;
     backend
         .get_recipe(&workspace.id, &id)
         .await?
@@ -271,10 +273,10 @@ pub async fn get<B: Backend>(
 pub async fn update<B: Backend>(
     State(backend): State<B>,
     workspace: Workspace,
-    Path(id): Path<String>,
+    id: Result<Path<String>, PathRejection>,
     body: Result<Json<RecipeInput>, JsonRejection>,
 ) -> Result<Json<Recipe>, ApiError> {
-    let id = parse_recipe_id(&id)?;
+    let id = parse_recipe_id(id)?;
     let Json(input) = body.map_err(|rejection| body_error(&rejection))?;
     let fields = validate(input)?;
     let now = backend.now_millis();
@@ -296,9 +298,9 @@ pub async fn update<B: Backend>(
 pub async fn delete<B: Backend>(
     State(backend): State<B>,
     workspace: Workspace,
-    Path(id): Path<String>,
+    id: Result<Path<String>, PathRejection>,
 ) -> Result<StatusCode, ApiError> {
-    let id = parse_recipe_id(&id)?;
+    let id = parse_recipe_id(id)?;
     if backend.delete_recipe(&workspace.id, &id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {

@@ -543,6 +543,23 @@ async fn update_rejects_invalid_or_unknown() {
 }
 
 #[tokio::test]
+async fn non_utf8_recipe_id_is_not_found() {
+    // パスの ID が UTF-8 として読めなくても、形の正しくない ID と同じく recipe_not_found にする。
+    let backend = backend_with_workspaces();
+    for method in [Method::GET, Method::PUT, Method::DELETE] {
+        let request = Request::builder()
+            .method(method.clone())
+            .uri("/api/recipes/%ff")
+            .header("x-workspace-id", WORKSPACE_A)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("not json"))
+            .unwrap();
+        let response = send(router(backend.clone()), request).await;
+        assert_error(&response, StatusCode::NOT_FOUND, "recipe_not_found", None);
+    }
+}
+
+#[tokio::test]
 async fn update_checks_body_before_existence() {
     // 無い ID に、読めない本文を送ると、本文の失敗（invalid_body）を先に返す（README の順）。
     let backend = backend_with_workspaces();
