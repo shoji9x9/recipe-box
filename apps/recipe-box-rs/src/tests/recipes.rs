@@ -337,9 +337,14 @@ async fn list_returns_newest_first() {
     assert_eq!(response.json(), json!({"recipes": [second, first]}));
 }
 
-/// `GET /api/recipes?q=<q>` の結果の料理名を返す。
+/// `GET /api/recipes?q=<q>`（q はパーセントエンコーディングにする）の結果の料理名を返す。
 async fn search(backend: &FakeBackend, q: &str) -> Vec<String> {
-    let path = format!("/api/recipes?q={}", urlencode(q));
+    search_raw(backend, &urlencode(q)).await
+}
+
+/// `GET /api/recipes?q=<raw>`（raw はエンコードしない）の結果の料理名を返す。
+async fn search_raw(backend: &FakeBackend, raw: &str) -> Vec<String> {
+    let path = format!("/api/recipes?q={raw}");
     let response = call(backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.body);
     let mut names: Vec<String> = response.json()["recipes"]
@@ -406,6 +411,14 @@ async fn list_handles_unusual_queries() {
     // _ と \ も文字そのものとして探す。
     assert_eq!(search(&backend, "_").await, ["A_B"]);
     assert_eq!(search(&backend, "\\").await, ["a\\b"]);
+    // + は空白として読む。
+    create(
+        &backend,
+        WORKSPACE_A,
+        &json!({"name": "Beef Curry", "servings": 1}),
+    )
+    .await;
+    assert_eq!(search_raw(&backend, "f+C").await, ["Beef Curry"]);
     // UTF-8 として読めないバイトは置き換え文字になり、エラーにはしない。
     let response = call(
         &backend,
@@ -526,6 +539,27 @@ async fn update_rejects_invalid_or_unknown() {
         Some(&curry()),
     )
     .await;
+    assert_error(&response, StatusCode::NOT_FOUND, "recipe_not_found", None);
+}
+
+#[tokio::test]
+async fn update_checks_body_before_existence() {
+    // 無い ID に、読めない本文を送ると、本文の失敗（invalid_body）を先に返す（README の順）。
+    let backend = backend_with_workspaces();
+    let request = Request::put("/api/recipes/ffffffffffffffffffffffffffffffff")
+        .header("x-workspace-id", WORKSPACE_A)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("not json"))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_error(&response, StatusCode::BAD_REQUEST, "invalid_body", None);
+    // 形の正しくない ID なら、本文より先に recipe_not_found を返す。
+    let request = Request::put("/api/recipes/not-an-id")
+        .header("x-workspace-id", WORKSPACE_A)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("not json"))
+        .unwrap();
+    let response = send(router(backend), request).await;
     assert_error(&response, StatusCode::NOT_FOUND, "recipe_not_found", None);
 }
 
