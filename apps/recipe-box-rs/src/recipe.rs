@@ -329,19 +329,30 @@ pub async fn update<B: Backend>(
     let id = parse_recipe_id(id)?;
     let Json(input) = body.map_err(|rejection| body_error(&rejection))?;
     let fields = validate(input)?;
+    // 作った日時は変わらないので、更新の前に読んでおき、更新の後には読み直さない。
+    // 読み直すと、間に入った別の PUT の内容を返したり、間に入った DELETE で 404 を返したりするため。
+    let created_at = backend
+        .get_recipe(&workspace.id, &id)
+        .await?
+        .ok_or(ApiError::RecipeNotFound)?
+        .created_at;
     let now = backend.now_millis();
+    // 読んでから更新するまでの間に消されていれば、更新は 0 行になる。
     if !backend
         .update_recipe(&workspace.id, &id, &fields, now)
         .await?
     {
         return Err(ApiError::RecipeNotFound);
     }
-    // 作った日時などを含めて返すため、変えた後のレシピを読み直す。
-    backend
-        .get_recipe(&workspace.id, &id)
-        .await?
-        .map(Json)
-        .ok_or(ApiError::RecipeNotFound)
+    Ok(Json(Recipe {
+        id: id.to_string(),
+        name: fields.name,
+        servings: fields.servings,
+        ingredients: fields.ingredients,
+        steps: fields.steps,
+        created_at,
+        updated_at: now,
+    }))
 }
 
 /// `DELETE /api/recipes/{id}`: レシピを消し、`204` を返す。
