@@ -92,6 +92,13 @@ expect 200 "GET /api/recipes?q=_"
 request GET '/api/recipes?q=%5C' "$workspace_a"
 expect 200 "GET /api/recipes?q=\\"
 [ "$(json '[.recipes[].name] | join(",")')" = 'a\b' ] || fail "\\ を文字として検索しない"
+# 上限いっぱい（100 文字）の日本語でも検索できる（D1 の LIKE のパターンの上限 50 バイトに当たらない）。
+long_name="$(printf 'あ%.0s' $(seq 1 100))"
+request POST /api/recipes "$workspace_a" "{\"name\":\"$long_name\",\"servings\":1}"
+expect 201 "POST /api/recipes（100 文字の料理名）"
+request GET "/api/recipes?q=$(jq -rn --arg q "$long_name" '$q | @uri')" "$workspace_a"
+expect 200 "GET /api/recipes?q=<100 文字の日本語>"
+[ "$(json '.recipes | length')" = 1 ] || fail "100 文字の日本語で検索できない"
 
 echo "取得・更新"
 request GET "/api/recipes/$recipe_id" "$workspace_a"

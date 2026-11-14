@@ -7,9 +7,6 @@ CREATE TABLE recipes (
     id VARCHAR(32) NOT NULL,
     -- 料理名。長さの上限（100 文字）はアプリでも確かめる（SQLite は VARCHAR の長さを確かめないため）。
     name VARCHAR(100) NOT NULL,
-    -- 検索に使う料理名。name の ASCII の英字だけを小文字にしたもので、アプリが作る。
-    -- DB の LOWER は SQLite と PostgreSQL で ASCII 以外の扱いが違うので、DB に小文字にさせない。
-    search_name VARCHAR(100) NOT NULL,
     -- 何人分か。1 から 100 まで。
     servings INTEGER NOT NULL CHECK (servings BETWEEN 1 AND 100),
     -- 材料と手順。改行で区切った複数行の文字列。空でもよい。

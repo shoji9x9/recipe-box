@@ -16,7 +16,7 @@ use worker::{
 
 use crate::{
     backend::{Backend, BackendError, BackendResult},
-    recipe::{Recipe, RecipeFields, RecipeId, search_name},
+    recipe::{Recipe, RecipeFields, RecipeId},
     workspace::WorkspaceId,
 };
 
@@ -90,24 +90,6 @@ fn changed_rows(result: &D1Result, action: &str) -> BackendResult<usize> {
         .map_err(|e| backend_error(action, &e))?
         .and_then(|meta| meta.changes)
         .ok_or_else(|| BackendError(format!("{action}: 変えた行の数が結果に無い")))
-}
-
-/// 料理名の部分一致の検索に使う `LIKE` の形を作る。
-///
-/// 検索の文字列を [`search_name`] と同じ変換（ASCII の英字だけを小文字にする）にかけ、
-/// 同じ変換をして保存した `search_name` 列と比べる。両側を同じ形にそろえるので、DB による違いが出ない。
-/// `%`・`_`・`\` は `LIKE` で特別な意味を持つので、`\` を前に付けて文字そのものとして扱う（SQL の `ESCAPE '\'`）。
-fn like_pattern(text: &str) -> String {
-    let mut pattern = String::with_capacity(text.len() + 2);
-    pattern.push('%');
-    for c in search_name(text).chars() {
-        if matches!(c, '%' | '_' | '\\') {
-            pattern.push('\\');
-        }
-        pattern.push(c);
-    }
-    pattern.push('%');
-    pattern
 }
 
 impl Backend for CloudflareBackend {
@@ -201,45 +183,25 @@ impl Backend for CloudflareBackend {
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
-        name_pattern: Option<&str>,
     ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send {
         let env = self.env.clone();
         let workspace = workspace.to_string();
-        let pattern = name_pattern.map(like_pattern);
         SendFuture::new(async move {
             let action = "レシピの一覧を読めない";
             let db = database(&env)?;
             // 同じ日時に作ったレシピの順番が毎回変わらないよう、ID でも並べる。
-            let result = match pattern {
-                Some(pattern) => {
-                    run(
-                        &db,
-                        &format!(
-                            "SELECT {RECIPE_COLUMNS} FROM recipes \
-                             WHERE workspace_id = ? AND search_name LIKE ? ESCAPE '\\' \
-                             ORDER BY created_at DESC, id"
-                        ),
-                        &[workspace.into(), pattern.into()],
-                        action,
-                    )
-                    .await?
-                }
-                None => {
-                    run(
-                        &db,
-                        &format!(
-                            "SELECT {RECIPE_COLUMNS} FROM recipes \
-                             WHERE workspace_id = ? ORDER BY created_at DESC, id"
-                        ),
-                        &[workspace.into()],
-                        action,
-                    )
-                    .await?
-                }
-            };
-            result
-                .results::<Recipe>()
-                .map_err(|e| backend_error(action, &e))
+            run(
+                &db,
+                &format!(
+                    "SELECT {RECIPE_COLUMNS} FROM recipes \
+                     WHERE workspace_id = ? ORDER BY created_at DESC, id"
+                ),
+                &[workspace.into()],
+                action,
+            )
+            .await?
+            .results::<Recipe>()
+            .map_err(|e| backend_error(action, &e))
         })
     }
 
@@ -253,7 +215,6 @@ impl Backend for CloudflareBackend {
             workspace.to_string().into(),
             recipe.id.clone().into(),
             recipe.name.clone().into(),
-            search_name(&recipe.name).into(),
             int_to_js(recipe.servings),
             recipe.ingredients.clone().into(),
             recipe.steps.clone().into(),
@@ -267,8 +228,8 @@ impl Backend for CloudflareBackend {
             run(
                 &db,
                 "INSERT INTO recipes \
-                 (workspace_id, id, name, search_name, servings, ingredients, steps, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (workspace_id, id, name, servings, ingredients, steps, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 &values.0,
                 "レシピを保存できない",
             )
@@ -309,7 +270,6 @@ impl Backend for CloudflareBackend {
         let env = self.env.clone();
         let values = SendWrapper::new([
             fields.name.clone().into(),
-            search_name(&fields.name).into(),
             int_to_js(fields.servings),
             fields.ingredients.clone().into(),
             fields.steps.clone().into(),
@@ -322,7 +282,7 @@ impl Backend for CloudflareBackend {
             let db = database(&env)?;
             let result = run(
                 &db,
-                "UPDATE recipes SET name = ?, search_name = ?, servings = ?, ingredients = ?, steps = ?, updated_at = ? \
+                "UPDATE recipes SET name = ?, servings = ?, ingredients = ?, steps = ?, updated_at = ? \
                  WHERE workspace_id = ? AND id = ?",
                 &values.0,
                 action,
@@ -352,18 +312,5 @@ impl Backend for CloudflareBackend {
             .await?;
             Ok(changed_rows(&result, action)? > 0)
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::like_pattern;
-
-    #[test]
-    fn like_pattern_escapes_wildcards_and_lowercases_ascii() {
-        assert_eq!(like_pattern("Curry"), "%curry%");
-        assert_eq!(like_pattern("100%_\\"), "%100\\%\\_\\\\%");
-        // ASCII 以外は変えない。
-        assert_eq!(like_pattern("カレーÉ"), "%カレーÉ%");
     }
 }

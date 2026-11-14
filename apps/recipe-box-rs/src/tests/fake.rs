@@ -147,11 +147,8 @@ impl Backend for FakeBackend {
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
-        name_pattern: Option<&str>,
     ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send {
         ready(self.check().map(|()| {
-            // 本物と同じく、ASCII の大文字と小文字だけを区別しない部分一致にする。
-            let pattern = name_pattern.map(str::to_ascii_lowercase);
             let mut recipes: Vec<Recipe> = self
                 .recipes
                 .lock()
@@ -159,11 +156,6 @@ impl Backend for FakeBackend {
                 .iter()
                 .filter(|((ws, _), _)| ws == workspace.as_str())
                 .map(|(_, recipe)| recipe.clone())
-                .filter(|recipe| {
-                    pattern
-                        .as_ref()
-                        .is_none_or(|p| recipe.name.to_ascii_lowercase().contains(p.as_str()))
-                })
                 .collect();
             recipes.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
             recipes

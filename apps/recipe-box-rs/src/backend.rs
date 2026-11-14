@@ -64,12 +64,10 @@ pub trait Backend: Clone + Send + Sync + 'static {
         now: i64,
     ) -> impl Future<Output = BackendResult<()>> + Send;
 
-    /// レシピの一覧を、作った日時の新しい順に返す。
-    /// `name_pattern` があれば、料理名にその文字列を含むものだけを返す（ASCII の大文字と小文字は区別しない）。
+    /// ワークスペースのレシピをすべて、作った日時の新しい順（同じ日時なら ID の順）に返す。
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
-        name_pattern: Option<&str>,
     ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send;
 
     /// レシピを保存する。
