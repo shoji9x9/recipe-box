@@ -29,7 +29,7 @@
 | テーブル | 内容 |
 | --- | --- |
 | `workspaces` | ワークスペース。最終利用日時と、自動削除の対象から外す印を持つ |
-| `recipes` | レシピ。`workspace_id`、`name`（料理名・必須）、`servings`（何人分・正の整数）、`ingredients`（材料・複数行）、`steps`（手順・複数行） |
+| `recipes` | レシピ。`workspace_id`、`name`（料理名・必須）、`search_name`（検索用。料理名の ASCII の英字だけを小文字にしたもので、アプリが作る）、`servings`（何人分・1〜100 の整数）、`ingredients`（材料・複数行）、`steps`（手順・複数行）、作った日時と最後に変えた日時 |
 | 写真 | レシピの写真。`workspace_id`・`recipe_id`・形式・大きさ・保管先のキーなど（列は実装のときに決める） |
 
 ### API
@@ -47,12 +47,73 @@
 写真の一覧・取得・削除のパスは、実装のときに決める。
 
 失敗したときは、状態コードと次の形の本文を返す。`error` は機械向けのコード、`message` は人向けの説明である。
+入力の項目が正しくないときだけ、どの項目かを `field` で示す。
 
 ```json
-{"error": "workspace_not_found", "message": "ワークスペースが見つかりません"}
+{"error": "invalid_field", "message": "料理名（name）を入力してください", "field": "name"}
 ```
 
-`/api` で始まるが定義されていないパスには `404`（`not_found`）を、パスが受け付けないメソッドには `405`（`method_not_allowed`）を返す。
+| 状態コード | `error` | いつ |
+| --- | --- | --- |
+| `400` | `workspace_id_missing` | `X-Workspace-Id` ヘッダーが無い |
+| `400` | `workspace_id_invalid` | `X-Workspace-Id` の形が正しくないか、2 つ以上ある |
+| `400` | `invalid_body` | 本文が JSON として読めない、項目の型が違う（`servings` が文字列など）、`Content-Type: application/json` が無い。JSON として正しくても、64 ビットの浮動小数点数で表せない大きさの数（`1e400` など）と、対になっていないサロゲートのエスケープ（`"\ud800"` など）も、読めないものとして扱う |
+| `400` | `invalid_field` | 項目の値が正しくない（下の「レシピの項目」） |
+| `404` | `workspace_not_found` | そのワークスペースが無い |
+| `404` | `recipe_not_found` | そのワークスペースに、その ID のレシピが無い（ID の形が正しくないときと、ほかのワークスペースのレシピを含む） |
+| `404` | `not_found` | `/api` で始まるが、定義されていないパス |
+| `405` | `method_not_allowed` | パスが受け付けないメソッド |
+| `413` | `payload_too_large` | 本文が 256 KiB（262,144 バイト）を超える |
+| `429` | `too_many_requests` | ワークスペースを作る回数の制限を超えた |
+| `500` | `internal_error` | サーバーの中の失敗（詳しいことはログにだけ出す） |
+
+#### レシピの API
+
+レシピの API は、どれも `X-Workspace-Id` で指定したワークスペースのレシピだけを扱う。
+
+レシピは次の形の JSON で返す。日時は UNIX 時間のミリ秒である。
+
+```json
+{
+  "id": "0123456789abcdef0123456789abcdef",
+  "name": "カレー",
+  "servings": 4,
+  "ingredients": "玉ねぎ 2 個\nにんじん 1 本",
+  "steps": "切る\n煮る",
+  "created_at": 1794635048685,
+  "updated_at": 1794635048685
+}
+```
+
+| メソッドとパス | 成功したとき |
+| --- | --- |
+| `GET /api/recipes?q=<文字列>&page=<番号>` | `200` と `{"recipes": [<レシピ>, ...], "total": <総数>, "page": <番号>, "per_page": 20}`。作った日時の新しい順（同じ日時なら ID の大きい順）に 1 ページ分を返す |
+| `POST /api/recipes` | `201` と登録したレシピ。`Location` ヘッダーに `/api/recipes/<ID>` |
+| `GET /api/recipes/:id` | `200` とレシピ |
+| `PUT /api/recipes/:id` | `200` と変えた後のレシピ。中身をすべて置き換える（省いた `ingredients`・`steps` は空になる） |
+| `DELETE /api/recipes/:id` | `204`（本文なし） |
+
+失敗の理由が 2 つ以上あるときは、次の順に確かめ、最初に見つかったものを返す。
+ワークスペース（`X-Workspace-Id`）→ パスの ID の形（`recipe_not_found`）→ 本文の読み取り（`invalid_body`・`payload_too_large`）→ 項目の値（`invalid_field`）→ レシピが在るか（`recipe_not_found`）。
+
+レシピの項目（`POST` と `PUT` の本文）は次のとおり。長さは Unicode のコードポイントの数で数える。知らない項目は無視する。
+
+| 項目 | 決まり |
+| --- | --- |
+| `name` | 必須。空白（Unicode の White_Space の文字）だけにはできない。100 文字まで |
+| `servings` | 必須。値が 1 から 100 までの整数の数値。書き方ではなく値で決める（`2.0` や `1e2` は受け付け、`2.5` や桁の大きな数は `invalid_field`） |
+| `ingredients` | 省略できる（省くか `null` なら空）。5,000 文字まで。改行で区切った複数行 |
+| `steps` | 省略できる（省くか `null` なら空）。10,000 文字まで。改行で区切った複数行 |
+
+検索（`q`）は、料理名にその文字列を含むレシピを返す。ASCII の大文字と小文字は区別しない（ASCII 以外の大文字と小文字は区別する）。
+`%`・`_`・`\` も文字そのものとして探す。URL のクエリの決まりどおり、`+` は空白として読む（`+` そのものを探すときは `%2B`）。空なら絞り込まない。100 文字まで。`q` が 2 つ以上あると `400`（`invalid_field`）を返す。
+一覧は 1 ページ 20 件に分ける。`page` はページの番号で、省くと 1 ページ目。数字だけで書いた 1 から 10,000 までの整数を受け付け（`02` は 2 ページ目）、それ以外か `page` が 2 つ以上あると `400`（`invalid_field`）を返す。
+最後のページより後ろの番号では、空の `recipes` と総数を返す。`total` は条件に当てはまるレシピの総数で、画面はこれと `per_page` からページの数を出す。
+`q` と `page` の両方が正しくなければ、`q` のエラーを返す。
+ページ分けは `LIMIT` と `OFFSET` で行い、索引（`workspace_id`・`created_at`・`id`）の順に読む。`total` を数えるため、一覧を読むたびに、条件に当てはまるレシピをすべて数える。
+
+検索には `LIKE` ではなく `instr`（SQLite の関数）を使う。D1 は `LIKE` のパターンを 50 バイトまでに制限していて、日本語の検索の文字列が 16 文字ほどで通らないためである（AGENTS.md の SQL の例外）。
+大文字と小文字は、DB の `LOWER` を使わずにそろえる（`LOWER` は SQLite と PostgreSQL で ASCII 以外の扱いが違うため）。料理名の ASCII の英字だけを小文字にした列（`search_name`）をアプリで作って保存し、検索の文字列にも同じ変換をしてから比べる。
 
 ### ワークスペースによるデータの分離
 
@@ -61,7 +122,7 @@
   Cloudflare の Rate Limiting は拠点ごとにおおよそで数えるので、厳密な上限ではない（複数の拠点を通れば、拠点の数だけ増えうる）。
 - API は `X-Workspace-Id` ヘッダーで、画面は Cookie（HttpOnly・Secure・SameSite=Lax）で ID を受け取る。
   ヘッダーが無ければ `400`（`workspace_id_missing`）、形が正しくないか 2 つ以上あれば `400`（`workspace_id_invalid`）、そのワークスペースが無ければ `404`（`workspace_not_found`）を返す。
-- ワークスペースを使うたびに、最終利用日時を更新する。
+- ワークスペースを使うと、最終利用日時を更新する。ただし、読むだけの API でも DB に書き込むことになるので、前の更新から 1 時間以上たっているときだけ更新する。
 - すべてのクエリを `workspace_id` で絞り込む。ID を知っている人だけが、そのワークスペースのデータを読み書きできる。
 - 最後に使われてから 14 日たったワークスペースは、定期実行（Cron Trigger）で消す。
 
@@ -124,6 +185,7 @@ Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった�
 - [mise](https://mise.jdx.dev/)
 - [GitHub CLI](https://cli.github.com/)（`gh auth login` で認証しておく）
 - Google Chrome（エージェントが chrome-devtools MCP で画面を確かめるときだけ要る）
+- `curl` と `jq`（`mise run smoke` のスモークテストで使う）
 - OS のパッケージの `pkg-config` と OpenSSL の開発用ファイル。worker-build のビルドに要る。
   Ubuntu では `sudo apt-get install -y pkg-config libssl-dev` で入る。
 
@@ -140,10 +202,11 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp を入れ、leftho
 | --- | --- |
 | `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
 | `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
+| `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う |
 | `mise run test` | Rust のテストを実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
-| `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor） |
+| `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck） |
 | `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
 
 commit のときは、lefthook が整形・静的解析・gitleaks・commitlint を実行する。
@@ -154,6 +217,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | --- | --- |
 | `apps/recipe-box-rs/` | リライト前の Rust の Worker |
 | `apps/recipe-box-rs/migrations/` | D1 のマイグレーション（テーブルを作る・変える SQL） |
+| `scripts/smoke-test.sh` | ローカルの Worker に API を呼んで確かめるスクリプト（CI でも使う） |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
 
 ## CI と CD

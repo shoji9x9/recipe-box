@@ -1,7 +1,7 @@
 //! ワークスペース。ログインの代わりに、推測できない ID でデータの持ち主を分ける。
 
 use std::{
-    fmt::{self, Write as _},
+    fmt,
     net::{IpAddr, Ipv6Addr},
 };
 
@@ -12,20 +12,19 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{backend::Backend, error::ApiError};
+use crate::{backend::Backend, error::ApiError, id};
 
 /// API がワークスペースの ID を受け取るヘッダー。
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "ワークスペースを使う API（Issue #4 のレシピの API）で使う"
-    )
-)]
 pub const WORKSPACE_ID_HEADER: &str = "x-workspace-id";
 
 /// ワークスペースを作る人を見分けるのに使うヘッダー。Cloudflare が接続元の IP アドレスを入れる。
 const CLIENT_IP_HEADER: &str = "cf-connecting-ip";
+
+/// 最終利用日時を書き換える間隔（1 時間）。
+///
+/// 使うたびに書き換えると、読むだけの API でも毎回 DB に書き込むことになる。
+/// 自動削除は 14 日使われていないかで決めるので、1 時間の粗さで足りる。
+pub const LAST_USED_UPDATE_INTERVAL_MILLIS: i64 = 60 * 60 * 1000;
 
 /// ワークスペースの ID。128 ビットの乱数を、16 進数の小文字 32 文字で表したもの。
 ///
@@ -35,26 +34,14 @@ const CLIENT_IP_HEADER: &str = "cf-connecting-ip";
 pub struct WorkspaceId(String);
 
 impl WorkspaceId {
-    /// ID の文字数。
-    const LEN: usize = 32;
-
     /// 16 バイトの乱数から ID を作る。
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
-        let mut text = String::with_capacity(Self::LEN);
-        for byte in bytes {
-            // String への書き込みは失敗しないので、結果は捨てる。
-            let _ = write!(text, "{byte:02x}");
-        }
-        Self(text)
+        Self(id::hex_from_bytes(bytes))
     }
 
-    /// 文字列が ID の形をしていれば、ID にする。大文字の 16 進数は受け付けない。
+    /// 文字列が ID の形をしていれば、ID にする。
     pub fn parse(value: &str) -> Option<Self> {
-        let valid = value.len() == Self::LEN
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-        valid.then(|| Self(value.to_owned()))
+        id::is_valid(value).then(|| Self(value.to_owned()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -73,13 +60,6 @@ impl fmt::Display for WorkspaceId {
 /// ハンドラーの引数に書くと、`X-Workspace-Id` ヘッダーを調べ、
 /// ワークスペースが在れば最終利用日時を更新したうえで、その ID を渡す。
 /// 無い・形が正しくない・見つからないときは、ハンドラーを呼ばずにエラーを返す。
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "ワークスペースを使う API（Issue #4 のレシピの API）で使う"
-    )
-)]
 #[derive(Debug)]
 pub struct Workspace {
     pub id: WorkspaceId,
@@ -101,12 +81,16 @@ impl<B: Backend> FromRequestParts<B> for Workspace {
             .ok()
             .and_then(WorkspaceId::parse)
             .ok_or(ApiError::WorkspaceIdInvalid)?;
-        // 在るかどうかの確認と、最終利用日時の更新を 1 回のクエリで済ませる。
-        if backend.touch_workspace(&id, backend.now_millis()).await? {
-            Ok(Self { id })
-        } else {
-            Err(ApiError::WorkspaceNotFound)
+        let last_used_at = backend
+            .workspace_last_used_at(&id)
+            .await?
+            .ok_or(ApiError::WorkspaceNotFound)?;
+        // 前に書き換えてから 1 時間以上たっていたときだけ、最終利用日時を書き換える。
+        let now = backend.now_millis();
+        if now - last_used_at >= LAST_USED_UPDATE_INTERVAL_MILLIS {
+            backend.set_workspace_last_used_at(&id, now).await?;
         }
+        Ok(Self { id })
     }
 }
 
@@ -163,7 +147,7 @@ fn rate_limit_key(headers: &HeaderMap) -> String {
 mod tests {
     use axum::http::HeaderMap;
 
-    use super::{WorkspaceId, rate_limit_key};
+    use super::rate_limit_key;
 
     fn key_for(value: Option<&str>) -> String {
         let mut headers = HeaderMap::new();
@@ -195,34 +179,5 @@ mod tests {
         assert_eq!(key_for(None), "unknown");
         assert_eq!(key_for(Some("not-an-ip")), "unknown");
         assert_eq!(key_for(Some(&"1".repeat(1000))), "unknown");
-    }
-
-    #[test]
-    fn from_bytes_makes_lowercase_hex() {
-        let id = WorkspaceId::from_bytes([
-            0x00, 0x01, 0x0a, 0xff, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
-            0xb0, 0xc0,
-        ]);
-        assert_eq!(id.as_str(), "00010aff102030405060708090a0b0c0");
-    }
-
-    #[test]
-    fn parse_accepts_valid_id() {
-        let text = "0123456789abcdef0123456789abcdef";
-        assert_eq!(WorkspaceId::parse(text).unwrap().as_str(), text);
-    }
-
-    #[test]
-    fn parse_rejects_wrong_length_or_characters() {
-        for text in [
-            "",
-            "0123456789abcdef0123456789abcde",   // 31 文字
-            "0123456789abcdef0123456789abcdef0", // 33 文字
-            "0123456789ABCDEF0123456789ABCDEF",  // 大文字
-            "0123456789abcdef0123456789abcdeg",  // 16 進数でない文字
-            "0123456789abcdef-123456789abcdef",
-        ] {
-            assert_eq!(WorkspaceId::parse(text), None, "{text:?}");
-        }
     }
 }

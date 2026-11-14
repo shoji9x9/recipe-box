@@ -98,39 +98,20 @@ jobs:
         run: mise run build
       - name: Apply migrations to local D1
         run: mise run migrate
-      # ローカルで Worker を起動し、/api/health の本文と / の HTML、ワークスペースの作成を確かめる。
+      # ローカルで Worker を起動し、実際の D1 を通して API を確かめる（scripts/smoke-test.sh）。
       - name: Smoke test
         working-directory: apps/recipe-box-rs
         run: |
           pnpm exec wrangler dev --port 8787 >/tmp/wrangler.log 2>&1 &
           trap 'kill %1 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
-            if curl -fsS http://localhost:8787/api/health >/tmp/health.json 2>/dev/null; then
+            if curl -fsS http://localhost:8787/api/health >/dev/null 2>&1; then
               break
             fi
             sleep 2
           done
-          if ! grep -qx '{"status":"ok"}' /tmp/health.json 2>/dev/null; then
-            echo "::error::/api/health が期待した本文を返さない"
-            cat /tmp/wrangler.log
-            exit 1
-          fi
-          if ! curl -fsS http://localhost:8787/ | grep -q '<h1>recipe-box</h1>'; then
-            echo "::error::/ が期待した HTML を返さない"
-            cat /tmp/wrangler.log
-            exit 1
-          fi
-          if ! curl -fsS -X POST http://localhost:8787/api/workspaces | grep -Eqx '\{"id":"[0-9a-f]{32}"\}'; then
-            echo "::error::POST /api/workspaces がワークスペースの ID を返さない"
-            cat /tmp/wrangler.log
-            exit 1
-          fi
-          # 回数の制限（60 秒に 10 回）を超えると 429 になる。上で 1 回作ったので、あと 10 回のうち最後が 429 になる。
-          for _ in $(seq 1 10); do
-            status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:8787/api/workspaces)
-          done
-          if [ "$status" != "429" ]; then
-            echo "::error::回数の制限を超えても POST /api/workspaces が 429 を返さない（$status）"
+          if ! CHECK_RATE_LIMIT=1 ../../scripts/smoke-test.sh http://localhost:8787; then
+            echo "--- wrangler のログ ---"
             cat /tmp/wrangler.log
             exit 1
           fi
