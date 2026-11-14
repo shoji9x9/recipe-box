@@ -169,3 +169,7 @@ GitHub の Settings → Environments に、次の値を置く。
 | `claude-review` | secret | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` で作る |
 
 値が無い間、`deploy.yml` は何もせずに終わり、`claude-review.yml` は失敗する。
+
+## ライセンス
+
+[MIT License](LICENSE)
