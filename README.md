@@ -29,7 +29,7 @@
 | テーブル | 内容 |
 | --- | --- |
 | `workspaces` | ワークスペース。最終利用日時と、自動削除の対象から外す印を持つ |
-| `recipes` | レシピ。`workspace_id`、`name`（料理名・必須）、`servings`（何人分・1〜100 の整数）、`ingredients`（材料・複数行）、`steps`（手順・複数行）、作った日時と最後に変えた日時 |
+| `recipes` | レシピ。`workspace_id`、`name`（料理名・必須）、`search_name`（検索用。料理名の ASCII の英字だけを小文字にしたもので、アプリが作る）、`servings`（何人分・1〜100 の整数）、`ingredients`（材料・複数行）、`steps`（手順・複数行）、作った日時と最後に変えた日時 |
 | 写真 | レシピの写真。`workspace_id`・`recipe_id`・形式・大きさ・保管先のキーなど（列は実装のときに決める） |
 
 ### API

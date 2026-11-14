@@ -112,7 +112,8 @@ echo "ページ分け"
 for n in $(seq 1 21); do
   request POST /api/recipes "$workspace_b" "{\"name\":\"料理 $n\",\"servings\":1}"
   expect 201 "POST /api/recipes（料理 $n）"
-  sleep 0.002
+  # 並びを確かめるため、作った日時が同じミリ秒にならないよう少し待つ。
+  sleep 0.01
 done
 request GET /api/recipes "$workspace_b"
 expect 200 "GET /api/recipes（1 ページ目）"
