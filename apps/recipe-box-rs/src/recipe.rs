@@ -21,7 +21,7 @@ use crate::{backend::Backend, error::ApiError, id, workspace::Workspace};
 /// 料理名の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_NAME_CHARS: usize = 100;
 /// 何人分かの範囲。
-pub const SERVINGS_RANGE: std::ops::RangeInclusive<i64> = 1..=100;
+pub const SERVINGS_RANGE: std::ops::RangeInclusive<f64> = 1.0..=100.0;
 /// 材料の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_INGREDIENTS_CHARS: usize = 5_000;
 /// 手順の長さの上限（Unicode のコードポイントの数）。
@@ -32,7 +32,7 @@ pub const MAX_QUERY_CHARS: usize = 100;
 ///
 /// 上の上限いっぱいの JSON が収まる大きさにする。最も大きくなるのは、すべての文字を
 /// `\uXXXX` のエスケープの組（絵文字なら 1 文字 12 バイト）で送ったときで、
-/// 15,200 文字 × 12 バイト = 182,400 バイトに項目名などを足しても 256 KiB に収まる。
+/// 15,100 文字 × 12 バイト = 181,200 バイトに項目名などを足しても 256 KiB に収まる。
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// レシピの ID。ワークスペースの ID と同じ形（16 進数の小文字 32 文字）。
@@ -100,10 +100,14 @@ pub struct RecipeFields {
 ///
 /// 項目が無いときに「どの項目が無いか」を返せるよう、すべて `Option` で受け取り、[`validate`] で確かめる。
 /// 型が違う（`servings` が文字列など）ときは、ここで読めずに `invalid_body` になる。
+///
+/// `servings` は JSON の数値ならどれでも受け取り（`2.0`・`1e2`・桁の大きな整数も）、[`validate`] で
+/// 「値が 1 から 100 までの整数か」を確かめる。JavaScript の `JSON.parse` は `2` と `2.0` を区別できないので、
+/// 書き方ではなく値で決めると、リライトの後（`Number.isInteger`）と結果がそろう。
 #[derive(Debug, Deserialize)]
 pub struct RecipeInput {
     name: Option<String>,
-    servings: Option<i64>,
+    servings: Option<f64>,
     ingredients: Option<String>,
     steps: Option<String>,
 }
@@ -118,6 +122,8 @@ pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
     let name = input
         .name
         .ok_or(invalid("name", "料理名（name）は必須です"))?;
+    // trim は Unicode の White_Space の文字を空白とみなす。
+    // JavaScript の trim は U+FEFF なども空白とみなすので、リライトの後は /^\p{White_Space}*$/u で同じ判定をする。
     if name.trim().is_empty() {
         return Err(invalid("name", "料理名（name）を入力してください"));
     }
@@ -128,12 +134,10 @@ pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
     let servings = input
         .servings
         .ok_or(invalid("servings", "何人分か（servings）は必須です"))?;
-    if !SERVINGS_RANGE.contains(&servings) {
-        return Err(invalid(
-            "servings",
-            "何人分か（servings）は 1 から 100 までの整数です",
-        ));
-    }
+    let servings = servings_to_int(servings).ok_or(invalid(
+        "servings",
+        "何人分か（servings）は 1 から 100 までの整数です",
+    ))?;
 
     // 材料と手順は省いてよい。省いたら空にする。
     let ingredients = input.ingredients.unwrap_or_default();
@@ -154,6 +158,16 @@ pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
         ingredients,
         steps,
     })
+}
+
+/// 何人分かの値が 1 から 100 までの整数なら、整数にして返す。
+fn servings_to_int(value: f64) -> Option<i64> {
+    if value.fract() != 0.0 || !SERVINGS_RANGE.contains(&value) {
+        return None;
+    }
+    // 範囲と小数部を確かめた後なので、整数への変換で値は変わらない。
+    #[allow(clippy::cast_possible_truncation)]
+    Some(value as i64)
 }
 
 /// 本文の読み取りの失敗を、API のエラーにする。大きすぎるときだけ 413 にする。
@@ -297,7 +311,7 @@ mod tests {
     use super::{RecipeInput, validate};
     use crate::error::ApiError;
 
-    fn input(name: Option<&str>, servings: Option<i64>) -> RecipeInput {
+    fn input(name: Option<&str>, servings: Option<f64>) -> RecipeInput {
         RecipeInput {
             name: name.map(str::to_owned),
             servings,
@@ -315,13 +329,13 @@ mod tests {
 
     #[test]
     fn validate_accepts_minimum_and_maximum() {
-        let fields = validate(input(Some("カレー"), Some(1))).unwrap();
+        let fields = validate(input(Some("カレー"), Some(1.0))).unwrap();
         assert_eq!(fields.ingredients, "");
         assert_eq!(fields.steps, "");
-        validate(input(Some(&"あ".repeat(100)), Some(100))).unwrap();
+        validate(input(Some(&"あ".repeat(100)), Some(100.0))).unwrap();
         validate(RecipeInput {
             name: Some("カレー".into()),
-            servings: Some(2),
+            servings: Some(2.0),
             ingredients: Some("🍛".repeat(5_000)),
             steps: Some("手".repeat(10_000)),
         })
@@ -330,10 +344,10 @@ mod tests {
 
     #[test]
     fn validate_rejects_missing_or_blank_name() {
-        assert_eq!(field_of(validate(input(None, Some(2)))), "name");
-        assert_eq!(field_of(validate(input(Some(""), Some(2)))), "name");
+        assert_eq!(field_of(validate(input(None, Some(2.0)))), "name");
+        assert_eq!(field_of(validate(input(Some(""), Some(2.0)))), "name");
         assert_eq!(
-            field_of(validate(input(Some(" \n\u{3000}"), Some(2)))),
+            field_of(validate(input(Some(" \n\u{3000}"), Some(2.0)))),
             "name"
         );
     }
@@ -342,12 +356,20 @@ mod tests {
     fn validate_rejects_too_long_name() {
         // 101 文字。絵文字も 1 文字と数える。
         let name = format!("{}🍛", "あ".repeat(100));
-        assert_eq!(field_of(validate(input(Some(&name), Some(2)))), "name");
+        assert_eq!(field_of(validate(input(Some(&name), Some(2.0)))), "name");
     }
 
     #[test]
     fn validate_rejects_servings_out_of_range() {
-        for servings in [None, Some(0), Some(-1), Some(101), Some(i64::MAX)] {
+        for servings in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(101.0),
+            Some(2.5),
+            Some(1e20),
+            Some(f64::MAX),
+        ] {
             assert_eq!(
                 field_of(validate(input(Some("カレー"), servings))),
                 "servings",
@@ -358,11 +380,11 @@ mod tests {
 
     #[test]
     fn validate_rejects_too_long_ingredients_and_steps() {
-        let mut long_ingredients = input(Some("カレー"), Some(2));
+        let mut long_ingredients = input(Some("カレー"), Some(2.0));
         long_ingredients.ingredients = Some("a".repeat(5_001));
         assert_eq!(field_of(validate(long_ingredients)), "ingredients");
 
-        let mut long_steps = input(Some("カレー"), Some(2));
+        let mut long_steps = input(Some("カレー"), Some(2.0));
         long_steps.steps = Some("a".repeat(10_001));
         assert_eq!(field_of(validate(long_steps)), "steps");
     }

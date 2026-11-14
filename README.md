@@ -57,7 +57,7 @@
 | --- | --- | --- |
 | `400` | `workspace_id_missing` | `X-Workspace-Id` ヘッダーが無い |
 | `400` | `workspace_id_invalid` | `X-Workspace-Id` の形が正しくないか、2 つ以上ある |
-| `400` | `invalid_body` | 本文が JSON として読めない、項目の型が違う（`servings` が文字列や小数など）、`Content-Type: application/json` が無い |
+| `400` | `invalid_body` | 本文が JSON として読めない、項目の型が違う（`servings` が文字列など）、`Content-Type: application/json` が無い |
 | `400` | `invalid_field` | 項目の値が正しくない（下の「レシピの項目」） |
 | `404` | `workspace_not_found` | そのワークスペースが無い |
 | `404` | `recipe_not_found` | そのワークスペースに、その ID のレシピが無い（ID の形が正しくないときと、ほかのワークスペースのレシピを含む） |
@@ -97,8 +97,8 @@
 
 | 項目 | 決まり |
 | --- | --- |
-| `name` | 必須。空白だけにはできない。100 文字まで |
-| `servings` | 必須。1 から 100 までの整数 |
+| `name` | 必須。空白（Unicode の White_Space の文字）だけにはできない。100 文字まで |
+| `servings` | 必須。値が 1 から 100 までの整数の数値。書き方ではなく値で決める（`2.0` や `1e2` は受け付け、`2.5` や桁の大きな数は `invalid_field`） |
 | `ingredients` | 省略できる（省くか `null` なら空）。5,000 文字まで。改行で区切った複数行 |
 | `steps` | 省略できる（省くか `null` なら空）。10,000 文字まで。改行で区切った複数行 |
 

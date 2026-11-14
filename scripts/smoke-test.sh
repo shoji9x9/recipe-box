@@ -79,7 +79,7 @@ expect 200 "GET /api/recipes?q=CURRY"
 request GET '/api/recipes?q=%25' "$workspace_a"
 expect 200 "GET /api/recipes?q=%"
 [ "$(json '[.recipes[].name] | join(",")')" = "100% Juice" ] || fail "% を文字として検索しない"
-# _ と \ も、LIKE の特別な文字ではなく文字そのものとして探す（ESCAPE の書き方を実際の D1 で確かめる）。
+# _ と \ を含む料理名も、文字そのものとして探せる（D1 から読んだ結果をアプリで絞り込む）。
 request POST /api/recipes "$workspace_a" '{"name":"A_B","servings":1}'
 expect 201 "POST /api/recipes（A_B）"
 request POST /api/recipes "$workspace_a" '{"name":"AxB","servings":1}'
@@ -114,6 +114,15 @@ expect 400 "空の料理名"
 [ "$(json .field)" = name ] || fail "空の料理名のエラーの項目が name でない"
 request POST /api/recipes "$workspace_a" '{"name":"カレー","servings":0}'
 expect 400 "servings が 0"
+# servings は書き方ではなく値で決める（2.0 は 2 として受け付け、桁あふれは invalid_field）。
+request POST /api/recipes "$workspace_a" '{"name":"小数の書き方","servings":2.0}'
+expect 201 "servings が 2.0"
+[ "$(json .servings)" = 2 ] || fail "servings の 2.0 が 2 にならない"
+request DELETE "/api/recipes/$(json .id)" "$workspace_a"
+expect 204 "servings が 2.0 のレシピを消す"
+request POST /api/recipes "$workspace_a" '{"name":"カレー","servings":99999999999999999999}'
+expect 400 "servings が桁あふれ"
+[ "$(json .field)" = servings ] || fail "桁あふれのエラーの項目が servings でない"
 
 echo "ほかのワークスペースからは見えない"
 request GET /api/recipes "$workspace_b"

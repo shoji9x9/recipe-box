@@ -137,6 +137,43 @@ async fn create_rejects_invalid_fields() {
     assert!(backend.recipes.lock().unwrap().is_empty());
 }
 
+/// `servings` を `raw`（JSON の数値の書き方そのもの）にして登録する。
+async fn create_with_raw_servings(backend: &FakeBackend, raw: &str) -> super::TestResponse {
+    let body = format!(r#"{{"name":"カレー","servings":{raw}}}"#);
+    let request = Request::post("/api/recipes")
+        .header("x-workspace-id", WORKSPACE_A)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    send(router(backend.clone()), request).await
+}
+
+#[tokio::test]
+async fn servings_is_judged_by_value() {
+    let backend = backend_with_workspaces();
+    // 値が整数なら、書き方（2.0・1e2）に関わらず受け付ける。
+    for (raw, expected) in [("2.0", 2), ("1e2", 100), ("1", 1)] {
+        let response = create_with_raw_servings(&backend, raw).await;
+        assert_eq!(
+            response.status,
+            StatusCode::CREATED,
+            "{raw}: {}",
+            response.body
+        );
+        assert_eq!(response.json()["servings"], expected, "{raw}");
+    }
+    // 整数でないか範囲の外なら invalid_field。i64 に収まらない数も同じ。
+    for raw in ["2.5", "101", "1e3", "99999999999999999999", "-0.5"] {
+        let response = create_with_raw_servings(&backend, raw).await;
+        assert_error(
+            &response,
+            StatusCode::BAD_REQUEST,
+            "invalid_field",
+            Some("servings"),
+        );
+    }
+}
+
 #[tokio::test]
 async fn create_rejects_unreadable_body() {
     let backend = backend_with_workspaces();
@@ -146,11 +183,6 @@ async fn create_rejects_unreadable_body() {
         (
             "servings が文字列",
             r#"{"name":"カレー","servings":"2"}"#,
-            true,
-        ),
-        (
-            "servings が小数",
-            r#"{"name":"カレー","servings":2.5}"#,
             true,
         ),
         ("name が数値", r#"{"name":1,"servings":2}"#, true),
