@@ -334,7 +334,161 @@ async fn list_returns_newest_first() {
     )
     .await;
     assert_eq!(response.status, StatusCode::OK);
-    assert_eq!(response.json(), json!({"recipes": [second, first]}));
+    assert_eq!(
+        response.json(),
+        json!({"recipes": [second, first], "total": 2, "page": 1, "per_page": 20})
+    );
+}
+
+/// `GET <path>` の応答の本文を返す（200 であることも確かめる）。
+async fn list_page(backend: &FakeBackend, path: &str) -> Value {
+    let response = call(backend, Method::GET, path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    response.json()
+}
+
+/// 一覧の本文から、レシピの料理名を並び順のまま取り出す。
+fn names_of(body: &Value) -> Vec<String> {
+    body["recipes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|recipe| recipe["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn list_is_split_into_pages() {
+    let backend = backend_with_workspaces();
+    // 新しい順に「料理 25」から「料理 1」まで並ぶよう、1 ミリ秒ずつずらして 25 件作る。
+    for n in 1..=25 {
+        create(
+            &backend,
+            WORKSPACE_A,
+            &json!({"name": format!("料理 {n}"), "servings": 1}),
+        )
+        .await;
+        backend.advance(1);
+    }
+
+    // page を省くと 1 ページ目。1 ページは 20 件。
+    let first = list_page(&backend, "/api/recipes").await;
+    assert_eq!(first["total"], 25);
+    assert_eq!(first["page"], 1);
+    assert_eq!(first["per_page"], 20);
+    let expected: Vec<String> = (6..=25).rev().map(|n| format!("料理 {n}")).collect();
+    assert_eq!(names_of(&first), expected);
+    assert_eq!(list_page(&backend, "/api/recipes?page=1").await, first);
+
+    // 2 ページ目に残りの 5 件。値で読むので 02 も 2 ページ目。
+    let second = list_page(&backend, "/api/recipes?page=2").await;
+    assert_eq!(second["page"], 2);
+    assert_eq!(second["total"], 25);
+    let expected: Vec<String> = (1..=5).rev().map(|n| format!("料理 {n}")).collect();
+    assert_eq!(names_of(&second), expected);
+    assert_eq!(list_page(&backend, "/api/recipes?page=02").await, second);
+
+    // 最後のページより後ろは、空の一覧（総数はそのまま）。上限の番号も受け付ける。
+    for path in ["/api/recipes?page=3", "/api/recipes?page=10000"] {
+        let body = list_page(&backend, path).await;
+        assert_eq!(names_of(&body), Vec::<String>::new());
+        assert_eq!(body["total"], 25);
+    }
+}
+
+#[tokio::test]
+async fn list_pages_search_results() {
+    let backend = backend_with_workspaces();
+    for n in 1..=22 {
+        create(
+            &backend,
+            WORKSPACE_A,
+            &json!({"name": format!("Curry {n}"), "servings": 1}),
+        )
+        .await;
+        backend.advance(1);
+    }
+    create(
+        &backend,
+        WORKSPACE_A,
+        &json!({"name": "シチュー", "servings": 1}),
+    )
+    .await;
+
+    // 総数は検索に当てはまるレシピだけを数える。
+    let body = list_page(&backend, "/api/recipes?q=curry&page=2").await;
+    assert_eq!(body["total"], 22);
+    assert_eq!(names_of(&body), ["Curry 2", "Curry 1"]);
+}
+
+#[tokio::test]
+async fn list_orders_same_time_by_id_descending() {
+    let backend = backend_with_workspaces();
+    // 時計を進めずに作るので、作った日時が同じになる。
+    let mut ids: Vec<String> = Vec::new();
+    for _ in 0..3 {
+        let recipe = create(&backend, WORKSPACE_A, &curry()).await;
+        ids.push(recipe["id"].as_str().unwrap().to_owned());
+    }
+    ids.sort();
+    ids.reverse();
+    let body = list_page(&backend, "/api/recipes").await;
+    let listed: Vec<&str> = body["recipes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|recipe| recipe["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed, ids);
+}
+
+#[tokio::test]
+async fn list_rejects_invalid_page() {
+    let backend = backend_with_workspaces();
+    for page in [
+        "0",
+        "-1",
+        "%2B1",
+        "1.0",
+        "1e1",
+        "abc",
+        "",
+        "10001",
+        "99999999999999999999",
+    ] {
+        let path = format!("/api/recipes?page={page}");
+        let response = call(&backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
+        assert_error(
+            &response,
+            StatusCode::BAD_REQUEST,
+            "invalid_field",
+            Some("page"),
+        );
+    }
+    // page が 2 つあると、どちらのページか決められないので受け付けない。
+    let response = call(
+        &backend,
+        Method::GET,
+        "/api/recipes?page=1&page=2",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_error(
+        &response,
+        StatusCode::BAD_REQUEST,
+        "invalid_field",
+        Some("page"),
+    );
+    // q と page の両方が正しくなければ、q のエラーを先に返す。
+    let path = format!("/api/recipes?q={}&page=0", "a".repeat(101));
+    let response = call(&backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
+    assert_error(
+        &response,
+        StatusCode::BAD_REQUEST,
+        "invalid_field",
+        Some("q"),
+    );
 }
 
 /// `GET /api/recipes?q=<q>`（q はパーセントエンコーディングにする）の結果の料理名を返す。
@@ -611,7 +765,10 @@ async fn other_workspace_cannot_read_or_change_recipe() {
         None,
     )
     .await;
-    assert_eq!(response.json(), json!({"recipes": []}));
+    assert_eq!(
+        response.json(),
+        json!({"recipes": [], "total": 0, "page": 1, "per_page": 20})
+    );
 
     // B からは、ID を知っていても読めず、書き換えられず、消せない。
     let other = json!({"name": "乗っ取り", "servings": 1});

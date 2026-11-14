@@ -28,6 +28,13 @@ pub const MAX_INGREDIENTS_CHARS: usize = 5_000;
 pub const MAX_STEPS_CHARS: usize = 10_000;
 /// 検索の文字列の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_QUERY_CHARS: usize = 100;
+/// 一覧の 1 ページのレシピの数。
+pub const PAGE_SIZE: i64 = 20;
+/// 一覧のページの番号の上限。
+///
+/// OFFSET で飛ばす行も D1 は読むので、大きすぎる番号を受け付けない。
+/// 1 ワークスペースのレシピの数の上限（#15）を決めたら、それに合わせて下げる。
+pub const MAX_PAGE: i64 = 10_000;
 /// リクエストの本文の大きさの上限（バイト）。
 ///
 /// 上の上限いっぱいの JSON が収まる大きさにする。最も大きくなるのは、すべての文字を
@@ -183,44 +190,90 @@ fn parse_recipe_id(path: Result<Path<String>, PathRejection>) -> Result<RecipeId
     RecipeId::parse(&value).ok_or(ApiError::RecipeNotFound)
 }
 
-/// `GET /api/recipes` のクエリ。
-#[derive(Debug, Deserialize)]
-pub struct ListQuery {
-    /// 料理名に含む文字列。空なら絞り込まない。
-    q: Option<String>,
-}
-
 /// `GET /api/recipes` の応答の本文。
 #[derive(Debug, Serialize)]
 pub struct RecipeList {
     recipes: Vec<Recipe>,
+    /// 条件に当てはまるレシピの総数（すべてのページの合計）。
+    total: i64,
+    /// このページの番号（1 から数える）。
+    page: i64,
+    /// 1 ページのレシピの数。
+    per_page: i64,
 }
 
-/// `GET /api/recipes?q=<文字列>`: レシピの一覧を、作った日時の新しい順に返す。
+/// クエリから、名前が `key` の値を取り出す。無ければ `None`、2 つ以上あれば `Err`。
+fn single_param<'a>(params: &'a [(String, String)], key: &str) -> Result<Option<&'a str>, ()> {
+    let mut values = params
+        .iter()
+        .filter(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str());
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(());
+    }
+    Ok(first)
+}
+
+/// ページの番号を読む。省くと 1 ページ目。数字だけで書いた 1 から [`MAX_PAGE`] までの整数を受け付ける。
+fn parse_page(value: Option<&str>) -> Option<i64> {
+    let Some(value) = value else {
+        return Some(1);
+    };
+    // i64::from_str は先頭の + を受け付けるので、数字だけかを先に確かめる。
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|page| (1..=MAX_PAGE).contains(page))
+}
+
+/// `GET /api/recipes?q=<文字列>&page=<番号>`: レシピの一覧を、作った日時の新しい順に 1 ページ分返す。
 pub async fn list<B: Backend>(
     State(backend): State<B>,
     workspace: Workspace,
-    query: Result<Query<ListQuery>, QueryRejection>,
+    params: Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Json<RecipeList>, ApiError> {
-    let Query(query) = query.map_err(|_| ApiError::InvalidField {
+    let invalid_q = || ApiError::InvalidField {
         field: "q",
         message: "検索の条件（q）が正しくありません",
-    })?;
-    let pattern = query.q.filter(|q| !q.is_empty());
-    if pattern
-        .as_ref()
-        .is_some_and(|q| q.chars().count() > MAX_QUERY_CHARS)
-    {
+    };
+    // 名前と値の組の並びとしてはどんなクエリでも読めるので、ここで失敗することは無いはずだが、
+    // axum の既定のエラー（JSON でない本文）を返さないよう、q のエラーにする。
+    let Query(params) = params.map_err(|_| invalid_q())?;
+    let pattern = single_param(&params, "q")
+        .map_err(|()| invalid_q())?
+        .filter(|q| !q.is_empty());
+    if pattern.is_some_and(|q| q.chars().count() > MAX_QUERY_CHARS) {
         return Err(ApiError::InvalidField {
             field: "q",
             message: "検索の条件（q）は 100 文字までです",
         });
     }
-    let query = pattern.as_deref().map(search_name);
-    let recipes = backend
-        .list_recipes(&workspace.id, query.as_deref())
+    let page = single_param(&params, "page")
+        .ok()
+        .and_then(parse_page)
+        .ok_or(ApiError::InvalidField {
+            field: "page",
+            message: "ページ（page）は 1 から 10000 までの整数です",
+        })?;
+    let query = pattern.map(search_name);
+    let result = backend
+        .list_recipes(
+            &workspace.id,
+            query.as_deref(),
+            PAGE_SIZE,
+            (page - 1) * PAGE_SIZE,
+        )
         .await?;
-    Ok(Json(RecipeList { recipes }))
+    Ok(Json(RecipeList {
+        recipes: result.recipes,
+        total: result.total,
+        page,
+        per_page: PAGE_SIZE,
+    }))
 }
 
 /// `POST /api/recipes`: レシピを登録し、`201` と登録したレシピを返す。

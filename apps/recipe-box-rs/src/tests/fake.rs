@@ -13,7 +13,7 @@ use std::{
 };
 
 use crate::{
-    backend::{Backend, BackendError, BackendResult},
+    backend::{Backend, BackendError, BackendResult, RecipePage},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -148,7 +148,9 @@ impl Backend for FakeBackend {
         &self,
         workspace: &WorkspaceId,
         query: Option<&str>,
-    ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send {
+        limit: i64,
+        offset: i64,
+    ) -> impl Future<Output = BackendResult<RecipePage>> + Send {
         ready(self.check().map(|()| {
             // 本物の `instr(search_name, ?) > 0` と同じく、検索に使う形の料理名が query を含むかで絞る。
             let mut recipes: Vec<Recipe> = self
@@ -160,8 +162,14 @@ impl Backend for FakeBackend {
                 .map(|(_, recipe)| recipe.clone())
                 .filter(|recipe| query.is_none_or(|q| search_name(&recipe.name).contains(q)))
                 .collect();
-            recipes.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
-            recipes
+            recipes.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
+            let total = i64::try_from(recipes.len()).unwrap();
+            let recipes = recipes
+                .into_iter()
+                .skip(usize::try_from(offset).unwrap())
+                .take(usize::try_from(limit).unwrap())
+                .collect();
+            RecipePage { recipes, total }
         }))
     }
 

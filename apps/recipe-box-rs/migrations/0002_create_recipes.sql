@@ -21,3 +21,7 @@ CREATE TABLE recipes (
     updated_at BIGINT NOT NULL,
     PRIMARY KEY (workspace_id, id)
 );
+
+-- 一覧（作った日時の新しい順、同じ日時なら ID の大きい順）を、並べ替えずに索引の順で読むための索引。
+-- ページ分けの LIMIT で、D1 が読む行をそのページまでに抑える。
+CREATE INDEX recipes_by_created_at ON recipes (workspace_id, created_at, id);

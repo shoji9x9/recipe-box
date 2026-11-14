@@ -107,6 +107,28 @@ request GET "/api/recipes?q=$(jq -rn --arg q "$long_name" '$q | @uri')" "$worksp
 expect 200 "GET /api/recipes?q=<100 文字の日本語>"
 [ "$(json '.recipes | length')" = 1 ] || fail "100 文字の日本語で検索できない"
 
+echo "ページ分け"
+# 別のワークスペースに 21 件作り、1 ページ（20 件）に収まらない分が 2 ページ目に出るかを確かめる。
+for n in $(seq 1 21); do
+  request POST /api/recipes "$workspace_b" "{\"name\":\"料理 $n\",\"servings\":1}"
+  expect 201 "POST /api/recipes（料理 $n）"
+  sleep 0.002
+done
+request GET /api/recipes "$workspace_b"
+expect 200 "GET /api/recipes（1 ページ目）"
+[ "$(json '.recipes | length')" = 20 ] || fail "1 ページ目が 20 件でない"
+[ "$(json .total)" = 21 ] || fail "総数が 21 でない"
+[ "$(json '.recipes[0].name')" = "料理 21" ] || fail "1 ページ目が新しい順でない"
+request GET '/api/recipes?page=2' "$workspace_b"
+expect 200 "GET /api/recipes?page=2"
+[ "$(json '[.recipes[].name] | join(",")')" = "料理 1" ] || fail "2 ページ目が最も古い 1 件でない"
+request GET '/api/recipes?q=%E6%96%99%E7%90%86%201&page=1' "$workspace_b"
+expect 200 "GET /api/recipes?q=料理 1"
+[ "$(json .total)" = 11 ] || fail "検索の総数が 11（料理 1・10〜19）でない"
+request GET '/api/recipes?page=0' "$workspace_b"
+expect 400 "page が 0"
+[ "$(json .field)" = page ] || fail "page が 0 のエラーの項目が page でない"
+
 echo "取得・更新"
 request GET "/api/recipes/$recipe_id" "$workspace_a"
 expect 200 "GET /api/recipes/{id}"
@@ -132,9 +154,9 @@ expect 400 "servings が桁あふれ"
 [ "$(json .field)" = servings ] || fail "桁あふれのエラーの項目が servings でない"
 
 echo "ほかのワークスペースからは見えない"
-request GET /api/recipes "$workspace_b"
-expect 200 "GET /api/recipes（B）"
-[ "$(json '.recipes | length')" = 0 ] || fail "B の一覧に A のレシピが出る"
+request GET '/api/recipes?q=%E8%BE%9B%E5%8F%A3' "$workspace_b"
+expect 200 "GET /api/recipes?q=辛口（B）"
+[ "$(json .total)" = 0 ] || fail "B の一覧に A のレシピが出る"
 for method in GET PUT DELETE; do
   request "$method" "/api/recipes/$recipe_id" "$workspace_b" '{"name":"乗っ取り","servings":1}'
   expect 404 "$method /api/recipes/{id}（B から）"

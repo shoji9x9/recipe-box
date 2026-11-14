@@ -15,7 +15,7 @@ use worker::{
 };
 
 use crate::{
-    backend::{Backend, BackendError, BackendResult},
+    backend::{Backend, BackendError, BackendResult, RecipePage},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -59,6 +59,12 @@ fn backend_error(action: &str, error: &worker::Error) -> BackendError {
 #[allow(clippy::cast_precision_loss)]
 fn int_to_js(value: i64) -> JsValue {
     JsValue::from_f64(value as f64)
+}
+
+/// `SELECT COUNT(*) AS total` の行。
+#[derive(serde::Deserialize)]
+struct Total {
+    total: i64,
 }
 
 /// D1 のデータベースを取る。
@@ -184,48 +190,60 @@ impl Backend for CloudflareBackend {
         &self,
         workspace: &WorkspaceId,
         query: Option<&str>,
-    ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send {
+        limit: i64,
+        offset: i64,
+    ) -> impl Future<Output = BackendResult<RecipePage>> + Send {
         let env = self.env.clone();
         let workspace = workspace.to_string();
         let query = query.map(str::to_owned);
         SendFuture::new(async move {
             let action = "レシピの一覧を読めない";
             let db = database(&env)?;
-            // 同じ日時に作ったレシピの順番が毎回変わらないよう、ID でも並べる。
-            // 件数の上限もページ分けも無く、材料と手順を含めてすべて読む。
-            // 1 ワークスペースのレシピの数の上限を #15 で入れるまでの暫定である。
-            let result = match query {
-                // 部分一致には LIKE ではなく instr を使う（AGENTS.md の SQL の例外）。
-                // D1 は LIKE のパターンを 50 バイトまでに制限していて、日本語の検索の文字列が 16 文字ほどで通らなくなるため。
-                Some(query) => {
-                    run(
-                        &db,
-                        &format!(
-                            "SELECT {RECIPE_COLUMNS} FROM recipes \
-                             WHERE workspace_id = ? AND instr(search_name, ?) > 0 \
-                             ORDER BY created_at DESC, id"
-                        ),
-                        &[workspace.into(), query.into()],
-                        action,
-                    )
-                    .await?
-                }
-                None => {
-                    run(
-                        &db,
-                        &format!(
-                            "SELECT {RECIPE_COLUMNS} FROM recipes \
-                             WHERE workspace_id = ? ORDER BY created_at DESC, id"
-                        ),
-                        &[workspace.into()],
-                        action,
-                    )
-                    .await?
-                }
+            // 部分一致には LIKE ではなく instr を使う（AGENTS.md の SQL の例外）。
+            // D1 は LIKE のパターンを 50 バイトまでに制限していて、日本語の検索の文字列が 16 文字ほどで通らなくなるため。
+            let (condition, values): (&str, Vec<JsValue>) = match query {
+                Some(query) => (
+                    "workspace_id = ? AND instr(search_name, ?) > 0",
+                    vec![workspace.into(), query.into()],
+                ),
+                None => ("workspace_id = ?", vec![workspace.into()]),
             };
-            result
+            let mut page_values = values.clone();
+            page_values.extend([int_to_js(limit), int_to_js(offset)]);
+            // 並べ方は索引 (workspace_id, created_at, id) と同じ向きにして、並べ替えずに読む。
+            // 同じ日時に作ったレシピの順番が毎回変わらないよう、ID でも並べる。
+            // LIMIT と OFFSET は ISO の標準ではないが、PostgreSQL でも同じ意味で動く（AGENTS.md）。
+            let page = db
+                .prepare(format!(
+                    "SELECT {RECIPE_COLUMNS} FROM recipes WHERE {condition} \
+                     ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+                ))
+                .bind(&page_values)
+                .map_err(|e| backend_error(action, &e))?;
+            let count = db
+                .prepare(format!(
+                    "SELECT COUNT(*) AS total FROM recipes WHERE {condition}"
+                ))
+                .bind(&values)
+                .map_err(|e| backend_error(action, &e))?;
+            // 1 つの batch にして、ページと総数を同じ時点のデータから読む。
+            let results = db
+                .batch(vec![page, count])
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            let [page, count] = results.as_slice() else {
+                return Err(BackendError(format!("{action}: batch の結果の数が違う")));
+            };
+            let recipes = page
                 .results::<Recipe>()
-                .map_err(|e| backend_error(action, &e))
+                .map_err(|e| backend_error(action, &e))?;
+            let total = count
+                .results::<Total>()
+                .map_err(|e| backend_error(action, &e))?
+                .first()
+                .map(|row| row.total)
+                .ok_or_else(|| BackendError(format!("{action}: 総数が結果に無い")))?;
+            Ok(RecipePage { recipes, total })
         })
     }
 

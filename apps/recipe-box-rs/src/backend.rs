@@ -24,6 +24,15 @@ impl fmt::Display for BackendError {
 /// `Backend` のメソッドの戻り値。
 pub type BackendResult<T> = Result<T, BackendError>;
 
+/// レシピの一覧の 1 ページ分。
+#[derive(Debug)]
+pub struct RecipePage {
+    /// このページのレシピ。
+    pub recipes: Vec<Recipe>,
+    /// 条件に当てはまるレシピの総数（すべてのページの合計）。
+    pub total: i64,
+}
+
 /// ハンドラーが使う外の機能。
 ///
 /// axum はハンドラーの `Future` に `Send`（別のスレッドに渡せること）を求めるので、戻り値に `+ Send` を付ける。
@@ -64,14 +73,17 @@ pub trait Backend: Clone + Send + Sync + 'static {
         now: i64,
     ) -> impl Future<Output = BackendResult<()>> + Send;
 
-    /// ワークスペースのレシピを、作った日時の新しい順（同じ日時なら ID の順）に返す。
-    /// `query` があれば、`search_name` 列がそれを含むレシピだけを返す。
+    /// ワークスペースのレシピを、作った日時の新しい順（同じ日時なら ID の大きい順）に並べ、
+    /// `offset` 件を飛ばした後の `limit` 件と、当てはまるレシピの総数を返す。
+    /// `query` があれば、`search_name` 列がそれを含むレシピだけを対象にする。
     /// `query` は呼び出し側で [`crate::recipe::search_name`] の形にしてから渡す。
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
         query: Option<&str>,
-    ) -> impl Future<Output = BackendResult<Vec<Recipe>>> + Send;
+        limit: i64,
+        offset: i64,
+    ) -> impl Future<Output = BackendResult<RecipePage>> + Send;
 
     /// レシピを保存する。
     fn insert_recipe(
