@@ -464,7 +464,7 @@ async fn list_rejects_invalid_page() {
         "1e1",
         "abc",
         "",
-        "10001",
+        "3",
         "99999999999999999999",
     ] {
         let path = format!("/api/recipes?page={page}");
@@ -950,6 +950,35 @@ async fn write_apis_are_rate_limited_before_workspace_check() {
     .await;
     assert_eq!(response.status, StatusCode::OK);
     assert_eq!(backend.write_limit_keys.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn content_length_within_limit_or_unreadable_is_passed_on() {
+    let backend = backend_with_workspaces();
+    let id = "0".repeat(32);
+    for (method, path) in write_requests(&id) {
+        // ちょうど上限の値と、数として読めない値は、middleware では断らない。
+        // 次のワークスペースの確認まで進む（数として読めない本文は、本文を読む段階で止める）。
+        for length in [
+            MAX_BODY_BYTES.to_string(),
+            "abc".to_owned(),
+            "-1".to_owned(),
+        ] {
+            let request = Request::builder()
+                .method(method.clone())
+                .uri(&path)
+                .header(header::CONTENT_LENGTH, &length)
+                .body(Body::empty())
+                .unwrap();
+            let response = send(router(backend.clone()), request).await;
+            assert_error(
+                &response,
+                StatusCode::BAD_REQUEST,
+                "workspace_id_missing",
+                None,
+            );
+        }
+    }
 }
 
 #[tokio::test]
