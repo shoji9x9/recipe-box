@@ -156,6 +156,8 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 
 main は、ブランチルールで PR を通さない変更と強制 push を禁止し、CI の成功を必須にしている。
 
+本番は `<名前>.workers.dev` で公開する（`wrangler.toml` の `workers_dev = true`）。版ごとのプレビューの URL は、誰でも開ける URL を増やさないよう作らない（`preview_urls = false`）。
+
 ### デプロイとレビューの準備
 
 GitHub の Settings → Environments に、次の値を置く。

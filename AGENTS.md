@@ -43,7 +43,13 @@
 ## MCP
 
 - MCP は、プロジェクトの `.mcp.json` に定義する（誰が clone しても同じ MCP が使えるようにするため）。
-- chrome-devtools MCP: 画面をブラウザで確かめる `browser-test` スキルが使う。pnpm で版を固定して入れ、`--isolated`（使い捨てのプロファイル）と `--no-usage-statistics`（MCP の利用統計を Google に送らない）で起動する。
+- chrome-devtools MCP: 画面をブラウザで確かめる `browser-test` スキルが使う。エージェントがブラウザを操作できるので、`package.json` で版を完全に固定する（`^` を付けない）。
+  MCP から外部への送信は、次の設定で止めている。設定を足すときは `--help` で送信にかかわるものが増えていないかを確かめる。
+  - `--isolated`: ブラウザのプロファイルを毎回使い捨てにする。
+  - `--no-usage-statistics`: MCP の利用統計を Google に送らない。
+  - `--no-performance-crux`: 性能の計測で開いた URL を Google の CrUX API に送らない。
+  - 環境変数 `CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS=1`: 新しい版の確認をしない（版は Dependabot で上げる）。
+  - ブラウザ（Google Chrome）そのものが Google と行う通信は、これらの設定では止まらない。
 
 ## スキル
 
