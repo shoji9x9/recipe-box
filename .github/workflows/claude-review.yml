@@ -14,10 +14,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   review:
     name: Review
@@ -29,6 +25,11 @@ jobs:
       && github.event.pull_request.user.login != 'dependabot[bot]'
       && github.event.pull_request.head.repo.full_name == github.repository
       && (github.event.action != 'labeled' || github.event.label.name == 'claude-review')
+    # job の if で skip した run が同じグループに入って、進行中のレビューを取り消さないよう、job の単位にする
+    # （workflow の単位にすると、claude-review 以外のラベルを付けただけで、進行中のレビューが止まる）。
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # secret をこの job だけに渡すため、Environment「claude-review」に置く。
