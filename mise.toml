@@ -25,11 +25,6 @@ ghalint = "1"
 "github:github/gh-actions-lock" = { version = "0.4.1", bin = "gh-actions-lock" }
 
 # よく使う作業。`mise run <名前>` で実行する。CI も同じタスクを使う。
-[tasks.mwg]
-description = "Web の作り方の指針（modern-web-guidance）を引く。例: mise run mwg -- search \"<検索の語>\""
-# 固定した版を、利用統計を送らずに、読むだけのサブコマンドで使う（scripts/mwg.sh・AGENTS.md の「スキル」）。
-run = "scripts/mwg.sh"
-
 [tasks.fmt]
 description = "Rust・TOML・Markdown を整形する"
 run = ["cargo fmt --all", "taplo fmt", "rumdl fmt ."]
@@ -95,3 +90,8 @@ description = "ローカルの D1 にマイグレーションを当て、Worker 
 dir = "apps/recipe-box-rs"
 depends = ["migrate"]
 run = "pnpm exec wrangler dev"
+
+[tasks.mwg]
+description = "Web の作り方の指針（modern-web-guidance）を引く。例: mise run mwg -- search \"<検索の語>\""
+# 固定した版を、利用統計を送らずに、読むだけのサブコマンドで使う（scripts/mwg.sh・AGENTS.md の「スキル」）。
+run = "scripts/mwg.sh"

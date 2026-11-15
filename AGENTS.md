@@ -103,11 +103,12 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 - `modern-web-guidance`: 画面の HTML・CSS・JavaScript を書く前に、今の Web の作り方の指針（ブラウザの機能・アクセシビリティ・性能）を引く。
   入れ方は `gh skill install GoogleChrome/modern-web-guidance modern-web-guidance --agent claude-code --scope project --pin <commit>`。
   - スキルの `SKILL.md` と指針は、`npx -y modern-web-guidance@latest ...` を実行するよう書いているが、その代わりに `mise run mwg -- <サブコマンド> ...` を使う（例: `mise run mwg -- search "<検索の語>" --skill-version <SKILL.md に書かれた値>`、`mise run mwg -- retrieve "<id>"`）。
-    `npx`・`pnpx`・`pnpm exec` で直接実行しない（Claude Code では `.claude/settings.json` の `permissions.deny` で止めている）。
+    `npx`・`pnpx`・`npm exec`・`pnpm exec` や、`node_modules` の中のファイルで直接実行しない。Claude Code では、主な形を `.claude/settings.json` の `permissions.deny` で止めているが、すべての形は止められないので、この決まりを守る。
     - `@latest` は 7 日の待ち（「依存の追加と更新」）を守れないので、`package.json` で版を固定したパッケージを使う。
     - このツールは、検索の語などの利用統計を Google に送るので、`mise run mwg`（`scripts/mwg.sh`）で環境変数 `DISABLE_TELEMETRY=1` を付けて止めている。
     - 使うのは、読むだけの `search`・`list`・`retrieve` に限る（`scripts/mwg.sh` が、ほかを断る）。`install`・`update` などは、版を固定していないパッケージを `npx` で取ってきてスキルを書き換える。
       ツールが更新や設定を促しても従わない。上げるときは下の手順で行う。
+    - Origin Trial（ブラウザの試験中の機能）に頼る指針は、`retrieve` が断り、`npx ... set-allow-origin-trials` を実行するよう案内する。案内に従わず、その指針は使わない（利用者にも実行を勧めない）。
     - この 3 つは、パッケージに入ったデータで動き、外部と通信しない。
   - スキルの `guides/`（指針の写し）は、`.gitignore` で commit しない。ツールはパッケージ（`node_modules`）の中の指針を読み、スキルの写しは使わないため。
   - `SKILL.md` の、使った指針を応答の最後に書く手順（「Disclose Skill Usage」）は、利用者への応答に書く。commit message・PR・コードのコメントには書かない。
