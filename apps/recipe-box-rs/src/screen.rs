@@ -288,6 +288,11 @@ struct DetailPage {
     /// 写真をもう 1 枚追加できるか（レシピの枚数の上限に達していない）。
     can_add_photo: bool,
     max_photos: i64,
+    /// あと何枚追加できるか。画面の JavaScript が、選んだ枚数が多すぎないかを送る前に確かめる。
+    remaining_photos: i64,
+    /// 1 枚の写真の大きさの上限と、超えたときの説明。画面の JavaScript が、送る前に確かめる。
+    max_photo_bytes: usize,
+    photo_too_large: &'static str,
 }
 
 #[derive(Template)]
@@ -834,6 +839,9 @@ async fn detail_page<B: Backend>(
             photos_editable: matches!(viewer, Viewer::Own(_)),
             can_add_photo: count < photo::MAX_PHOTOS_PER_RECIPE,
             max_photos: photo::MAX_PHOTOS_PER_RECIPE,
+            remaining_photos: (photo::MAX_PHOTOS_PER_RECIPE - count).max(0),
+            max_photo_bytes: photo::MAX_PHOTO_BYTES,
+            photo_too_large: PHOTO_TOO_LARGE,
         },
     ))
 }

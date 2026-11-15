@@ -1196,6 +1196,32 @@ async fn photo_errors_are_shown_on_the_detail_page() {
     assert!(backend.photos.lock().unwrap().is_empty());
 }
 
+/// 画面の JavaScript（`public/assets/photo-upload.js`）が、送る前に確かめるための値。
+#[tokio::test]
+async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert!(
+        response
+            .body
+            .contains(r#"<script src="/assets/photo-upload.js" defer></script>"#)
+    );
+    assert!(response.body.contains(" data-photo-upload "));
+    assert!(response.body.contains(r#"data-remaining="5""#));
+    assert!(response.body.contains(r#"data-max-bytes="4000000""#));
+    assert!(response.body.contains(&format!(
+        r#"data-too-large="{}""#,
+        crate::screen::PHOTO_TOO_LARGE
+    )));
+
+    let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert!(response.body.contains(r#"data-remaining="4""#));
+}
+
 #[tokio::test]
 async fn add_form_is_hidden_when_the_recipe_has_the_maximum_photos() {
     let backend = backend_with_workspaces();
@@ -1207,6 +1233,7 @@ async fn add_form_is_hidden_when_the_recipe_has_the_maximum_photos() {
     }
     let response = screen_get(&backend, &path, Some(&a)).await;
     assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+    assert!(!response.body.contains("data-photo-upload"));
     assert!(response.body.contains("写真は 5 枚まで付けられます"));
     let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
     assert_eq!(response.status, StatusCode::CONFLICT);

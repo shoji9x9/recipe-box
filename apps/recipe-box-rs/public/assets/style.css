@@ -565,6 +565,18 @@ button.primary.danger-fill {
     color: var(--error);
     background: var(--error-soft);
   }
+
+  /* 写真をまとめて追加したときの、追加できなかった写真の一覧 */
+  & p {
+    margin: 0;
+  }
+
+  & ul {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-6);
+    font-weight: 400;
+    overflow-wrap: anywhere;
+  }
 }
 
 /* 入力の誤り: フォームの上の一覧と、各欄のすぐ下 */
