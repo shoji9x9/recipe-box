@@ -40,6 +40,10 @@ const BASE_URLS = {
   "--remote": "https://recipe-box.shoji9x9.workers.dev",
 };
 const BUCKET = "recipe-box-photos";
+// 色の制御文字。
+const ANSI_COLOR = /\x1b\[[0-9;]*m/g;
+// やり直すときのログに出す理由の長さ。
+const REASON_LENGTH = 300;
 // seed が使う R2 の操作と、ログでの呼び方。
 const R2_ACTIONS = { put: "R2 への書き込み", delete: "R2 からの削除" };
 // API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
@@ -98,7 +102,7 @@ function redact(text) {
   return String(text)
     .replaceAll(workspaceId, "***")
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
-    .replace(/\b[0-9a-f]{32,}\b/gi, "***");
+    .replace(/[0-9a-f]{32,}/gi, "***");
 }
 
 function sleep(ms) {
@@ -241,31 +245,30 @@ async function wrangler(...wranglerArgs) {
     });
     return stdout;
   } catch (error) {
-    // 理由は stderr か stdout（--json のとき）にある。Node のエラーの文（コマンドの全体を含む）は、起動できなかったときだけ使う。
-    const output = [error.stderr, error.stdout].filter((text) => text?.trim()).join("\n");
-    throw new Error(redact(output || error.message).slice(0, 2000));
+    // 理由は stderr か stdout（--json のとき）にある。Node のエラーの文は、コマンドの全体（ホームのディレクトリのパスと SQL）を
+    // 含むので使わず、終了コードかシグナル（起動できなければ ENOENT などのコード）だけを添える。
+    // 色の制御文字は、伏せる前に取り除く（制御文字に挟まれた値も伏せるため）。
+    const output = [error.stderr, error.stdout]
+      .filter((text) => text?.trim())
+      .join("\n")
+      .replace(ANSI_COLOR, "");
+    const status = `wrangler が失敗した（${[error.code, error.signal].filter((v) => v !== undefined && v !== null).join("・")}）`;
+    // 長いときは、頭（stderr の [ERROR]）と終わり（stdout の JSON のエラー）の両方を残す。
+    const text = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
+    throw new Error(redact(`${status}\n${text}`));
   }
 }
 
 // wrangler の失敗の文から、理由を短く選ぶ。wrangler は理由を JSON の "text" か「[ERROR]」の行に書き、
-// API のエラーでは、原因（[code: ...] の付いた行）を、その次の行に書く。ログのファイルの場所の行は除く。
+// API のエラーでは、原因を [code: ...] の付いた行（JSON では notes の "text"）に書く。どれも無ければ、最初の行（終了コード）にする。
 function shortReason(message) {
   const lines = message
-    // 色の制御文字を取り除く。
-    .replace(/\x1b\[[0-9;]*m/g, "")
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.includes("Logs were written"));
-  const text = lines.find((l) => l.includes('"text"'));
-  if (text !== undefined) {
-    return text.slice(0, 200);
-  }
-  const index = lines.findIndex((l) => l.includes("[ERROR]"));
-  if (index < 0) {
-    return (lines[0] ?? "").slice(0, 200);
-  }
-  const next = lines[index + 1];
-  return (next?.includes("[code:") ? `${lines[index]} ${next}` : lines[index]).slice(0, 300);
+  const main = lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]")) ?? lines[0] ?? "";
+  const code = lines.find((l) => l !== main && l.includes("[code:"));
+  return (code === undefined ? main : `${main} ${code}`).slice(0, REASON_LENGTH);
 }
 
 // wrangler を動かし、失敗したら待ち時間を延ばしながら RETRY_ATTEMPTS 回まで試す。最後の失敗は投げる。
