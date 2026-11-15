@@ -41,6 +41,20 @@
   box-sizing: border-box;
 }
 
+/* 誤りの一覧のリンクなどで、ページの中を移るときは滑らかに動かす（動きを減らす設定の人には動かさない）。
+   JavaScript を使わないよう、ページ全体に指定する。フォーカスやアドレスの # で動くスクロールも滑らかになる。 */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ページの中で移った先（誤りの一覧のリンクの先の欄など）が、上に固定したヘッダーに隠れないよう、
+   ヘッダーの高さ（70〜80px ほど）に、欄の名前の分を足して上を空ける。ヘッダーの高さを変えたら、ここも直す。 */
+html {
+  scroll-padding-top: 120px;
+}
+
 body {
   margin: 0;
   font-family: var(--font);

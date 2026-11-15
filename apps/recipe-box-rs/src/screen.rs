@@ -300,7 +300,7 @@ struct FormPage {
     servings: String,
     ingredients: String,
     steps: String,
-    /// すべての項目の誤り（フォームの上の一覧に出す）。
+    /// フォームの上の誤りの一覧に出す、すべての項目の誤り。欄から離れて確かめ直したときは空（[`Validation::Revalidated`]）。
     errors: Vec<FieldError>,
     name_error: Option<&'static str>,
     servings_error: Option<&'static str>,
@@ -319,7 +319,8 @@ enum Validation {
     NotSubmitted,
     /// 送信して誤りが出た。誤りの一覧にフォーカスを移し、以後は欄から離れたときにも確かめる。
     Submitted,
-    /// 送信した後に、欄から離れて確かめ直した。フォーカスは動かさない。
+    /// 送信した後に、欄から離れて確かめ直した。誤りの一覧は出さず（欄の誤りだけを出す）、フォーカスも動かさない。
+    /// 一覧を入れ替えると、押している途中の一覧のリンクが入れ替わり、クリックが失われるため。
     Revalidated,
 }
 
@@ -665,7 +666,11 @@ fn form_page(
         servings_error: error_of("servings"),
         ingredients_error: error_of("ingredients"),
         steps_error: error_of("steps"),
-        errors,
+        errors: if validation == Validation::Revalidated {
+            Vec::new()
+        } else {
+            errors
+        },
         layout,
         revalidate: validation != Validation::NotSubmitted,
         focus_summary: validation == Validation::Submitted,
@@ -752,7 +757,8 @@ pub async fn create<B: Backend>(
 
 /// `POST /recipes/check`: フォームを確かめるだけで、保存しない。欄から離れたときに htmx が呼ぶ。
 ///
-/// 返す画面からは、離れた欄と誤りの一覧だけを使う。確かめた結果が誤りでも、確かめること自体は成功なので 200 にする。
+/// 返す画面からは、離れた欄（入力と、そのすぐ下の誤り）だけを使う。誤りの一覧は使わない（送信したときだけ作る）。
+/// 確かめた結果が誤りでも、確かめること自体は成功なので 200 にする。
 /// ワークスペースを読まないので、[`identify`] を通さない（D1 を読まない）。
 pub async fn check_form(
     form: Result<Form<RecipeForm>, FormRejection>,
@@ -1277,7 +1283,7 @@ fn same_origin(headers: &HeaderMap) -> bool {
 
 /// 画面の応答に、セキュリティのためのヘッダーを付ける middleware。
 ///
-/// ハンドラーがすでに付けたヘッダーは変えない。写真のデータは、ブラウザーに残させる `Cache-Control` と、
+/// ハンドラーがすでに付けたヘッダーは変えない。写真のデータは、ブラウザに残させる `Cache-Control` と、
 /// 写真に合わせた CSP を自分で付けるため（[`photo::photo_response`]）。
 pub async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
