@@ -13,6 +13,8 @@
     <script src="/assets/htmx.min.js" defer></script>
     {#- 写真の追加のフォームで、複数の写真を 1 枚ずつ送る。hx-boost は head を入れ替えないので、どの画面でも読む。 #}
     <script src="/assets/photo-upload.js" defer></script>
+    {#- 一覧の検索で、日本語の入力の変換中は検索しない。 #}
+    <script src="/assets/search.js" defer></script>
   </head>
   <body hx-boost="true">
     <header>

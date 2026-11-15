@@ -335,6 +335,11 @@ button.primary.danger-fill {
     &:focus {
       box-shadow: none;
     }
+
+    /* 入力を消す ×（ブラウザが出すボタン）も、ほかのボタンと同じく押せる形のカーソルにする */
+    &::-webkit-search-cancel-button {
+      cursor: pointer;
+    }
   }
 
   & button {

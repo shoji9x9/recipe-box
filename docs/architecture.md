@@ -15,7 +15,7 @@
 | --- | --- |
 | 言語 | Rust |
 | Web フレームワーク | [axum](https://github.com/tokio-rs/axum)（[workers-rs](https://github.com/cloudflare/workers-rs) の `http` 機能で Workers 上で動かす） |
-| 画面 | [askama](https://github.com/askama-rs/askama)（HTML テンプレート）と [htmx](https://htmx.org/)。写真をまとめて追加する小さな JavaScript（`apps/recipe-box-rs/public/assets/photo-upload.js`）だけを自分で書く |
+| 画面 | [askama](https://github.com/askama-rs/askama)（HTML テンプレート）と [htmx](https://htmx.org/)。写真をまとめて追加する小さな JavaScript（`apps/recipe-box-rs/public/assets/photo-upload.js`）と、検索で日本語の変換中に検索しないための JavaScript（`search.js`）だけを自分で書く |
 | スタイル | 1 つの CSS ファイル（`apps/recipe-box-rs/public/assets/style.css`）。色・主な余白・幅を変数にし、CSS の入れ子（`&`）で部品ごとにまとめる |
 | 実行環境 | Cloudflare Workers |
 | DB | Cloudflare D1 |

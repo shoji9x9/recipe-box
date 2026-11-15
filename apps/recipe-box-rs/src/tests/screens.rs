@@ -1198,6 +1198,25 @@ async fn photo_errors_are_shown_on_the_detail_page() {
     assert!(backend.photos.lock().unwrap().is_empty());
 }
 
+/// 一覧の検索は、日本語の変換中に検索しないよう、`public/assets/search.js` が起こす search-input で検索する。
+#[tokio::test]
+async fn search_waits_for_the_ime_to_commit() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let response = screen_get(&backend, "/", Some(&a)).await;
+    assert!(
+        response
+            .body
+            .contains(r#"<script src="/assets/search.js" defer></script>"#)
+    );
+    assert!(response.body.contains(" data-search-input"));
+    assert!(
+        response
+            .body
+            .contains(r#"hx-trigger="search-input changed delay:300ms, search""#)
+    );
+}
+
 /// 画面の JavaScript（`public/assets/photo-upload.js`）が、送る前に確かめるための値。
 #[tokio::test]
 async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
