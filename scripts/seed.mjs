@@ -15,7 +15,7 @@
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
 //      アプリと同じく D1 の行を先に入れる。書いた後に行が消えていれば（レシピが消された）、その写真の R2 のデータを消す。
 //      ほかの失敗では、入れた写真を消してから止まる（R2 に書き始める前なら行だけを、後なら R2・D1 の順に）。
-//      D1 の読み取りと R2 の操作は、一時的な失敗なら待ってやり直す。
+//      R2 の操作と、D1 の写真の行の読み取り・削除は、wrangler が失敗したら待ってやり直す。
 //      どの行からもたどれないデータを R2 に残さないためである。R2 から消せず、行も無いデータは、手で消せるようキーを表示する。
 //   5. 公開 API で、レシピの数と、写真をすべて読めることを確かめる。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
@@ -58,7 +58,7 @@ const RATE_LIMIT_WAIT_MS = 61_000;
 const MAX_RETRIES = 5;
 // 写真の R2 の操作で wrangler を同時に動かす数。ローカルでは、wrangler dev が使う保存先に同時に書くと失敗することがあるので、1 つずつ書く。
 const UPLOAD_CONCURRENCY = { "--local": 1, "--remote": 4 };
-// wrangler の R2 の書き込み・削除と D1 の読み取りが失敗したときに試す回数と、やり直す前に待つ時間（回ごとに延ばす）。
+// wrangler の R2 の書き込み・削除と、D1 の写真の行の読み取り・削除が失敗したときに試す回数と、やり直す前に待つ時間（回ごとに延ばす）。
 const RETRY_ATTEMPTS = 4;
 const RETRY_WAIT_MS = 5_000;
 
@@ -239,6 +239,7 @@ async function wrangler(...wranglerArgs) {
 }
 
 // wrangler を動かし、失敗したら待ち時間を延ばしながら RETRY_ATTEMPTS 回まで試す。最後の失敗は投げる。
+// what は「写真の行の読み取り」のような、何をするかを表す名詞の句にする。
 async function wranglerWithRetry(what, ...wranglerArgs) {
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -247,20 +248,21 @@ async function wranglerWithRetry(what, ...wranglerArgs) {
       if (attempt >= RETRY_ATTEMPTS) {
         throw error;
       }
-      console.log(`${what}に失敗したので、やり直す（${attempt} 回目）`);
+      console.log(`${what}に失敗したので、やり直す（${attempt} 回目）: ${error.message}`);
       await sleep(RETRY_WAIT_MS * attempt);
     }
   }
 }
 
-// R2 の操作を、一時的な失敗なら待ってやり直す。やり直しても失敗したら、投げずに false を返す。
+// R2 の操作を、wrangler が失敗したら待ってやり直す。やり直しても失敗したら、投げずに false を返す。
 async function r2(action, photo, ...extra) {
   const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
+  const what = `写真 ${photo.file} の R2 の ${action}`;
   try {
-    await wranglerWithRetry(`写真 ${photo.file} の R2 の ${action} `, "r2", "object", action, key, ...extra);
+    await wranglerWithRetry(what, "r2", "object", action, key, ...extra);
     return true;
   } catch (error) {
-    console.error(`写真 ${photo.file} の R2 の ${action} に失敗した: ${error.message}`);
+    console.error(`${what}に失敗した: ${error.message}`);
     return false;
   }
 }
