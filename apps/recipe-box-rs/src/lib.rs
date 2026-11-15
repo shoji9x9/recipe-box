@@ -18,7 +18,7 @@ use axum::{
     http::{StatusCode, Uri},
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde::Serialize;
 use tower_service::Service;
@@ -39,7 +39,14 @@ pub fn router<B: Backend>(backend: B) -> Router {
     // API は、受け付けないメソッドにも、ほかの失敗と同じ JSON の形で答える。
     let api = Router::new()
         .route("/health", get(health))
-        .route("/workspaces", post(workspace::create::<B>))
+        .route(
+            "/workspaces",
+            // ワークスペースを作る回数は、専用のレート制限で確かめる（[`workspace::create_new`]）。
+            // 消すのは、ほかの書き込む API と同じ回数の制限を通す。
+            post(workspace::create::<B>).merge(delete(workspace::delete::<B>).route_layer(
+                middleware::from_fn_with_state(backend.clone(), limits::limit_writes::<B>),
+            )),
+        )
         .merge(recipe_routes(backend.clone()))
         // 本文の大きさの上限。超えると、本文を読む前に 413 になる。
         .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
@@ -118,7 +125,7 @@ fn screen_routes<B: Backend>(backend: B) -> Router<B> {
             get(screen::workspace_page::<B>).post(screen::create_workspace::<B>),
         )
         .route("/workspace/switch", post(screen::switch_workspace::<B>))
-        .route("/workspace/forget", post(screen::forget_workspace))
+        .route("/workspace/delete", post(screen::delete_workspace::<B>))
         .route("/workspace/demo", post(screen::view_demo::<B>))
         .route("/workspace/own", post(screen::view_own))
         .route_layer(middleware::from_fn_with_state(

@@ -16,7 +16,8 @@ use worker::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, PhotoInsert, PhotoLimits, RecipePage, WorkspaceLimits,
+        Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
+        WorkspaceLimits,
     },
     photo::{Photo, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -452,6 +453,62 @@ impl Backend for CloudflareBackend {
                 .map(|row| row.id)
                 .collect();
             Ok(Some(ids))
+        })
+    }
+
+    fn list_workspace_photos(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send {
+        let env = self.env.clone();
+        let workspace = workspace.to_string();
+        SendFuture::new(async move {
+            let action = "ワークスペースの写真を読めない";
+            let db = database(&env)?;
+            db.prepare("SELECT recipe_id, id FROM photos WHERE workspace_id = ?")
+                .bind(&[workspace.into()])
+                .map_err(|e| backend_error(action, &e))?
+                .all()
+                .await
+                .map_err(|e| backend_error(action, &e))?
+                .results::<PhotoKey>()
+                .map_err(|e| backend_error(action, &e))
+        })
+    }
+
+    fn delete_workspace(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
+        let env = self.env.clone();
+        let workspace = workspace.to_string();
+        SendFuture::new(async move {
+            let action = "ワークスペースを消せない";
+            let db = database(&env)?;
+            let photos = db
+                .prepare("SELECT recipe_id, id FROM photos WHERE workspace_id = ?")
+                .bind(&[workspace.as_str().into()])
+                .map_err(|e| backend_error(action, &e))?;
+            // レシピと写真の行は ON DELETE CASCADE で一緒に消える。
+            let deleted = db
+                .prepare("DELETE FROM workspaces WHERE id = ?")
+                .bind(&[workspace.as_str().into()])
+                .map_err(|e| backend_error(action, &e))?;
+            // batch は 1 つのトランザクションなので、読んだ写真と、消した写真の行が一致する。
+            let results = db
+                .batch(vec![photos, deleted])
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            let [photos, deleted] = results.as_slice() else {
+                return Err(BackendError(format!("{action}: batch の結果の数が違う")));
+            };
+            if changed_rows(deleted, action)? == 0 {
+                return Ok(None);
+            }
+            photos
+                .results::<PhotoKey>()
+                .map(Some)
+                .map_err(|e| backend_error(action, &e))
         })
     }
 

@@ -83,7 +83,7 @@ enum Flash {
     WorkspaceSwitched,
     DemoViewStarted,
     DemoViewEnded,
-    WorkspaceForgotten,
+    WorkspaceDeleted,
     PhotoAdded,
     PhotoDeleted,
 }
@@ -97,7 +97,7 @@ impl Flash {
         Self::WorkspaceSwitched,
         Self::DemoViewStarted,
         Self::DemoViewEnded,
-        Self::WorkspaceForgotten,
+        Self::WorkspaceDeleted,
         Self::PhotoAdded,
         Self::PhotoDeleted,
     ];
@@ -112,7 +112,7 @@ impl Flash {
             Self::WorkspaceSwitched => "workspace-switched",
             Self::DemoViewStarted => "demo-view-started",
             Self::DemoViewEnded => "demo-view-ended",
-            Self::WorkspaceForgotten => "workspace-forgotten",
+            Self::WorkspaceDeleted => "workspace-deleted",
             Self::PhotoAdded => "photo-added",
             Self::PhotoDeleted => "photo-deleted",
         }
@@ -131,7 +131,7 @@ impl Flash {
                 "共有のデモに切り替えました。1 時間たつと、自分のレシピ帳に戻ります"
             }
             Self::DemoViewEnded => "自分のレシピ帳に戻りました",
-            Self::WorkspaceForgotten => "このブラウザでの利用をやめました",
+            Self::WorkspaceDeleted => "ワークスペースを削除しました",
             Self::PhotoAdded => "写真を追加しました",
             Self::PhotoDeleted => "写真を削除しました",
         }
@@ -1136,12 +1136,25 @@ pub async fn switch_workspace<B: Backend>(
     Ok(render(status, &page))
 }
 
-/// `POST /workspace/forget`: このブラウザの Cookie を消す。ワークスペースそのものは消さない。
-pub async fn forget_workspace() -> Response {
-    let mut response = see_other_with("/", Flash::WorkspaceForgotten);
+/// `POST /workspace/delete`: 自分のワークスペースを、レシピと写真ごと消す。このブラウザの Cookie も消す。
+///
+/// 一時的にデモを見ている間も、消すのは自分のワークスペースである（画面に出している ID のもの）。
+pub async fn delete_workspace<B: Backend>(
+    State(backend): State<B>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, ScreenError> {
+    let Some(id) = &session.own else {
+        return Ok(see_other("/workspace"));
+    };
+    match workspace::remove(&backend, id).await {
+        // 同時に別のタブなどで消されていたときも、消えたことに変わりはないので、同じに扱う。
+        Ok(()) | Err(ApiError::WorkspaceNotFound) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut response = see_other_with("/", Flash::WorkspaceDeleted);
     remove_cookie(&mut response, WORKSPACE_COOKIE);
     remove_cookie(&mut response, DEMO_VIEW_COOKIE);
-    response
+    Ok(response)
 }
 
 /// `POST /workspace/demo`: 自分のワークスペースを残したまま、1 時間だけ共有のデモを見る。

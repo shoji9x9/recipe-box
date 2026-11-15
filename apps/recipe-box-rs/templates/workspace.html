@@ -19,9 +19,18 @@
       <button type="submit">共有のデモを見る（1 時間）</button>
     </form>
     {%- endif %}
-    <form method="post" action="/workspace/forget">
-      <button type="submit" class="text">このブラウザでの利用をやめる</button>
-    </form>
+    {#- 削除の確認。レシピの削除と同じく、Invoker Commands で <dialog> を開閉する。 #}
+    <button type="button" class="text danger" commandfor="delete-workspace" command="show-modal">ワークスペースを削除する</button>
+    <dialog id="delete-workspace" class="confirm" aria-labelledby="delete-workspace-title">
+      <h2 id="delete-workspace-title">ワークスペースを削除しますか？</h2>
+      <p>このワークスペースのレシピと写真を、すべて削除します。ほかの端末でも使えなくなります。元には戻せません。</p>
+      <div class="actions">
+        <button type="button" commandfor="delete-workspace" command="close">やめる</button>
+        <form method="post" action="/workspace/delete">
+          <button type="submit" class="primary danger-fill">削除する</button>
+        </form>
+      </div>
+    </dialog>
   </div>
   {%- else %}
   {%- if viewing_demo %}

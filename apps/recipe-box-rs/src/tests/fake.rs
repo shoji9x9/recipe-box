@@ -14,7 +14,8 @@ use std::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, PhotoInsert, PhotoLimits, RecipePage, WorkspaceLimits,
+        Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
+        WorkspaceLimits,
     },
     photo::{Photo, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -129,6 +130,20 @@ impl FakeBackend {
                 created_at: self.now_millis(),
             },
         ));
+    }
+
+    /// ワークスペースのすべての写真の、レシピの ID と写真の ID。
+    fn workspace_photo_keys(&self, workspace: &WorkspaceId) -> Vec<PhotoKey> {
+        self.photos
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(w, _, _)| w == workspace.as_str())
+            .map(|(_, r, p)| PhotoKey {
+                recipe_id: r.clone(),
+                id: p.id.clone(),
+            })
+            .collect()
     }
 
     /// 「今」の時刻を `millis` だけ進める。
@@ -342,6 +357,37 @@ impl Backend for FakeBackend {
                 .map(|(_, _, p)| p.id.clone())
                 .collect();
             photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
+            Some(removed)
+        }))
+    }
+
+    fn list_workspace_photos(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send {
+        ready(self.check().map(|()| self.workspace_photo_keys(workspace)))
+    }
+
+    fn delete_workspace(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
+        ready(self.check().map(|()| {
+            self.workspaces.lock().unwrap().remove(workspace.as_str())?;
+            self.workspace_created_at
+                .lock()
+                .unwrap()
+                .remove(workspace.as_str());
+            // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
+            let removed = self.workspace_photo_keys(workspace);
+            self.recipes
+                .lock()
+                .unwrap()
+                .retain(|(w, _), _| w != workspace.as_str());
+            self.photos
+                .lock()
+                .unwrap()
+                .retain(|(w, _, _)| w != workspace.as_str());
             Some(removed)
         }))
     }

@@ -250,6 +250,22 @@ expect 404 "消したレシピ"
 request GET "/api/recipes/$recipe_id/photos/$photo_id" "$workspace_a"
 expect 404 "消したレシピの写真"
 
+echo "ワークスペースの削除"
+# 写真の付いたレシピのあるワークスペースを、レシピ 80 件と写真ごと消す（D1 の ON DELETE CASCADE と R2 の削除）。
+request GET /api/recipes "$workspace_b"
+expect 200 "GET /api/recipes（B、削除の前）"
+recipe_b="$(json '.recipes[0].id')"
+request POST "/api/recipes/$recipe_b/photos" "$workspace_b" "@$photo_file"
+expect 201 "POST /api/recipes/{id}/photos（B）"
+request DELETE /api/workspaces "$workspace_b"
+expect 204 "DELETE /api/workspaces"
+request GET /api/recipes "$workspace_b"
+expect 404 "消したワークスペース"
+[ "$(json .error)" = workspace_not_found ] || fail "消したワークスペースのエラーが workspace_not_found でない"
+request GET "/api/recipes/$recipe_id" "$workspace_a"
+expect 404 "B を消した後も、A は使える（消したレシピは 404）"
+[ "$(json .error)" = recipe_not_found ] || fail "B を消したら A まで消えた"
+
 # 最後に、回数の制限（Rate Limiting）を確かめる。
 if [ "${CHECK_RATE_LIMIT:-}" = 1 ]; then
   # 数え始めが 60 秒の枠の途中でも確かめられるよう、枠 2 つ分より 1 回多く試す。

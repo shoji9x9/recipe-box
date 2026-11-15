@@ -127,7 +127,7 @@ pub struct Photo {
 /// R2 のキー。ワークスペース・レシピ・写真の ID から決まる。
 ///
 /// D1 の行をワークスペースで絞り込んで見つけてから使うので、ほかのワークスペースの写真のキーにはならない。
-pub fn object_key(workspace: &WorkspaceId, recipe: &RecipeId, photo: &str) -> String {
+pub fn object_key(workspace: &WorkspaceId, recipe: impl std::fmt::Display, photo: &str) -> String {
     format!("photos/{workspace}/{recipe}/{photo}")
 }
 

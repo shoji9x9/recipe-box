@@ -586,21 +586,32 @@ async fn workspace_page_shows_own_id_and_switches() {
         assert_eq!(set_cookies(&response), Vec::<String>::new());
     }
 
+    let response = screen_get(&backend, "/workspace", Some(&cookie(WORKSPACE_A))).await;
+    assert!(response.body.contains(r#"action="/workspace/delete""#));
+
     let response = screen_post(
         &backend,
-        "/workspace/forget",
+        "/workspace/delete",
         Some(&cookie(WORKSPACE_A)),
         "",
     )
     .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
-    assert!(
-        set_cookie_named(&response, "__Host-workspace")
-            .unwrap()
-            .contains("Max-Age=0")
-    );
-    // 消すのは Cookie だけで、ワークスペースは残る。
-    assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    for name in ["__Host-workspace", "__Host-demo-view"] {
+        assert!(
+            set_cookie_named(&response, name)
+                .unwrap()
+                .contains("Max-Age=0"),
+            "{name}"
+        );
+    }
+    // Cookie だけでなく、ワークスペースそのものを消す。
+    assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+
+    // 自分のワークスペースが無ければ、何も消さずにワークスペースの画面へ戻す。
+    let response = screen_post(&backend, "/workspace/delete", None, "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_B));
 }
 
 #[tokio::test]
