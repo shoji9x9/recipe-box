@@ -16,7 +16,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{backend::Backend, error::ApiError, id, workspace::Workspace};
+use crate::{
+    backend::{Backend, RecipePage},
+    error::ApiError,
+    id,
+    workspace::{Workspace, WorkspaceId},
+};
 
 /// 料理名の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_NAME_CHARS: usize = 100;
@@ -112,58 +117,85 @@ pub struct RecipeFields {
 /// 書き方ではなく値で決めると、リライトの後（`Number.isInteger`）と結果がそろう。
 #[derive(Debug, Deserialize)]
 pub struct RecipeInput {
-    name: Option<String>,
-    servings: Option<f64>,
-    ingredients: Option<String>,
-    steps: Option<String>,
+    pub name: Option<String>,
+    pub servings: Option<f64>,
+    pub ingredients: Option<String>,
+    pub steps: Option<String>,
 }
 
-/// 入力の項目を確かめる。正しくなければ、最初に見つかった項目のエラーを返す。
+/// 入力の項目の誤り。`field` は項目の名前、`message` は人向けの説明（API と画面で同じ文）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldError {
+    pub field: &'static str,
+    pub message: &'static str,
+}
+
+/// 入力の項目を確かめる。正しくなければ、最初に見つかった項目のエラーを返す（API が使う）。
+pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
+    check(input).map_err(|errors| {
+        let first = errors[0];
+        ApiError::InvalidField {
+            field: first.field,
+            message: first.message,
+        }
+    })
+}
+
+/// 入力の項目を確かめる。正しくなければ、すべての項目の誤りを、項目の順（料理名・何人分か・材料・手順）に返す。
+/// 画面はすべての誤りを一度に出し、API は最初の 1 つだけを返す（[`validate`]）。
 ///
 /// 長さは Unicode のコードポイントの数で数える（`chars().count()`）。
 /// バイト数や UTF-16 の長さで数えると、日本語や絵文字でリライトの後と結果が変わるため。
-pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
-    let invalid = |field, message| ApiError::InvalidField { field, message };
+/// 同じ理由で、画面の入力欄には `maxlength`（UTF-16 の長さで数える）を付けない。
+pub fn check(input: RecipeInput) -> Result<RecipeFields, Vec<FieldError>> {
+    let mut errors = Vec::new();
+    let mut invalid = |field, message| errors.push(FieldError { field, message });
 
-    let name = input
-        .name
-        .ok_or(invalid("name", "料理名（name）は必須です"))?;
+    let name = input.name.unwrap_or_default();
     // trim は Unicode の White_Space の文字を空白とみなす。
     // JavaScript の trim は U+FEFF なども空白とみなすので、リライトの後は /^\p{White_Space}*$/u で同じ判定をする。
     if name.trim().is_empty() {
-        return Err(invalid("name", "料理名（name）を入力してください"));
-    }
-    if name.chars().count() > MAX_NAME_CHARS {
-        return Err(invalid("name", "料理名（name）は 100 文字までです"));
+        invalid("name", "料理名を入力してください");
+    } else if name.chars().count() > MAX_NAME_CHARS {
+        invalid("name", "料理名は 100 文字までです");
     }
 
-    let servings = input
-        .servings
-        .ok_or(invalid("servings", "何人分か（servings）は必須です"))?;
-    let servings = servings_to_int(servings).ok_or(invalid(
-        "servings",
-        "何人分か（servings）は 1 から 100 までの整数です",
-    ))?;
+    let servings = match input.servings {
+        None => {
+            invalid("servings", "何人分かを入力してください");
+            None
+        }
+        Some(value) => {
+            let servings = servings_to_int(value);
+            if servings.is_none() {
+                invalid(
+                    "servings",
+                    "何人分かは 1 から 100 までの整数で入力してください",
+                );
+            }
+            servings
+        }
+    };
 
     // 材料と手順は省いてよい。省いたら空にする。
     let ingredients = input.ingredients.unwrap_or_default();
     if ingredients.chars().count() > MAX_INGREDIENTS_CHARS {
-        return Err(invalid(
-            "ingredients",
-            "材料（ingredients）は 2,000 文字までです",
-        ));
+        invalid("ingredients", "材料は 2,000 文字までです");
     }
     let steps = input.steps.unwrap_or_default();
     if steps.chars().count() > MAX_STEPS_CHARS {
-        return Err(invalid("steps", "手順（steps）は 5,000 文字までです"));
+        invalid("steps", "手順は 5,000 文字までです");
     }
 
-    Ok(RecipeFields {
-        name,
-        servings,
-        ingredients,
-        steps,
-    })
+    match servings {
+        Some(servings) if errors.is_empty() => Ok(RecipeFields {
+            name,
+            servings,
+            ingredients,
+            steps,
+        }),
+        _ => Err(errors),
+    }
 }
 
 /// 何人分かの値が 1 から 100 までの整数なら、整数にして返す。
@@ -238,44 +270,63 @@ pub async fn list<B: Backend>(
     workspace: Workspace,
     params: Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Json<RecipeList>, ApiError> {
-    let invalid_q = || ApiError::InvalidField {
-        field: "q",
-        message: "検索の条件（q）が正しくありません",
-    };
     // 名前と値の組の並びとしてはどんなクエリでも読めるので、ここで失敗することは無いはずだが、
     // axum の既定のエラー（JSON でない本文）を返さないよう、q のエラーにする。
-    let Query(params) = params.map_err(|_| invalid_q())?;
-    let pattern = single_param(&params, "q")
-        .map_err(|()| invalid_q())?
-        .filter(|q| !q.is_empty());
-    if pattern.is_some_and(|q| q.chars().count() > MAX_QUERY_CHARS) {
-        return Err(ApiError::InvalidField {
-            field: "q",
-            message: "検索の条件（q）は 100 文字までです",
-        });
-    }
-    let page = single_param(&params, "page")
-        .ok()
-        .and_then(parse_page)
-        .ok_or(ApiError::InvalidField {
-            field: "page",
-            message: "ページ（page）は 1 から 2 までの整数です",
-        })?;
-    let query = pattern.map(search_name);
-    let result = backend
-        .list_recipes(
-            &workspace.id,
-            query.as_deref(),
-            PAGE_SIZE,
-            (page - 1) * PAGE_SIZE,
-        )
-        .await?;
+    let Query(params) = params.map_err(|_| invalid_query())?;
+    let (pattern, page) = parse_list_params(&params)?;
+    let result = list_page(&backend, &workspace.id, pattern.as_deref(), page).await?;
     Ok(Json(RecipeList {
         recipes: result.recipes,
         total: result.total,
         page,
         per_page: PAGE_SIZE,
     }))
+}
+
+fn invalid_query() -> ApiError {
+    ApiError::InvalidField {
+        field: "q",
+        message: "検索の条件が正しくありません",
+    }
+}
+
+/// 一覧のクエリから、検索の文字列（空なら `None`）とページの番号を取り出す。API と画面の両方から使う。
+pub fn parse_list_params(params: &[(String, String)]) -> Result<(Option<String>, i64), ApiError> {
+    let pattern = single_param(params, "q")
+        .map_err(|()| invalid_query())?
+        .filter(|q| !q.is_empty());
+    if pattern.is_some_and(|q| q.chars().count() > MAX_QUERY_CHARS) {
+        return Err(ApiError::InvalidField {
+            field: "q",
+            message: "検索する料理名は 100 文字までです",
+        });
+    }
+    let page = single_param(params, "page")
+        .ok()
+        .and_then(parse_page)
+        .ok_or(ApiError::InvalidField {
+            field: "page",
+            message: "ページの番号は 1 から 2 までの整数です",
+        })?;
+    Ok((pattern.map(str::to_owned), page))
+}
+
+/// 一覧の 1 ページ分を読む。`pattern` は検索の文字列（そのままの形。ここで検索に使う形にする）。
+pub async fn list_page<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    pattern: Option<&str>,
+    page: i64,
+) -> Result<RecipePage, ApiError> {
+    let query = pattern.map(search_name);
+    Ok(backend
+        .list_recipes(
+            workspace,
+            query.as_deref(),
+            PAGE_SIZE,
+            (page - 1) * PAGE_SIZE,
+        )
+        .await?)
 }
 
 /// `POST /api/recipes`: レシピを登録し、`201` と登録したレシピを返す。
@@ -286,6 +337,22 @@ pub async fn create<B: Backend>(
 ) -> Result<Response, ApiError> {
     let Json(input) = body.map_err(|rejection| body_error(&rejection))?;
     let fields = validate(input)?;
+    let recipe = insert(&backend, &workspace.id, fields).await?;
+    let location = format!("/api/recipes/{}", recipe.id);
+    Ok((
+        StatusCode::CREATED,
+        [(header::LOCATION, location)],
+        Json(recipe),
+    )
+        .into_response())
+}
+
+/// 確かめた後の項目でレシピを登録し、登録したレシピを返す。API と画面の両方から使う。
+pub async fn insert<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    fields: RecipeFields,
+) -> Result<Recipe, ApiError> {
     let id = RecipeId::from_bytes(backend.random_128());
     let now = backend.now_millis();
     let recipe = Recipe {
@@ -298,18 +365,12 @@ pub async fn create<B: Backend>(
         updated_at: now,
     };
     if !backend
-        .insert_recipe(&workspace.id, &recipe, MAX_RECIPES_PER_WORKSPACE)
+        .insert_recipe(workspace, &recipe, MAX_RECIPES_PER_WORKSPACE)
         .await?
     {
         return Err(ApiError::RecipeLimitReached);
     }
-    let location = format!("/api/recipes/{id}");
-    Ok((
-        StatusCode::CREATED,
-        [(header::LOCATION, location)],
-        Json(recipe),
-    )
-        .into_response())
+    Ok(recipe)
 }
 
 /// `GET /api/recipes/{id}`: レシピを 1 件返す。
@@ -336,22 +397,29 @@ pub async fn update<B: Backend>(
     let id = parse_recipe_id(id)?;
     let Json(input) = body.map_err(|rejection| body_error(&rejection))?;
     let fields = validate(input)?;
+    Ok(Json(replace(&backend, &workspace.id, &id, fields).await?))
+}
+
+/// レシピの中身を置き換え、変えた後のレシピを返す。API と画面の両方から使う。
+pub async fn replace<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    id: &RecipeId,
+    fields: RecipeFields,
+) -> Result<Recipe, ApiError> {
     // 作った日時は変わらないので、更新の前に読んでおき、更新の後には読み直さない。
     // 読み直すと、間に入った別の PUT の内容を返したり、間に入った DELETE で 404 を返したりするため。
     let created_at = backend
-        .get_recipe(&workspace.id, &id)
+        .get_recipe(workspace, id)
         .await?
         .ok_or(ApiError::RecipeNotFound)?
         .created_at;
     let now = backend.now_millis();
     // 読んでから更新するまでの間に消されていれば、更新は 0 行になる。
-    if !backend
-        .update_recipe(&workspace.id, &id, &fields, now)
-        .await?
-    {
+    if !backend.update_recipe(workspace, id, &fields, now).await? {
         return Err(ApiError::RecipeNotFound);
     }
-    Ok(Json(Recipe {
+    Ok(Recipe {
         id: id.to_string(),
         name: fields.name,
         servings: fields.servings,
@@ -359,7 +427,7 @@ pub async fn update<B: Backend>(
         steps: fields.steps,
         created_at,
         updated_at: now,
-    }))
+    })
 }
 
 /// `DELETE /api/recipes/{id}`: レシピを消し、`204` を返す。

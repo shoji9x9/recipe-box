@@ -23,7 +23,7 @@ pub const WORKSPACE_ID_HEADER: &str = "x-workspace-id";
 ///
 /// 費用を守るための上限で、攻撃者が IP アドレスを変えても超えられない（D1 の行を数えて判定する）。
 /// レシピの数の上限（[`crate::recipe::MAX_RECIPES_PER_WORKSPACE`]）と掛け合わせた量が、
-/// D1 の保存量の上限に余裕を持って収まるようにする（README の「費用の対策」）。
+/// D1 の保存量の上限に余裕を持って収まるようにする（docs/security.md の「費用の対策」）。
 pub const MAX_WORKSPACES: i64 = 200;
 /// アプリ全体で 1 日（UTC の日付）に作れるワークスペースの数。
 ///
@@ -93,17 +93,25 @@ impl<B: Backend> FromRequestParts<B> for Workspace {
             .ok()
             .and_then(WorkspaceId::parse)
             .ok_or(ApiError::WorkspaceIdInvalid)?;
-        let last_used_at = backend
-            .workspace_last_used_at(&id)
-            .await?
-            .ok_or(ApiError::WorkspaceNotFound)?;
-        // 前に書き換えてから 1 時間以上たっていたときだけ、最終利用日時を書き換える。
-        let now = backend.now_millis();
-        if now - last_used_at >= LAST_USED_UPDATE_INTERVAL_MILLIS {
-            backend.set_workspace_last_used_at(&id, now).await?;
+        if !touch(backend, &id).await? {
+            return Err(ApiError::WorkspaceNotFound);
         }
         Ok(Self { id })
     }
+}
+
+/// ワークスペースが在るかを確かめ、在れば最終利用日時を更新する。無ければ `false` を返す。
+///
+/// 前に書き換えてから 1 時間以上たっていたときだけ書き換える（[`LAST_USED_UPDATE_INTERVAL_MILLIS`]）。
+pub async fn touch<B: Backend>(backend: &B, id: &WorkspaceId) -> Result<bool, ApiError> {
+    let Some(last_used_at) = backend.workspace_last_used_at(id).await? else {
+        return Ok(false);
+    };
+    let now = backend.now_millis();
+    if now - last_used_at >= LAST_USED_UPDATE_INTERVAL_MILLIS {
+        backend.set_workspace_last_used_at(id, now).await?;
+    }
+    Ok(true)
 }
 
 /// `POST /api/workspaces` の応答の本文。
@@ -117,9 +125,23 @@ pub async fn create<B: Backend>(
     State(backend): State<B>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CreatedWorkspace>), ApiError> {
-    // IP アドレスごとの回数を先に確かめる。全体の上限を数える D1 の読み取りを、連打で増やさないため。
+    let id = create_new(&backend, &headers).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedWorkspace { id: id.to_string() }),
+    ))
+}
+
+/// ワークスペースを作る。API と画面の両方から使う。
+///
+/// IP アドレスごとの回数を先に、アプリ全体の上限を後に確かめる。
+/// 全体の上限を数える D1 の読み取りを、連打で増やさないため。
+pub async fn create_new<B: Backend>(
+    backend: &B,
+    headers: &HeaderMap,
+) -> Result<WorkspaceId, ApiError> {
     if !backend
-        .allow_workspace_creation(&client_key(&headers))
+        .allow_workspace_creation(&client_key(headers))
         .await?
     {
         return Err(ApiError::TooManyRequests);
@@ -135,8 +157,5 @@ pub async fn create<B: Backend>(
     if !backend.insert_workspace(&id, now, &limits).await? {
         return Err(ApiError::CapacityReached);
     }
-    Ok((
-        StatusCode::CREATED,
-        Json(CreatedWorkspace { id: id.to_string() }),
-    ))
+    Ok(id)
 }

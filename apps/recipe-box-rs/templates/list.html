@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}レシピの一覧{% endblock %}
+{% block heading %}レシピの一覧{% endblock %}
+{% block head_actions %}
+<a class="button-link" href="/recipes/new">レシピを登録する</a>
+{% endblock %}
+{% block content %}
+<form method="get" action="/" role="search" class="search">
+  <label for="q">料理名で探す</label>
+  {#- 入力しながら、一覧（#results）だけを入れ替える。URL も検索の条件に合わせる。 #}
+  <input id="q" type="search" name="q" value="{{ q }}" placeholder="料理名で探す" autocomplete="off"
+         hx-get="/" hx-trigger="input changed delay:300ms, search"
+         hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true">
+  <button type="submit">探す</button>
+</form>
+<section id="results">
+  {%- if let Some(error) = query_error %}
+  <p class="message error" role="alert">{{ error }}</p>
+  {%- else %}
+  <p class="count">{{ total }} 件{% if !q.is_empty() %}（「{{ q }}」を含む料理名）{% endif %}</p>
+  {%- if recipes.is_empty() %}
+  <p>{% if total == 0 %}レシピがありません。{% else %}このページにはレシピがありません。<a href="{{ first_page_href }}">最初のページへ</a>{% endif %}</p>
+  {%- else %}
+  <ul class="recipes">
+    {%- for recipe in recipes %}
+    <li>
+      <a href="/recipes/{{ recipe.id }}">{{ recipe.name }}</a>
+      <span class="servings">{{ recipe.servings }} 人分</span>
+      <div class="card-actions">
+        {%- let back = Some((q.as_str(), page)) %}
+        {% include "delete_dialog.html" %}
+      </div>
+    </li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+  {%- if pages.len() > 1 %}
+  <nav class="pages" aria-label="ページ">
+    {%- for link in pages %}
+    {%- if link.current %}
+    <span aria-current="page">{{ link.number }}</span>
+    {%- else %}
+    <a href="{{ link.href }}">{{ link.number }}</a>
+    {%- endif %}
+    {%- endfor %}
+  </nav>
+  {%- endif %}
+  {%- endif %}
+</section>
+{% endblock %}

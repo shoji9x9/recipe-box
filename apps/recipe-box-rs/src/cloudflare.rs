@@ -22,6 +22,8 @@ use crate::{
 
 /// `wrangler.toml` の D1 の binding の名前。
 const DB_BINDING: &str = "DB";
+/// 共有のデモのワークスペースの ID を置く secret の名前。
+const DEMO_WORKSPACE_SECRET: &str = "DEMO_WORKSPACE_ID";
 /// `wrangler.toml` のレート制限の binding の名前（ワークスペースを作る回数）。
 const WORKSPACE_CREATION_LIMITER: &str = "WORKSPACE_CREATION_LIMITER";
 /// `wrangler.toml` のレート制限の binding の名前（書き込む API の回数）。
@@ -130,6 +132,14 @@ impl Backend for CloudflareBackend {
     fn now_millis(&self) -> i64 {
         // as_millis は u64 を返す。i64 に収まらないのは約 2 億 9 千万年後なので、収まらなければ最大値にする。
         i64::try_from(worker::Date::now().as_millis()).unwrap_or(i64::MAX)
+    }
+
+    fn demo_workspace_id(&self) -> Option<WorkspaceId> {
+        // 形の正しくない値は、設定されていないものとして扱う。
+        self.env
+            .secret(DEMO_WORKSPACE_SECRET)
+            .ok()
+            .and_then(|value| WorkspaceId::parse(&value.to_string()))
     }
 
     fn allow_workspace_creation(

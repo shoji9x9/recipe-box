@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ recipe.name }}{% endblock %}
+{% block heading %}{{ recipe.name }}{% endblock %}
+{% block content %}
+<article class="detail">
+  <p class="meta">{{ recipe.servings }} 人分</p>
+  <section class="section">
+    <h2>材料</h2>
+    <p class="multiline">{% if recipe.ingredients.is_empty() %}（なし）{% else %}{{ recipe.ingredients }}{% endif %}</p>
+  </section>
+  <section class="section">
+    <h2>手順</h2>
+    <p class="multiline">{% if recipe.steps.is_empty() %}（なし）{% else %}{{ recipe.steps }}{% endif %}</p>
+  </section>
+  <div class="actions">
+    <a class="button-link" href="/recipes/{{ recipe.id }}/edit">編集する</a>
+    <a class="button-link secondary" href="/">一覧に戻る</a>
+    {%- let back = None::<(&str, i64)> %}
+    {% include "delete_dialog.html" %}
+  </div>
+</article>
+{% endblock %}

@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 askama = "0.16.1"
 axum = { version = "0.8.9", default-features = false, features = [
+  "form",
   "json",
   "query",
 ] }

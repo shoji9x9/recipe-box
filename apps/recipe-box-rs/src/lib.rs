@@ -8,15 +8,15 @@ mod error;
 mod id;
 mod limits;
 mod recipe;
+mod screen;
 mod workspace;
 
-use askama::Template;
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
-    http::{StatusCode, Uri, header},
+    http::{StatusCode, Uri},
     middleware,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::Serialize;
@@ -24,11 +24,6 @@ use tower_service::Service;
 use worker::{Context, Env, HttpRequest, event};
 
 use crate::{backend::Backend, cloudflare::CloudflareBackend, error::ApiError};
-
-/// トップページのテンプレート（`templates/index.html`）。
-#[derive(Template)]
-#[template(path = "index.html")]
-struct IndexTemplate;
 
 /// `GET /api/health` の応答の本文。
 #[derive(Serialize)]
@@ -49,7 +44,7 @@ pub fn router<B: Backend>(backend: B) -> Router {
         .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
         .method_not_allowed_fallback(api_method_not_allowed);
     Router::new()
-        .route("/", get(index))
+        .merge(screen_routes(backend.clone()))
         .nest("/api", api)
         // 無いパスは、ここでまとめて扱う。`nest` した router の fallback では
         // `/api/`（末尾のスラッシュ）に届かないので、パスを見て分ける。
@@ -73,6 +68,56 @@ fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
             backend,
             limits::limit_writes::<B>,
         ))
+}
+
+/// 画面。次の順に middleware を通る（[`screen`]）。
+///
+/// 1. [`screen::security_headers`] — すべての応答に、セキュリティのためのヘッダーを付ける。
+/// 2. [`screen::guard_writes`] — 書き込み（POST）の送り元・回数・本文の大きさを確かめる。D1 を読む前に断るため、先に置く。
+/// 3. [`screen::identify`] — Cookie から、画面を見ている人のワークスペースを決める。
+///
+/// 本文の大きさは API と同じ上限にする。`Content-Length` の無い本文（chunked）も、ここで止める。
+/// CSS・htmx・アイコンは静的アセット（`public/`）として Worker の外で配るので、ここには無い。
+fn screen_routes<B: Backend>(backend: B) -> Router<B> {
+    let check_routes = screen_check_routes();
+    Router::new()
+        .route("/", get(screen::index::<B>))
+        .route("/recipes", post(screen::create::<B>))
+        .route("/recipes/new", get(screen::new_form::<B>))
+        .route(
+            "/recipes/{id}",
+            get(screen::detail::<B>).post(screen::update::<B>),
+        )
+        .route("/recipes/{id}/edit", get(screen::edit_form::<B>))
+        .route("/recipes/{id}/delete", post(screen::delete::<B>))
+        .route(
+            "/workspace",
+            get(screen::workspace_page::<B>).post(screen::create_workspace::<B>),
+        )
+        .route("/workspace/switch", post(screen::switch_workspace::<B>))
+        .route("/workspace/forget", post(screen::forget_workspace))
+        .route("/workspace/demo", post(screen::view_demo::<B>))
+        .route("/workspace/own", post(screen::view_own))
+        .route_layer(middleware::from_fn_with_state(
+            backend.clone(),
+            screen::identify::<B>,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            backend,
+            screen::guard_writes::<B>,
+        ))
+        .route_layer(middleware::from_fn(screen::security_headers))
+        .merge(check_routes)
+        .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
+}
+
+/// 画面のフォームを確かめるだけのルート。ワークスペースを読まないので、[`screen::identify`] を通さない。
+/// 送り元と本文の大きさは確かめるが、書き込みの回数の制限は使わない（[`screen::guard_check`]）。
+fn screen_check_routes<B: Backend>() -> Router<B> {
+    Router::new()
+        .route("/recipes/check", post(screen::check_form))
+        .route_layer(middleware::from_fn(screen::guard_check))
+        .route_layer(middleware::from_fn(screen::security_headers))
 }
 
 /// 無いパスへの応答。API（`/api` とその下）には JSON の形で、画面には本文の無い 404 で答える。
@@ -99,18 +144,6 @@ async fn fetch(
     // panic したときに、原因をログに出す。
     console_error_panic_hook::set_once();
     Ok(router(CloudflareBackend::new(env)).call(req).await?)
-}
-
-async fn index() -> impl IntoResponse {
-    match IndexTemplate.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            "画面を表示できませんでした",
-        )
-            .into_response(),
-    }
 }
 
 async fn health() -> Json<Health> {

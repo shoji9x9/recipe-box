@@ -8,13 +8,22 @@ preview_urls = false
 
 [build]
 # worker-build は mise で入れる（版は mise.toml で固定する）。
-command = "worker-build --release"
+# htmx は pnpm で版を固定して入れ（package.json）、ここで静的アセットの置き場にコピーする。
+command = "worker-build --release && mkdir -p public/assets && cp ../../node_modules/htmx.org/dist/htmx.min.js public/assets/htmx.min.js"
+
+# 画面が使う静的なファイル（CSS・htmx）。Worker を起動せずに配られるので、Worker のリクエストの数に入らない。
+# パスがファイルに当たらないリクエストだけを Worker が受け取る。
+[assets]
+directory = "public"
 
 # レシピなどを保存する D1 のデータベース。
 # database_id はアカウントごとの値なので書かない。wrangler は database_name で探す。
 [[d1_databases]]
 binding = "DB"
 database_name = "recipe-box"
+
+# 共有のデモのワークスペースの ID は、secret の DEMO_WORKSPACE_ID に置く（ID を知れば API で書き込めるので、公開しない）。
+# 無ければ、Cookie の無い人には説明とワークスペースを作るボタンだけを出す。
 
 # ワークスペースを作る回数の制限。1 つの IP アドレスから 60 秒に 10 回まで。
 # Cloudflare の拠点ごとに数える、おおよその制限である。

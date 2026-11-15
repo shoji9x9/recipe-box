@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }}{% endblock %}
+{% block heading %}{{ heading }}{% endblock %}
+{% block content %}
+{#- 入力の誤りは、まとめた一覧（各欄へのリンク）と、各欄のすぐ下の両方に出す。
+    検証はサーバーだけで行うので、ブラウザの標準の検証は使わない（novalidate。required・maxlength も付けない）。
+    確かめるのは、最初は送信したとき（onSubmit）だけで、誤りが出た後は欄から離れたときにも確かめ直す（onBlur）。
+    一覧の入れ物（#error-summary）は、欄から離れたときに入れ替えるため、誤りが無くても置いておく。 #}
+<div id="error-summary">
+  {%- if !errors.is_empty() %}
+  <div class="error-summary" role="alert" tabindex="-1"{% if focus_summary %} autofocus{% endif %}>
+    <h2>入力に誤りがあります（{{ errors.len() }} 件）</h2>
+    <ul>
+      {%- for error in errors %}
+      <li><a href="#{{ error.field }}">{{ error.message }}</a></li>
+      {%- endfor %}
+    </ul>
+  </div>
+  {%- endif %}
+</div>
+<form method="post" action="{{ action }}" class="recipe-form" novalidate>
+  <div class="field" id="field-name">
+    <label for="name">料理名（必須・100 文字まで）</label>
+    {%- let field = "name" %}
+    <input id="name" name="name" value="{{ name }}" autocomplete="off"{% if name_error.is_some() %} aria-invalid="true" aria-describedby="name-error"{% endif %}{% include "form_field_attrs.html" %}>
+    {%- if let Some(error) = name_error %}
+    <p id="name-error" class="field-error">{{ error }}</p>
+    {%- endif %}
+  </div>
+  <div class="field" id="field-servings">
+    <label for="servings">何人分か（必須・1 から 100 の整数）</label>
+    {%- let field = "servings" %}
+    <input id="servings" name="servings" type="number" min="1" max="100" step="1" inputmode="numeric" value="{{ servings }}" autocomplete="off"{% if servings_error.is_some() %} aria-invalid="true" aria-describedby="servings-error"{% endif %}{% include "form_field_attrs.html" %}>
+    {%- if let Some(error) = servings_error %}
+    <p id="servings-error" class="field-error">{{ error }}</p>
+    {%- endif %}
+  </div>
+  <div class="field" id="field-ingredients">
+    <label for="ingredients">材料（2,000 文字まで。1 行に 1 つ）</label>
+    {%- let field = "ingredients" %}
+    <textarea id="ingredients" name="ingredients" rows="8"{% if ingredients_error.is_some() %} aria-invalid="true" aria-describedby="ingredients-error"{% endif %}{% include "form_field_attrs.html" %}>{{ ingredients }}</textarea>
+    {%- if let Some(error) = ingredients_error %}
+    <p id="ingredients-error" class="field-error">{{ error }}</p>
+    {%- endif %}
+  </div>
+  <div class="field" id="field-steps">
+    <label for="steps">手順（5,000 文字まで）</label>
+    {%- let field = "steps" %}
+    <textarea id="steps" name="steps" rows="12"{% if steps_error.is_some() %} aria-invalid="true" aria-describedby="steps-error"{% endif %}{% include "form_field_attrs.html" %}>{{ steps }}</textarea>
+    {%- if let Some(error) = steps_error %}
+    <p id="steps-error" class="field-error">{{ error }}</p>
+    {%- endif %}
+  </div>
+  <div class="actions">
+    <button type="submit" class="primary">保存する</button>
+    <a class="button-link secondary" href="{{ cancel_href }}">やめる</a>
+  </div>
+</form>
+{% endblock %}

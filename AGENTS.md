@@ -1,7 +1,9 @@
 # AGENTS.md
 
 このリポジトリで作業するコーディングエージェント向けの決まり。
-アプリの目的・仕様・技術構成は [README.md](README.md) にある。仕様を変えるときは、README.md も一緒に直す。
+アプリの概要と使い方は [README.md](README.md) に、仕様は [docs/spec.md](docs/spec.md) に、方針と技術構成は [docs/architecture.md](docs/architecture.md) に、セキュリティは [docs/security.md](docs/security.md) に、開発の手順は [docs/development.md](docs/development.md) にある。
+動きや値を変えるときは、それを書いた文書をすべて一緒に直す（仕様は `docs/spec.md`、上限などの費用の対策は `docs/security.md`、手順は `docs/development.md`、利用者に見える値や操作は `README.md` の使い方も）。
+README.md には概要と使い方だけを書き、詳細は `docs/` に置く。
 
 ## 文書
 
@@ -51,7 +53,7 @@
   - 一覧のページ分けの `LIMIT ? OFFSET ?`。ISO の標準（`OFFSET ... FETCH FIRST ...`）は SQLite が受け付けないが、`LIMIT` と `OFFSET` は PostgreSQL でも同じ意味で動く。
   - 料理名の部分一致の検索の `instr(search_name, ?) > 0`。D1 は `LIKE` のパターンを 50 バイトまでに制限していて、日本語の検索の文字列が 16 文字ほどで通らないため。リライトの後は `strpos` などに書き換える。
 - すべてのクエリを `workspace_id` で絞り込む。
-  ワークスペースそのものを作る・探すクエリと、自動削除のクエリと、アプリ全体の量の上限を数えるクエリ（README の「費用の対策」）は、`workspaces` の `id` で絞り込むか、全体を対象にする。
+  ワークスペースそのものを作る・探すクエリと、自動削除のクエリと、アプリ全体の量の上限を数えるクエリ（docs/security.md の「費用の対策」）は、`workspaces` の `id` で絞り込むか、全体を対象にする。
 - マイグレーションは `apps/recipe-box-rs/migrations/` に、番号を付けた新しいファイルとして足す。main に入ったファイルは書き換えない。
 - デプロイはマイグレーションを当ててからコードを入れ替えるので、マイグレーションは古いコードでも動くように（表や列を足すだけに）書く。
 

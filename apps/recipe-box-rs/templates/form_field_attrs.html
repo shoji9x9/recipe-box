@@ -1,0 +1,3 @@
+{#- 送信して誤りが出た後（revalidate）は、欄から離れたときに、その欄をサーバーで確かめ直す（react-hook-form の reValidateMode: onBlur）。
+    フォーム全体を送って確かめ、返ってきた画面から、その欄（入力と誤り）と、誤りの一覧だけを入れ替える。 #}
+{%- if revalidate %} hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{{ field }}" hx-select="#field-{{ field }}" hx-swap="outerHTML" hx-select-oob="#error-summary"{% endif %}

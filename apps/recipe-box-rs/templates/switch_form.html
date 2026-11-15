@@ -1,0 +1,10 @@
+<form method="post" action="/workspace/switch" class="switch" novalidate>
+  <label for="workspace-id">ほかの端末で作ったワークスペースの ID を使う</label>
+  <div class="row">
+    <input id="workspace-id" name="id" autocomplete="off" spellcheck="false"{% if let Some(error) = switch_error %} aria-invalid="true" aria-describedby="workspace-id-error" autofocus{% endif %}>
+    <button type="submit">使う</button>
+  </div>
+  {%- if let Some(error) = switch_error %}
+  <p id="workspace-id-error" class="field-error">{{ error }}</p>
+  {%- endif %}
+</form>

@@ -1,0 +1,16 @@
+{#- 削除の確認。JavaScript を使わず、Invoker Commands（commandfor・command）で <dialog> を開閉する。 #}
+<button type="button" class="text danger" commandfor="delete-{{ recipe.id }}" command="show-modal">削除</button>
+<dialog id="delete-{{ recipe.id }}" class="confirm" aria-labelledby="delete-title-{{ recipe.id }}">
+  <h2 id="delete-title-{{ recipe.id }}">レシピを削除しますか？</h2>
+  <p>「{{ recipe.name }}」を削除します。元には戻せません。</p>
+  <div class="actions">
+    <button type="button" commandfor="delete-{{ recipe.id }}" command="close">やめる</button>
+    <form method="post" action="/recipes/{{ recipe.id }}/delete">
+      {%- if let Some((q, page)) = back %}
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="page" value="{{ page }}">
+      {%- endif %}
+      <button type="submit" class="primary danger-fill">削除する</button>
+    </form>
+  </div>
+</dialog>

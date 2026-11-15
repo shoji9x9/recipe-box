@@ -9,14 +9,6 @@ use super::{fake::FakeBackend, get, send};
 use crate::router;
 
 #[tokio::test]
-async fn index_returns_html() {
-    let response = get(&FakeBackend::default(), "/").await;
-    assert_eq!(response.status, StatusCode::OK);
-    assert!(response.content_type.starts_with("text/html"));
-    assert!(response.body.contains("<h1>recipe-box</h1>"));
-}
-
-#[tokio::test]
 async fn health_returns_ok() {
     let response = get(&FakeBackend::default(), "/api/health").await;
     assert_eq!(response.status, StatusCode::OK);

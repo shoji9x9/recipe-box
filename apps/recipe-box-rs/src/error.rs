@@ -56,7 +56,8 @@ struct ErrorBody {
 }
 
 impl ApiError {
-    fn parts(&self) -> (StatusCode, &'static str, &'static str) {
+    /// 状態コード・機械向けのコード・人向けの説明。画面のエラーの表示にも使う。
+    pub fn parts(&self) -> (StatusCode, &'static str, &'static str) {
         match self {
             Self::WorkspaceIdMissing => (
                 StatusCode::BAD_REQUEST,
