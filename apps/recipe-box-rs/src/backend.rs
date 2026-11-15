@@ -7,7 +7,7 @@ use std::fmt;
 use std::future::Future;
 
 use crate::{
-    photo::{Photo, PhotoId},
+    photo::{Photo, PhotoBody, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId},
     workspace::WorkspaceId,
 };
@@ -259,7 +259,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
     fn put_object(
         &self,
         key: &str,
-        bytes: Vec<u8>,
+        body: PhotoBody,
         content_type: &str,
     ) -> impl Future<Output = BackendResult<()>> + Send;
 

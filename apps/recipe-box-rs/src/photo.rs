@@ -7,7 +7,7 @@
 //! 中身の先頭のバイトで決める。宣言と中身が違うファイルを、別の形式として配らないため。
 
 use axum::{
-    Json,
+    Extension, Json,
     body::Bytes,
     extract::{
         Path, State,
@@ -23,6 +23,7 @@ use crate::{
     error::{ApiError, log_error},
     id,
     recipe::RecipeId,
+    stream::{self, PhotoStream, RawPhotoBody},
     workspace::{Workspace, WorkspaceId},
 };
 
@@ -122,6 +123,32 @@ pub struct Photo {
     pub created_at: i64,
 }
 
+/// 追加する写真の本文。
+pub enum PhotoBody {
+    /// メモリーに読んだバイト列。multipart のフォームと、`Content-Length` の無い本文と、テストで使う。
+    Bytes(Vec<u8>),
+    /// 先頭だけを読んだストリーム。本番で、写真のバイト列をそのまま送ったときに使う（[`crate::stream`]）。
+    Stream(PhotoStream),
+}
+
+impl PhotoBody {
+    /// 本文の大きさ（バイト）。
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) => bytes.len(),
+            Self::Stream(stream) => stream.length,
+        }
+    }
+
+    /// 形式を決めるのに使う、本文の先頭。
+    fn head(&self) -> &[u8] {
+        match self {
+            Self::Bytes(bytes) => bytes,
+            Self::Stream(stream) => &stream.head,
+        }
+    }
+}
+
 /// R2 のキー。ワークスペース・レシピ・写真の ID から決まる。
 ///
 /// D1 の行をワークスペースで絞り込んで見つけてから使うので、ほかのワークスペースの写真のキーにはならない。
@@ -190,13 +217,20 @@ pub async fn create<B: Backend>(
     State(backend): State<B>,
     workspace: Workspace,
     recipe: Result<Path<String>, PathRejection>,
+    raw: Option<Extension<RawPhotoBody>>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<(StatusCode, Json<Photo>), ApiError> {
     let Path(recipe) = recipe.map_err(|_| ApiError::RecipeNotFound)?;
     let recipe = parse_recipe_id(&recipe)?;
-    let body = body.map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
-    // Bytes がほかに持ち主の無い 1 つの塊なら、コピーせずに Vec にする。
-    let photo = add(&backend, &workspace.id, &recipe, Vec::from(body)).await?;
+    // 本番で、写真のバイト列をそのまま送ったときは、本文が axum に渡らず extension に入っている（[`crate::stream`]）。
+    let body = if let Some(Extension(raw)) = raw {
+        PhotoBody::Stream(stream::open(raw).await?)
+    } else {
+        let body = body.map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
+        // Bytes がほかに持ち主の無い 1 つの塊なら、コピーせずに Vec にする。
+        PhotoBody::Bytes(Vec::from(body))
+    };
+    let photo = add(&backend, &workspace.id, &recipe, body).await?;
     Ok((StatusCode::CREATED, Json(photo)))
 }
 
@@ -210,19 +244,19 @@ pub async fn add<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
     recipe: &RecipeId,
-    bytes: Vec<u8>,
+    body: PhotoBody,
 ) -> Result<Photo, ApiError> {
     deny_demo(backend, workspace)?;
-    if bytes.len() > MAX_PHOTO_BYTES {
+    if body.len() > MAX_PHOTO_BYTES {
         return Err(ApiError::PayloadTooLarge);
     }
-    let format = PhotoFormat::detect(&bytes).ok_or(ApiError::UnsupportedPhotoType)?;
+    let format = PhotoFormat::detect(body.head()).ok_or(ApiError::UnsupportedPhotoType)?;
     let now = backend.now_millis();
     let photo = Photo {
         id: PhotoId::from_bytes(backend.random_128()).0,
         content_type: format.content_type().to_owned(),
         // 4,000,000 以下なので i64 に収まる。
-        size: i64::try_from(bytes.len()).map_err(|_| ApiError::PayloadTooLarge)?,
+        size: i64::try_from(body.len()).map_err(|_| ApiError::PayloadTooLarge)?,
         created_at: now,
     };
     let limits = PhotoLimits {
@@ -245,7 +279,7 @@ pub async fn add<B: Backend>(
     }
     let key = object_key(workspace, recipe, &photo.id);
     let id = PhotoId(photo.id.clone());
-    if let Err(error) = backend.put_object(&key, bytes, &photo.content_type).await {
+    if let Err(error) = backend.put_object(&key, body, &photo.content_type).await {
         // 元の失敗を先にログに出す（後始末も失敗したときに、元の原因を失わないため）。
         log_error(&error);
         // 行だけが残ると、合計の大きさに数えられたまま、読めない写真になる。

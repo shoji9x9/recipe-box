@@ -17,7 +17,7 @@ use crate::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
         WorkspaceLimits, WorkspaceStatus,
     },
-    photo::{Photo, PhotoId, object_key},
+    photo::{Photo, PhotoBody, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -571,9 +571,13 @@ impl Backend for FakeBackend {
     fn put_object(
         &self,
         key: &str,
-        bytes: Vec<u8>,
+        body: PhotoBody,
         content_type: &str,
     ) -> impl Future<Output = BackendResult<()>> + Send {
+        // テストの本文は、いつもバイト列で届く（ストリームは本番の wasm でだけ作る）。
+        let PhotoBody::Bytes(bytes) = body else {
+            panic!("テストでストリームの本文は作らない");
+        };
         if self.photo_rows_vanish_on_put {
             self.photos.lock().unwrap().clear();
         }

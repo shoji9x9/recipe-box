@@ -12,8 +12,9 @@ use std::fmt::Write as _;
 use askama::Template;
 use axum::{
     Extension, Form,
+    body::Bytes,
     extract::{
-        Multipart, Path, Query, Request, State,
+        FromRequest, Multipart, Path, Query, Request, State,
         multipart::MultipartRejection,
         rejection::{FormRejection, QueryRejection},
     },
@@ -27,8 +28,9 @@ use crate::{
     backend::Backend,
     error::ApiError,
     limits::{check_body_size, check_write},
-    photo::{self, Photo, PhotoId},
+    photo::{self, Photo, PhotoBody, PhotoId},
     recipe::{self, FieldError, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput},
+    stream::{self, RawPhotoBody},
     workspace::{self, WorkspaceId},
 };
 
@@ -884,17 +886,22 @@ pub async fn photo_file<B: Backend>(
     Ok(photo::photo_response(&backend, viewer.id(), &id, &photo_id).await?)
 }
 
-/// `POST /recipes/{id}/photos`: フォーム（multipart）の `photo` の写真を追加し、詳細へ戻る。
+/// `POST /recipes/{id}/photos`: 写真を追加し、詳細へ戻る。
+///
+/// 本文は 2 つの形を受け付ける。
+/// - フォーム（multipart）の `photo` の欄。JavaScript が動かなくても使える。
+/// - 写真のバイト列そのもの（JavaScript が 1 枚ずつ送る）。本番では本文を読みためずに R2 へ流す（[`stream`]）。
 pub async fn add_photo<B: Backend>(
     State(backend): State<B>,
     Extension(session): Extension<Session>,
     Path(id): Path<String>,
-    multipart: Result<Multipart, MultipartRejection>,
+    raw: Option<Extension<RawPhotoBody>>,
+    request: Request,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
     let id = parse_id(&id)?;
-    let bytes = match read_photo_field(multipart).await {
-        Ok(Some(bytes)) => bytes,
+    let body = match read_photo_body(raw, request).await {
+        Ok(Some(body)) => body,
         Ok(None) => {
             return detail_page(
                 &backend,
@@ -908,10 +915,34 @@ pub async fn add_photo<B: Backend>(
         }
         Err(error) => return photo_failure(&backend, &viewer, &session, &id, error).await,
     };
-    match photo::add(&backend, viewer.id(), &id, bytes).await {
+    match photo::add(&backend, viewer.id(), &id, body).await {
         Ok(_) => Ok(see_other_with(&format!("/recipes/{id}"), Flash::PhotoAdded)),
         Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
     }
+}
+
+/// 写真を追加するリクエストの本文を読む。写真が無ければ `None`。
+async fn read_photo_body(
+    raw: Option<Extension<RawPhotoBody>>,
+    request: Request,
+) -> Result<Option<PhotoBody>, ApiError> {
+    if let Some(Extension(raw)) = raw {
+        return Ok(Some(PhotoBody::Stream(stream::open(raw).await?)));
+    }
+    let is_multipart = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().starts_with("multipart/"));
+    if is_multipart {
+        let multipart = Multipart::from_request(request, &()).await;
+        return Ok(read_photo_field(multipart).await?.map(PhotoBody::Bytes));
+    }
+    // バイト列そのもの（本番では `Content-Length` の無いものだけがここに来る）。
+    let bytes = Bytes::from_request(request, &())
+        .await
+        .map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
+    Ok((!bytes.is_empty()).then(|| PhotoBody::Bytes(Vec::from(bytes))))
 }
 
 /// フォームの `photo` の欄のデータを読む。ファイルが選ばれていなければ `None`。

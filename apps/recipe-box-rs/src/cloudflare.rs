@@ -9,7 +9,7 @@ use std::future::Future;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 use worker::{
-    Bucket, D1Database, D1Result, Env, HttpMetadata,
+    Bucket, D1Database, D1Result, Data, Env, HttpMetadata,
     send::{SendFuture, SendWrapper},
     wasm_bindgen::JsValue,
 };
@@ -19,7 +19,7 @@ use crate::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
         WorkspaceLimits, WorkspaceStatus,
     },
-    photo::{Photo, PhotoId},
+    photo::{Photo, PhotoBody, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -803,7 +803,7 @@ impl Backend for CloudflareBackend {
     fn put_object(
         &self,
         key: &str,
-        bytes: Vec<u8>,
+        body: PhotoBody,
         content_type: &str,
     ) -> impl Future<Output = BackendResult<()>> + Send {
         let env = self.env.clone();
@@ -811,8 +811,13 @@ impl Backend for CloudflareBackend {
         let content_type = content_type.to_owned();
         SendFuture::new(async move {
             let action = "写真を R2 に書き込めない";
+            let data = match body {
+                PhotoBody::Bytes(bytes) => Data::Bytes(bytes),
+                // 長さの分かるストリーム（FixedLengthStream の読む側）なので、R2 がそのまま読める。
+                PhotoBody::Stream(stream) => Data::ReadableStream(stream.readable.0),
+            };
             bucket(&env)?
-                .put(key, bytes)
+                .put(key, data)
                 .http_metadata(HttpMetadata {
                     content_type: Some(content_type),
                     ..HttpMetadata::default()

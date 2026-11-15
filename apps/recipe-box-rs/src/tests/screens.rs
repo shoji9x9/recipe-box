@@ -1037,6 +1037,52 @@ async fn post_photo(
     .await
 }
 
+/// 写真のバイト列をそのまま本文にして送る（JavaScript が 1 枚ずつ送るときの形）。
+async fn post_raw_photo(
+    backend: &FakeBackend,
+    recipe_path: &str,
+    cookie: &str,
+    content_type: &str,
+    photo: Vec<u8>,
+) -> TestResponse {
+    let request = Request::post(format!("{recipe_path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header("cf-connecting-ip", "192.0.2.1")
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, photo.len())
+        .body(Body::from(photo))
+        .unwrap();
+    send(router(backend.clone()), request).await
+}
+
+#[tokio::test]
+async fn photo_bytes_can_be_sent_without_multipart() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+
+    let response = post_raw_photo(&backend, &path, &a, "image/jpeg", jpeg(10)).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location, path);
+    {
+        let stored = backend.objects.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored.values().next().unwrap().0, jpeg(10));
+    }
+
+    // 形式は中身で決めるので、宣言が画像でも中身が違えば断る。
+    let response =
+        post_raw_photo(&backend, &path, &a, "image/jpeg", b"not an image".to_vec()).await;
+    assert_eq!(response.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    // 空の本文は、ファイルを選ばずに送ったときと同じに扱う。
+    let response = post_raw_photo(&backend, &path, &a, "image/jpeg", Vec::new()).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("追加する写真を選んでください"));
+    assert_eq!(backend.objects.lock().unwrap().len(), 1);
+}
+
 /// JPEG の先頭のバイトで始まり、全体で `size` バイトのデータ。
 fn jpeg(size: usize) -> Vec<u8> {
     let mut bytes = vec![0; size];
