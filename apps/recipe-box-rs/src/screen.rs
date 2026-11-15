@@ -3,12 +3,15 @@
 //! ワークスペースの ID は Cookie で受け取る。Cookie が無ければ共有のデモを、デモも無ければ「はじめる」画面を出す。
 //! ワークスペースは、GET では作らない（検索エンジンの巡回などで、アプリ全体の 1 日の上限を使い切らせないため）。
 //! 画面は API と同じ処理（`recipe`・`workspace`）を使い、上限や入力の決まりも API と同じにする。
+//!
+//! 入力の検証はサーバーだけで行う（ブラウザの標準の検証は使わない）。決まりとメッセージを API と 1 か所にまとめるため。
+//! ページ全体へのメッセージ（「保存しました」・上限など）は、見出しの下に、自動では消えない形で出す。
 
 use std::fmt::Write as _;
 
 use askama::Template;
 use axum::{
-    Form,
+    Extension, Form,
     extract::{
         Path, Query, Request, State,
         rejection::{FormRejection, QueryRejection},
@@ -23,7 +26,7 @@ use crate::{
     backend::Backend,
     error::ApiError,
     limits::check_write,
-    recipe::{self, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput, validate},
+    recipe::{self, FieldError, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput},
     workspace::{self, WorkspaceId},
 };
 
@@ -31,10 +34,20 @@ use crate::{
 ///
 /// `__Host-` で始まる名前の Cookie は、Secure・Path=/・Domain なしでしか保存されないので、
 /// ほかのサブドメインや HTTP から書き換えられない。
-const COOKIE_NAME: &str = "__Host-workspace";
-/// Cookie を残す期間（400 日。ブラウザが受け付ける最長）。ワークスペースは 14 日使わないと消えるが、
+const WORKSPACE_COOKIE: &str = "__Host-workspace";
+/// ワークスペースの Cookie を残す期間（400 日。ブラウザが受け付ける最長）。ワークスペースは 14 日使わないと消えるが、
 /// 使っている間に Cookie が先に切れないよう、長くしておく。
-const COOKIE_MAX_AGE_SECONDS: u32 = 400 * 24 * 60 * 60;
+const WORKSPACE_COOKIE_MAX_AGE: u32 = 400 * 24 * 60 * 60;
+/// 自分のワークスペースを持つ人が、一時的に共有のデモを見ていることを示す Cookie の名前。
+const DEMO_VIEW_COOKIE: &str = "__Host-demo-view";
+/// 一時的にデモを見る期間（1 時間）。過ぎると自分のレシピ帳に戻る。
+/// デモを見ていることを忘れて、自分のレシピを共有のデモに書かないようにするため。
+const DEMO_VIEW_MAX_AGE: u32 = 60 * 60;
+/// 次の画面に一度だけ出すメッセージ（「保存しました」など）を渡す Cookie の名前。
+/// 中身はメッセージの種類のコードだけで、文は入れない。
+const FLASH_COOKIE: &str = "__Host-flash";
+/// メッセージを渡す Cookie を残す期間。移動の直後に読むので短くする。
+const FLASH_MAX_AGE: u32 = 60;
 
 /// htmx に、アドレスバーの URL を変えるかを指示する応答のヘッダー。
 const HX_PUSH_URL: HeaderName = HeaderName::from_static("hx-push-url");
@@ -54,23 +67,127 @@ const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
     (header::CACHE_CONTROL, "no-store"),
 ];
 
+/// 次の画面に一度だけ出す、操作が済んだことの知らせ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flash {
+    RecipeCreated,
+    RecipeSaved,
+    RecipeDeleted,
+    WorkspaceCreated,
+    WorkspaceSwitched,
+    DemoViewStarted,
+    DemoViewEnded,
+    WorkspaceForgotten,
+}
+
+impl Flash {
+    const ALL: [Self; 8] = [
+        Self::RecipeCreated,
+        Self::RecipeSaved,
+        Self::RecipeDeleted,
+        Self::WorkspaceCreated,
+        Self::WorkspaceSwitched,
+        Self::DemoViewStarted,
+        Self::DemoViewEnded,
+        Self::WorkspaceForgotten,
+    ];
+
+    /// Cookie に入れるコード。
+    fn code(self) -> &'static str {
+        match self {
+            Self::RecipeCreated => "recipe-created",
+            Self::RecipeSaved => "recipe-saved",
+            Self::RecipeDeleted => "recipe-deleted",
+            Self::WorkspaceCreated => "workspace-created",
+            Self::WorkspaceSwitched => "workspace-switched",
+            Self::DemoViewStarted => "demo-view-started",
+            Self::DemoViewEnded => "demo-view-ended",
+            Self::WorkspaceForgotten => "workspace-forgotten",
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::RecipeCreated => "レシピを登録しました",
+            Self::RecipeSaved => "レシピを保存しました",
+            Self::RecipeDeleted => "レシピを削除しました",
+            Self::WorkspaceCreated => {
+                "あなた専用のレシピ帳を作りました。ID は「ワークスペース」の画面で確かめられます"
+            }
+            Self::WorkspaceSwitched => "ワークスペースを切り替えました",
+            Self::DemoViewStarted => {
+                "共有のデモに切り替えました。1 時間たつと、自分のレシピ帳に戻ります"
+            }
+            Self::DemoViewEnded => "自分のレシピ帳に戻りました",
+            Self::WorkspaceForgotten => "このブラウザでの利用をやめました",
+        }
+    }
+
+    fn parse(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|flash| flash.code() == code)
+    }
+}
+
+/// リクエストの Cookie から読んだ、画面を見ている人の状態。[`identify`] が作ってハンドラーに渡す。
+#[derive(Debug, Clone)]
+pub struct Session {
+    /// その人のワークスペース（在ることを確かめ、最終利用日時を更新した後のもの）。
+    own: Option<WorkspaceId>,
+    /// 自分のワークスペースを持ちながら、一時的に共有のデモを見ているか。
+    viewing_demo: bool,
+    /// 前の操作から渡された、一度だけ出すメッセージ。
+    flash: Option<Flash>,
+}
+
 /// 画面を見ている人が使うワークスペース。
 enum Viewer {
     /// Cookie で受け取った、その人のワークスペース。
     Own(WorkspaceId),
-    /// 共有のデモ。ID は画面に出さない。
-    Demo(WorkspaceId),
+    /// 共有のデモ。ID は画面に出さない。`own_available` は、自分のワークスペースに戻れるか。
+    Demo {
+        id: WorkspaceId,
+        own_available: bool,
+    },
 }
 
 impl Viewer {
     fn id(&self) -> &WorkspaceId {
         match self {
-            Self::Own(id) | Self::Demo(id) => id,
+            Self::Own(id) | Self::Demo { id, .. } => id,
+        }
+    }
+}
+
+/// すべての画面に共通の、見出しの上下に出すもの（base.html が使う）。
+#[derive(Debug, Default)]
+struct Layout {
+    /// 共有のデモを見ていて、自分のワークスペースが無い（「自分だけのレシピ帳を作る」を出す）。
+    demo_shared: bool,
+    /// 自分のワークスペースを持ちながら、一時的にデモを見ている（「自分のレシピ帳に戻る」を出す）。
+    demo_visiting: bool,
+    /// 操作が済んだことの知らせ（緑）。
+    flash: Option<&'static str>,
+    /// ページ全体への誤りの知らせ（赤）。
+    alert: Option<&'static str>,
+}
+
+impl Layout {
+    fn new(viewer: Option<&Viewer>, session: &Session) -> Self {
+        let (demo_shared, demo_visiting) = match viewer {
+            Some(Viewer::Demo { own_available, .. }) => (!own_available, *own_available),
+            _ => (false, false),
+        };
+        Self {
+            demo_shared,
+            demo_visiting,
+            flash: session.flash.map(Flash::message),
+            alert: None,
         }
     }
 
-    fn is_demo(&self) -> bool {
-        matches!(self, Self::Demo(_))
+    fn with_alert(mut self, alert: &'static str) -> Self {
+        self.alert = Some(alert);
+        self
     }
 }
 
@@ -91,10 +208,7 @@ impl From<ApiError> for ScreenError {
 impl IntoResponse for ScreenError {
     fn into_response(self) -> Response {
         match self {
-            Self::Api(error) => {
-                let (status, _, message) = error.parts();
-                render(status, &ErrorPage { message })
-            }
+            Self::Api(error) => error_page(&error),
             Self::NoWorkspace => see_other("/"),
         }
     }
@@ -103,13 +217,24 @@ impl IntoResponse for ScreenError {
 #[derive(Template)]
 #[template(path = "error.html")]
 struct ErrorPage {
-    message: &'static str,
+    layout: Layout,
+}
+
+/// エラーの画面。説明は見出しの下の知らせに出す。
+fn error_page(error: &ApiError) -> Response {
+    let (status, _, message) = error.parts();
+    render(
+        status,
+        &ErrorPage {
+            layout: Layout::default().with_alert(message),
+        },
+    )
 }
 
 #[derive(Template)]
 #[template(path = "landing.html")]
 struct LandingPage {
-    error: Option<&'static str>,
+    layout: Layout,
 }
 
 /// 一覧のページへのリンク。
@@ -122,7 +247,7 @@ struct PageLink {
 #[derive(Template)]
 #[template(path = "list.html")]
 struct ListPage {
-    demo: bool,
+    layout: Layout,
     q: String,
     total: i64,
     page: i64,
@@ -134,14 +259,14 @@ struct ListPage {
 #[derive(Template)]
 #[template(path = "detail.html")]
 struct DetailPage {
-    demo: bool,
+    layout: Layout,
     recipe: Recipe,
 }
 
 #[derive(Template)]
 #[template(path = "form.html")]
 struct FormPage {
-    demo: bool,
+    layout: Layout,
     heading: &'static str,
     action: String,
     cancel_href: String,
@@ -149,17 +274,26 @@ struct FormPage {
     servings: String,
     ingredients: String,
     steps: String,
-    error: Option<&'static str>,
-    /// 誤りのある項目の名前。無ければ空。
-    error_field: &'static str,
+    /// すべての項目の誤り（フォームの上の一覧に出す）。
+    errors: Vec<FieldError>,
+    name_error: Option<&'static str>,
+    servings_error: Option<&'static str>,
+    ingredients_error: Option<&'static str>,
+    steps_error: Option<&'static str>,
 }
 
 #[derive(Template)]
 #[template(path = "workspace.html")]
 struct WorkspacePage {
-    demo: bool,
+    layout: Layout,
+    /// 自分のワークスペースの ID（デモを見ている間も出す）。
     own_id: Option<String>,
-    error: Option<&'static str>,
+    /// 共有のデモを見ているか。
+    viewing_demo: bool,
+    /// 共有のデモがあるか（「共有のデモを見る」を出すか）。
+    demo_available: bool,
+    /// 切り替えの欄の誤り。
+    switch_error: Option<&'static str>,
 }
 
 /// テンプレートを HTML にして返す。テンプレートの失敗は、中身を出さずに 500 にする。
@@ -180,33 +314,39 @@ fn see_other(location: &str) -> Response {
     (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
 }
 
-/// ワークスペースの ID を保存する Cookie。
-fn set_cookie(id: &WorkspaceId) -> HeaderValue {
-    let value = format!(
-        "{COOKIE_NAME}={id}; Path=/; Max-Age={COOKIE_MAX_AGE_SECONDS}; Secure; HttpOnly; SameSite=Lax"
-    );
-    // ID は 16 進数だけなので、ヘッダーの値として必ず正しい。
-    HeaderValue::from_str(&value).expect("Cookie の値は ASCII だけでできている")
+/// 移動先の画面に、一度だけ `flash` を出す。
+fn see_other_with(location: &str, flash: Flash) -> Response {
+    let mut response = see_other(location);
+    add_cookie(&mut response, FLASH_COOKIE, flash.code(), FLASH_MAX_AGE);
+    response
 }
 
-/// ワークスペースの ID の Cookie を消す。
-fn clear_cookie() -> HeaderValue {
-    HeaderValue::from_static("__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax")
+/// 応答に Cookie を足す。値は ASCII の英数字と `-` だけを渡す。
+fn add_cookie(response: &mut Response, name: &str, value: &str, max_age: u32) {
+    let cookie =
+        format!("{name}={value}; Path=/; Max-Age={max_age}; Secure; HttpOnly; SameSite=Lax");
+    // 名前と値は、このファイルの定数とコード（ASCII）だけなので、ヘッダーの値として必ず正しい。
+    let value = HeaderValue::from_str(&cookie).expect("Cookie の値は ASCII だけでできている");
+    response.headers_mut().append(header::SET_COOKIE, value);
 }
 
-/// Cookie からワークスペースの ID を読む。無い・形が正しくない・2 つ以上あるときは `None`。
-fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
+/// 応答で Cookie を消す。
+fn remove_cookie(response: &mut Response, name: &str) {
+    add_cookie(response, name, "", 0);
+}
+
+/// Cookie の値を読む。無いか、同じ名前が 2 つ以上あれば `None`（どちらを使うか決められないため）。
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut found = None;
     for value in headers.get_all(header::COOKIE) {
         let Ok(text) = value.to_str() else {
             continue;
         };
         for pair in text.split(';') {
-            let Some((name, value)) = pair.trim().split_once('=') else {
+            let Some((key, value)) = pair.trim().split_once('=') else {
                 continue;
             };
-            if name == COOKIE_NAME {
-                // どちらのワークスペースか決められないので、使わない。
+            if key == name {
                 if found.is_some() {
                     return None;
                 }
@@ -214,40 +354,78 @@ fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
             }
         }
     }
-    found.and_then(WorkspaceId::parse)
+    found
 }
 
-/// 画面を見ている人のワークスペースを決める。
+/// Cookie からワークスペースの ID を読む。無い・形が正しくない・2 つ以上あるときは `None`。
+fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
+    cookie_value(headers, WORKSPACE_COOKIE).and_then(WorkspaceId::parse)
+}
+
+/// Cookie から、画面を見ている人の状態を読む middleware。すべての画面の前に動く。
 ///
-/// 戻り値の 2 つ目は、Cookie に ID があったのに、そのワークスペースが無かったか（自動削除で消えたなど）。
-/// そのときは Cookie を消し、デモ（無ければ「はじめる」画面）を出す。
-async fn resolve<B: Backend>(
-    backend: &B,
-    headers: &HeaderMap,
-) -> Result<(Option<Viewer>, bool), ApiError> {
-    let mut stale = false;
-    if let Some(id) = cookie_workspace(headers) {
-        if workspace::touch(backend, &id).await? {
-            return Ok((Some(Viewer::Own(id)), false));
-        }
-        stale = true;
+/// - ワークスペースの Cookie があれば、在ることを確かめて最終利用日時を更新する。
+///   無くなっていれば（自動削除など）、どの画面でも Cookie を消す。
+/// - 一度だけ出すメッセージがあれば読み、画面を返すときに消す（移動のときは、移動先で読むので残す）。
+pub async fn identify<B: Backend>(
+    State(backend): State<B>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let headers = request.headers();
+    let flash = cookie_value(headers, FLASH_COOKIE).and_then(Flash::parse);
+    let viewing_demo = cookie_value(headers, DEMO_VIEW_COOKIE) == Some("1");
+    let cookie_id = cookie_workspace(headers);
+    let (own, stale) = match cookie_id {
+        Some(id) => match workspace::touch(&backend, &id).await {
+            Ok(true) => (Some(id), false),
+            Ok(false) => (None, true),
+            Err(error) => return error_page(&error),
+        },
+        None => (None, false),
+    };
+    request.extensions_mut().insert(Session {
+        own,
+        viewing_demo,
+        flash,
+    });
+    let mut response = next.run(request).await;
+    if stale {
+        remove_cookie(&mut response, WORKSPACE_COOKIE);
+        remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+    }
+    if flash.is_some() && !response.status().is_redirection() {
+        remove_cookie(&mut response, FLASH_COOKIE);
+    }
+    response
+}
+
+/// 画面を見ている人が使うワークスペースを決める。
+///
+/// 1. 自分のワークスペースがあり、一時的にデモを見ていなければ、それを使う。
+/// 2. 共有のデモがあれば、それを使う。
+/// 3. デモが無くても、自分のワークスペースがあれば、それを使う（デモを見ている途中でデモが無くなったとき）。
+async fn resolve<B: Backend>(backend: &B, session: &Session) -> Result<Option<Viewer>, ApiError> {
+    if let Some(id) = &session.own
+        && !session.viewing_demo
+    {
+        return Ok(Some(Viewer::Own(id.clone())));
     }
     if let Some(id) = backend.demo_workspace_id()
         && workspace::touch(backend, &id).await?
     {
-        return Ok((Some(Viewer::Demo(id)), stale));
+        return Ok(Some(Viewer::Demo {
+            id,
+            own_available: session.own.is_some(),
+        }));
     }
-    Ok((None, stale))
+    Ok(session.own.clone().map(Viewer::Own))
 }
 
 /// ワークスペースが要る画面で、使うワークスペースを決める。無ければ「はじめる」画面へ移す。
-async fn require_viewer<B: Backend>(
-    backend: &B,
-    headers: &HeaderMap,
-) -> Result<Viewer, ScreenError> {
-    resolve(backend, headers)
+async fn require_viewer<B: Backend>(backend: &B, session: &Session) -> Result<Viewer, ScreenError> {
+    resolve(backend, session)
         .await?
-        .0
         .ok_or(ScreenError::NoWorkspace)
 }
 
@@ -284,33 +462,23 @@ fn list_href(q: &str, page: i64) -> String {
 /// `GET /?q=<文字列>&page=<番号>`: レシピの一覧。ワークスペースが無ければ「はじめる」画面。
 pub async fn index<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     params: Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Response, ScreenError> {
-    let (viewer, stale) = resolve(&backend, &headers).await?;
-    let mut response = match viewer {
-        Some(viewer) => list(&backend, &viewer, params).await?,
-        None => render(StatusCode::OK, &LandingPage { error: None }),
+    let Some(viewer) = resolve(&backend, &session).await? else {
+        return Ok(render(
+            StatusCode::OK,
+            &LandingPage {
+                layout: Layout::new(None, &session),
+            },
+        ));
     };
-    if stale {
-        response
-            .headers_mut()
-            .append(header::SET_COOKIE, clear_cookie());
-    }
-    Ok(response)
-}
-
-async fn list<B: Backend>(
-    backend: &B,
-    viewer: &Viewer,
-    params: Result<Query<Vec<(String, String)>>, QueryRejection>,
-) -> Result<Response, ScreenError> {
     let Query(params) = params.map_err(|_| ApiError::InvalidField {
         field: "q",
-        message: "検索の条件（q）が正しくありません",
+        message: "検索の条件が正しくありません",
     })?;
     let (pattern, page) = recipe::parse_list_params(&params)?;
-    let result = recipe::list_page(backend, viewer.id(), pattern.as_deref(), page).await?;
+    let result = recipe::list_page(&backend, viewer.id(), pattern.as_deref(), page).await?;
     let q = pattern.unwrap_or_default();
     // レシピが無くても 1 ページ目は出す。レシピの数の上限があるので、ページの数は MAX_PAGE を超えない。
     let page_count = ((result.total + PAGE_SIZE - 1) / PAGE_SIZE).clamp(1, MAX_PAGE);
@@ -324,7 +492,7 @@ async fn list<B: Backend>(
     Ok(render(
         StatusCode::OK,
         &ListPage {
-            demo: viewer.is_demo(),
+            layout: Layout::new(Some(&viewer), &session),
             first_page_href: list_href(&q, 1),
             q,
             total: result.total,
@@ -368,22 +536,34 @@ fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
-/// フォームを、入力した値と誤りを保ったまま出し直す。
+/// 登録か編集か。フォームの見出しと送り先を決める。
+enum FormKind {
+    New,
+    Edit(String),
+}
+
+/// フォームを、入力した値と誤りを保ったまま出す。
 fn form_page(
-    viewer: &Viewer,
-    heading: &'static str,
-    action: String,
-    cancel_href: String,
+    layout: Layout,
+    kind: &FormKind,
     form: &RecipeForm,
-    error: Option<&ApiError>,
+    errors: Vec<FieldError>,
 ) -> FormPage {
-    let (error, error_field) = match error {
-        Some(ApiError::InvalidField { field, message }) => (Some(*message), *field),
-        Some(other) => (Some(other.parts().2), ""),
-        None => (None, ""),
+    let error_of = |field: &str| {
+        errors
+            .iter()
+            .find(|error| error.field == field)
+            .map(|error| error.message)
+    };
+    let (heading, action, cancel_href) = match kind {
+        FormKind::New => ("レシピを登録する", "/recipes".to_owned(), "/".to_owned()),
+        FormKind::Edit(id) => (
+            "レシピを編集する",
+            format!("/recipes/{id}"),
+            format!("/recipes/{id}"),
+        ),
     };
     FormPage {
-        demo: viewer.is_demo(),
         heading,
         action,
         cancel_href,
@@ -391,37 +571,75 @@ fn form_page(
         servings: form.servings.clone(),
         ingredients: normalize_newlines(&form.ingredients),
         steps: normalize_newlines(&form.steps),
-        error,
-        error_field,
+        name_error: error_of("name"),
+        servings_error: error_of("servings"),
+        ingredients_error: error_of("ingredients"),
+        steps_error: error_of("steps"),
+        errors,
+        layout,
     }
 }
 
-/// フォームの本文を読めなかったとき（`Content-Type` が違うなど）の失敗。
-fn form_error(_: &FormRejection) -> ScreenError {
-    ScreenError::Api(ApiError::InvalidBody)
+/// フォームの本文を読めなかったときの失敗。本文が上限より大きければ API と同じく 413、それ以外は 400。
+fn form_error(rejection: &FormRejection) -> ScreenError {
+    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ScreenError::Api(ApiError::PayloadTooLarge)
+    } else {
+        ScreenError::Api(ApiError::InvalidBody)
+    }
 }
 
-/// 入力の誤りとレシピの数の上限は、フォームに出し直す。それ以外の失敗は、エラーの画面にする。
-fn is_form_error(error: &ApiError) -> bool {
-    matches!(
-        error,
-        ApiError::InvalidField { .. } | ApiError::RecipeLimitReached
-    )
+/// 登録と更新で共通の処理。入力の誤りとレシピの数の上限は、フォームに出し直す。
+async fn save<B: Backend>(
+    backend: &B,
+    session: &Session,
+    viewer: &Viewer,
+    kind: FormKind,
+    form: &RecipeForm,
+) -> Result<Response, ScreenError> {
+    let layout = || Layout::new(Some(viewer), session);
+    let fields = match recipe::check(form.to_input()) {
+        Ok(fields) => fields,
+        Err(errors) => {
+            return Ok(render(
+                StatusCode::BAD_REQUEST,
+                &form_page(layout(), &kind, form, errors),
+            ));
+        }
+    };
+    let result = match &kind {
+        FormKind::New => recipe::insert(backend, viewer.id(), fields)
+            .await
+            .map(|recipe| (recipe.id, Flash::RecipeCreated)),
+        FormKind::Edit(id) => {
+            let id = parse_id(id)?;
+            recipe::replace(backend, viewer.id(), &id, fields)
+                .await
+                .map(|recipe| (recipe.id, Flash::RecipeSaved))
+        }
+    };
+    match result {
+        Ok((id, flash)) => Ok(see_other_with(&format!("/recipes/{id}"), flash)),
+        Err(error @ ApiError::RecipeLimitReached) => {
+            let (status, _, message) = error.parts();
+            let page = form_page(layout().with_alert(message), &kind, form, Vec::new());
+            Ok(render(status, &page))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// `GET /recipes/new`: 登録のフォーム。
 pub async fn new_form<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &headers).await?;
+    let viewer = require_viewer(&backend, &session).await?;
     let page = form_page(
-        &viewer,
-        "レシピを登録する",
-        "/recipes".to_owned(),
-        "/".to_owned(),
+        Layout::new(Some(&viewer), &session),
+        &FormKind::New,
         &RecipeForm::default(),
-        None,
+        Vec::new(),
     );
     Ok(render(StatusCode::OK, &page))
 }
@@ -429,31 +647,12 @@ pub async fn new_form<B: Backend>(
 /// `POST /recipes`: レシピを登録し、詳細の画面へ移す。
 pub async fn create<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &headers).await?;
+    let viewer = require_viewer(&backend, &session).await?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
-    let result = match validate(form.to_input()) {
-        Ok(fields) => recipe::insert(&backend, viewer.id(), fields).await,
-        Err(error) => Err(error),
-    };
-    match result {
-        Ok(recipe) => Ok(see_other(&format!("/recipes/{}", recipe.id))),
-        Err(error) if is_form_error(&error) => {
-            let (status, _, _) = error.parts();
-            let page = form_page(
-                &viewer,
-                "レシピを登録する",
-                "/recipes".to_owned(),
-                "/".to_owned(),
-                &form,
-                Some(&error),
-            );
-            Ok(render(status, &page))
-        }
-        Err(error) => Err(error.into()),
-    }
+    save(&backend, &session, &viewer, FormKind::New, &form).await
 }
 
 /// パスのレシピの ID を読む。形が正しくなければ、API と同じく「見つからない」にする。
@@ -477,15 +676,15 @@ async fn load<B: Backend>(
 /// `GET /recipes/{id}`: レシピの詳細。
 pub async fn detail<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     Path(id): Path<String>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &headers).await?;
+    let viewer = require_viewer(&backend, &session).await?;
     let recipe = load(&backend, &viewer, &parse_id(&id)?).await?;
     Ok(render(
         StatusCode::OK,
         &DetailPage {
-            demo: viewer.is_demo(),
+            layout: Layout::new(Some(&viewer), &session),
             recipe,
         },
     ))
@@ -494,11 +693,12 @@ pub async fn detail<B: Backend>(
 /// `GET /recipes/{id}/edit`: 編集のフォーム。今の値を入れておく。
 pub async fn edit_form<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     Path(id): Path<String>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &headers).await?;
+    let viewer = require_viewer(&backend, &session).await?;
     let recipe = load(&backend, &viewer, &parse_id(&id)?).await?;
+    let kind = FormKind::Edit(recipe.id.clone());
     let form = RecipeForm {
         servings: recipe.servings.to_string(),
         name: recipe.name,
@@ -506,12 +706,10 @@ pub async fn edit_form<B: Backend>(
         steps: recipe.steps,
     };
     let page = form_page(
-        &viewer,
-        "レシピを編集する",
-        format!("/recipes/{}", recipe.id),
-        format!("/recipes/{}", recipe.id),
+        Layout::new(Some(&viewer), &session),
+        &kind,
         &form,
-        None,
+        Vec::new(),
     );
     Ok(render(StatusCode::OK, &page))
 }
@@ -519,34 +717,21 @@ pub async fn edit_form<B: Backend>(
 /// `POST /recipes/{id}`: レシピの中身を置き換え、詳細の画面へ移す。
 pub async fn update<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     Path(id): Path<String>,
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &headers).await?;
+    let viewer = require_viewer(&backend, &session).await?;
     let id = parse_id(&id)?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
-    let result = match validate(form.to_input()) {
-        Ok(fields) => recipe::replace(&backend, viewer.id(), &id, fields).await,
-        Err(error) => Err(error),
-    };
-    let href = format!("/recipes/{id}");
-    match result {
-        Ok(_) => Ok(see_other(&href)),
-        Err(error) if is_form_error(&error) => {
-            let (status, _, _) = error.parts();
-            let page = form_page(
-                &viewer,
-                "レシピを編集する",
-                href.clone(),
-                href,
-                &form,
-                Some(&error),
-            );
-            Ok(render(status, &page))
-        }
-        Err(error) => Err(error.into()),
-    }
+    save(
+        &backend,
+        &session,
+        &viewer,
+        FormKind::Edit(id.to_string()),
+        &form,
+    )
+    .await
 }
 
 /// 削除のフォームの値。一覧から消したときは、同じ検索の条件とページに戻す。
@@ -559,11 +744,11 @@ pub struct DeleteForm {
 /// `POST /recipes/{id}/delete`: レシピを消し、一覧へ移す。
 pub async fn delete<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     Path(id): Path<String>,
     form: Result<Form<DeleteForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &headers).await?;
+    let viewer = require_viewer(&backend, &session).await?;
     let id = parse_id(&id)?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     if !backend
@@ -586,46 +771,62 @@ pub async fn delete<B: Backend>(
         |_| "/".to_owned(),
         |(q, page)| list_href(q.as_deref().unwrap_or_default(), page),
     );
-    Ok(see_other(&location))
+    Ok(see_other_with(&location, Flash::RecipeDeleted))
+}
+
+/// ワークスペースの画面を作る。
+async fn workspace_view<B: Backend>(
+    backend: &B,
+    session: &Session,
+    switch_error: Option<&'static str>,
+) -> Result<WorkspacePage, ApiError> {
+    let viewer = resolve(backend, session).await?;
+    Ok(WorkspacePage {
+        layout: Layout::new(viewer.as_ref(), session),
+        own_id: session.own.as_ref().map(ToString::to_string),
+        viewing_demo: matches!(viewer, Some(Viewer::Demo { .. })),
+        demo_available: backend.demo_workspace_id().is_some(),
+        switch_error,
+    })
 }
 
 /// `GET /workspace`: ワークスペースの ID の表示と切り替え。
 pub async fn workspace_page<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
 ) -> Result<Response, ScreenError> {
-    let (viewer, _) = resolve(&backend, &headers).await?;
-    let page = WorkspacePage {
-        demo: viewer.as_ref().is_some_and(Viewer::is_demo),
-        own_id: match viewer {
-            Some(Viewer::Own(id)) => Some(id.to_string()),
-            _ => None,
-        },
-        error: None,
-    };
+    let page = workspace_view(&backend, &session, None).await?;
     Ok(render(StatusCode::OK, &page))
+}
+
+/// 自分のワークスペースに切り替えて、一覧へ移す。一時的にデモを見ていたら、それもやめる。
+fn use_workspace(id: &WorkspaceId, flash: Flash) -> Response {
+    let mut response = see_other_with("/", flash);
+    add_cookie(
+        &mut response,
+        WORKSPACE_COOKIE,
+        id.as_str(),
+        WORKSPACE_COOKIE_MAX_AGE,
+    );
+    remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+    response
 }
 
 /// `POST /workspace`: ワークスペースを作り、Cookie に保存して一覧へ移す。
 pub async fn create_workspace<B: Backend>(
     State(backend): State<B>,
+    Extension(session): Extension<Session>,
     headers: HeaderMap,
 ) -> Result<Response, ScreenError> {
     match workspace::create_new(&backend, &headers).await {
-        Ok(id) => {
-            let mut response = see_other("/");
-            response
-                .headers_mut()
-                .append(header::SET_COOKIE, set_cookie(&id));
-            Ok(response)
-        }
+        Ok(id) => Ok(use_workspace(&id, Flash::WorkspaceCreated)),
         // 回数や全体の上限に当たったときは、「はじめる」画面に理由を出す。
         Err(error @ (ApiError::TooManyRequests | ApiError::CapacityReached)) => {
             let (status, _, message) = error.parts();
             Ok(render(
                 status,
                 &LandingPage {
-                    error: Some(message),
+                    layout: Layout::new(None, &session).with_alert(message),
                 },
             ))
         }
@@ -643,42 +844,59 @@ pub struct SwitchForm {
 /// `POST /workspace/switch`: 入力した ID のワークスペースに切り替える。
 pub async fn switch_workspace<B: Backend>(
     State(backend): State<B>,
-    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     form: Result<Form<SwitchForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     // 前後の空白は、コピーしたときに入りやすいので取り除く。
-    let found = match WorkspaceId::parse(form.id.trim()) {
-        Some(id) => workspace::touch(&backend, &id).await?.then_some(id),
-        None => None,
+    let id = form.id.trim();
+    let error = if id.is_empty() {
+        "ワークスペースの ID を入力してください"
+    } else {
+        match WorkspaceId::parse(id) {
+            Some(id) if workspace::touch(&backend, &id).await? => {
+                return Ok(use_workspace(&id, Flash::WorkspaceSwitched));
+            }
+            _ => {
+                "その ID のワークスペースは見つかりません。ID が正しいか、14 日使わずに消えていないかを確かめてください"
+            }
+        }
     };
-    let Some(id) = found else {
-        let (viewer, _) = resolve(&backend, &headers).await?;
-        let page = WorkspacePage {
-            demo: viewer.as_ref().is_some_and(Viewer::is_demo),
-            own_id: match viewer {
-                Some(Viewer::Own(id)) => Some(id.to_string()),
-                _ => None,
-            },
-            error: Some(
-                "その ID のワークスペースは見つかりません。ID が正しいか、14 日使わずに消えていないかを確かめてください",
-            ),
-        };
-        return Ok(render(StatusCode::NOT_FOUND, &page));
+    let status = if id.is_empty() {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::NOT_FOUND
     };
-    let mut response = see_other("/");
-    response
-        .headers_mut()
-        .append(header::SET_COOKIE, set_cookie(&id));
-    Ok(response)
+    let page = workspace_view(&backend, &session, Some(error)).await?;
+    Ok(render(status, &page))
 }
 
 /// `POST /workspace/forget`: このブラウザの Cookie を消す。ワークスペースそのものは消さない。
 pub async fn forget_workspace() -> Response {
-    let mut response = see_other("/");
+    let mut response = see_other_with("/", Flash::WorkspaceForgotten);
+    remove_cookie(&mut response, WORKSPACE_COOKIE);
+    remove_cookie(&mut response, DEMO_VIEW_COOKIE);
     response
-        .headers_mut()
-        .append(header::SET_COOKIE, clear_cookie());
+}
+
+/// `POST /workspace/demo`: 自分のワークスペースを残したまま、1 時間だけ共有のデモを見る。
+pub async fn view_demo<B: Backend>(
+    State(backend): State<B>,
+    Extension(session): Extension<Session>,
+) -> Result<Response, ScreenError> {
+    // 自分のワークスペースが無い人は、もともとデモを見ている。デモが無ければ切り替えられない。
+    if session.own.is_none() || backend.demo_workspace_id().is_none() {
+        return Ok(see_other("/"));
+    }
+    let mut response = see_other_with("/", Flash::DemoViewStarted);
+    add_cookie(&mut response, DEMO_VIEW_COOKIE, "1", DEMO_VIEW_MAX_AGE);
+    Ok(response)
+}
+
+/// `POST /workspace/own`: 一時的に見ていた共有のデモから、自分のワークスペースに戻る。
+pub async fn view_own() -> Response {
+    let mut response = see_other_with("/", Flash::DemoViewEnded);
+    remove_cookie(&mut response, DEMO_VIEW_COOKIE);
     response
 }
 
@@ -697,12 +915,12 @@ pub async fn guard_writes<B: Backend>(
         render(
             StatusCode::FORBIDDEN,
             &ErrorPage {
-                message: "ほかのサイトから送られたフォームは受け付けません",
+                layout: Layout::default()
+                    .with_alert("ほかのサイトから送られたフォームは受け付けません"),
             },
         )
     } else if let Err(error) = check_write(&backend, request.method(), request.headers()).await {
-        let (status, _, message) = error.parts();
-        render(status, &ErrorPage { message })
+        error_page(&error)
     } else {
         next.run(request).await
     };
@@ -748,7 +966,7 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header};
 
-    use super::{cookie_workspace, encode, list_href, same_origin};
+    use super::{Flash, cookie_workspace, encode, list_href, same_origin};
 
     fn cookies(values: &[&str]) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -778,6 +996,14 @@ mod tests {
             None
         );
         assert_eq!(read(&[&format!("workspace={id}")]), None);
+    }
+
+    #[test]
+    fn flash_codes_round_trip() {
+        for flash in Flash::ALL {
+            assert_eq!(Flash::parse(flash.code()), Some(flash));
+        }
+        assert_eq!(Flash::parse("unknown"), None);
     }
 
     #[test]

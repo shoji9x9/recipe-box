@@ -17,7 +17,35 @@
       <a class="brand" href="/">recipe-box</a>
       <nav><a href="/workspace">ワークスペース</a></nav>
     </header>
+    {#- 共有のデモを見ている間は、どの画面にも出す。 #}
+    {%- if layout.demo_shared %}
+    <section class="demo-banner">
+      <p>誰でも見て編集できる、共有のデモです。個人情報や、人に見られて困ることを書かないでください。デモは毎日リセットします。</p>
+      <form method="post" action="/workspace">
+        <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
+      </form>
+    </section>
+    {%- endif %}
+    {%- if layout.demo_visiting %}
+    <section class="demo-banner">
+      <p>共有のデモを表示しています。ここでの登録や編集は、誰にでも見えます。1 時間たつと、自分のレシピ帳に戻ります。</p>
+      <form method="post" action="/workspace/own">
+        <button type="submit" class="primary">自分のレシピ帳に戻る</button>
+      </form>
+    </section>
+    {%- endif %}
     <main>
+      <div class="page-head">
+        <h1>{% block heading %}{% endblock %}</h1>
+        {%- block head_actions %}{% endblock %}
+      </div>
+      {#- ページ全体へのメッセージ。自動では消さない。 #}
+      {%- if let Some(message) = layout.flash %}
+      <p class="message success" role="status">{{ message }}</p>
+      {%- endif %}
+      {%- if let Some(message) = layout.alert %}
+      <p class="message error" role="alert">{{ message }}</p>
+      {%- endif %}
       {%- block content %}{% endblock %}
     </main>
   </body>

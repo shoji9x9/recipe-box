@@ -70,10 +70,14 @@ fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
         ))
 }
 
-/// 画面。書き込み（POST）の前に、送り元と回数と本文の大きさを確かめ（[`screen::guard_writes`]）、
-/// すべての応答にセキュリティのためのヘッダーを付ける（[`screen::security_headers`]）。
+/// 画面。次の順に middleware を通る（[`screen`]）。
 ///
-/// CSS と htmx は静的アセット（`public/`）として Worker の外で配るので、ここには無い。
+/// 1. [`screen::security_headers`] — すべての応答に、セキュリティのためのヘッダーを付ける。
+/// 2. [`screen::guard_writes`] — 書き込み（POST）の送り元・回数・本文の大きさを確かめる。D1 を読む前に断るため、先に置く。
+/// 3. [`screen::identify`] — Cookie から、画面を見ている人のワークスペースを決める。
+///
+/// 本文の大きさは API と同じ上限にする。`Content-Length` の無い本文（chunked）も、ここで止める。
+/// CSS・htmx・アイコンは静的アセット（`public/`）として Worker の外で配るので、ここには無い。
 fn screen_routes<B: Backend>(backend: B) -> Router<B> {
     Router::new()
         .route("/", get(screen::index::<B>))
@@ -91,11 +95,18 @@ fn screen_routes<B: Backend>(backend: B) -> Router<B> {
         )
         .route("/workspace/switch", post(screen::switch_workspace::<B>))
         .route("/workspace/forget", post(screen::forget_workspace))
+        .route("/workspace/demo", post(screen::view_demo::<B>))
+        .route("/workspace/own", post(screen::view_own))
+        .route_layer(middleware::from_fn_with_state(
+            backend.clone(),
+            screen::identify::<B>,
+        ))
         .route_layer(middleware::from_fn_with_state(
             backend,
             screen::guard_writes::<B>,
         ))
         .route_layer(middleware::from_fn(screen::security_headers))
+        .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
 }
 
 /// 無いパスへの応答。API（`/api` とその下）には JSON の形で、画面には本文の無い 404 で答える。

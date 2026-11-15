@@ -1,11 +1,8 @@
 {% extends "base.html" %}
 {% block title %}エラー{% endblock %}
+{% block heading %}エラー{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>エラー</h1>
-  <p class="error" role="alert">{{ message }}</p>
-  <div class="actions">
-    <a class="button-link secondary" href="/">一覧に戻る</a>
-  </div>
-</section>
+<div class="actions">
+  <a class="button-link secondary" href="/">一覧に戻る</a>
+</div>
 {% endblock %}

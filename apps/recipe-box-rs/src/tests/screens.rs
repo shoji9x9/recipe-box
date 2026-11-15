@@ -10,7 +10,10 @@ use super::{
     fake::{FakeBackend, NOW},
     send,
 };
-use crate::{recipe::MAX_RECIPES_PER_WORKSPACE, router};
+use crate::{
+    recipe::{MAX_BODY_BYTES, MAX_RECIPES_PER_WORKSPACE},
+    router,
+};
 
 const HOST: &str = "recipe-box.example";
 const DEMO: &str = "dddddddddddddddddddddddddddddddd";
@@ -83,6 +86,13 @@ fn set_cookies(response: &TestResponse) -> Vec<String> {
         .iter()
         .map(|value| value.to_str().unwrap().to_owned())
         .collect()
+}
+
+/// 応答の Set-Cookie のうち、名前が `name` のものを返す。
+fn set_cookie_named(response: &TestResponse, name: &str) -> Option<String> {
+    set_cookies(response)
+        .into_iter()
+        .find(|cookie| cookie.starts_with(&format!("{name}=")))
 }
 
 /// レシピを画面から登録し、詳細の画面のパスを返す。
@@ -164,8 +174,6 @@ async fn start_creates_workspace_and_sets_cookie() {
     let response = screen_post(&backend, "/workspace", None, "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(response.location, "/");
-    let cookies = set_cookies(&response);
-    assert_eq!(cookies.len(), 1);
     let id = backend
         .workspaces
         .lock()
@@ -175,8 +183,13 @@ async fn start_creates_workspace_and_sets_cookie() {
         .unwrap()
         .clone();
     assert_eq!(
-        cookies[0],
+        set_cookie_named(&response, "__Host-workspace").unwrap(),
         format!("__Host-workspace={id}; Path=/; Max-Age=34560000; Secure; HttpOnly; SameSite=Lax")
+    );
+    // 移動先に一度だけ出すメッセージを、短い寿命の Cookie で渡す。
+    assert_eq!(
+        set_cookie_named(&response, "__Host-flash").unwrap(),
+        "__Host-flash=workspace-created; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax"
     );
     // その Cookie で一覧を開ける。
     let response = screen_get(&backend, "/", Some(&cookie(&id))).await;
@@ -434,9 +447,32 @@ async fn stale_cookie_is_cleared() {
     assert_eq!(response.status, StatusCode::OK);
     assert!(response.body.contains("はじめる"));
     assert_eq!(
-        set_cookies(&response),
-        ["__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"]
+        set_cookie_named(&response, "__Host-workspace").unwrap(),
+        "__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
     );
+}
+
+#[tokio::test]
+async fn stale_cookie_is_cleared_on_every_screen() {
+    // 共有のデモがあっても、消えたワークスペースの Cookie を持つ人を、デモに書き込ませたままにしない。
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let stale = cookie(WORKSPACE_A);
+    for response in [
+        screen_get(&backend, "/recipes/new", Some(&stale)).await,
+        screen_get(&backend, "/workspace", Some(&stale)).await,
+        screen_post(&backend, "/recipes", Some(&stale), "name=x&servings=1").await,
+    ] {
+        assert!(
+            set_cookie_named(&response, "__Host-workspace")
+                .is_some_and(|cookie| cookie.contains("Max-Age=0")),
+            "{:?}",
+            set_cookies(&response)
+        );
+    }
 }
 
 #[tokio::test]
@@ -454,7 +490,11 @@ async fn workspace_page_shows_own_id_and_switches() {
     )
     .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    assert!(set_cookies(&response)[0].starts_with(&cookie(WORKSPACE_B)));
+    assert!(
+        set_cookie_named(&response, "__Host-workspace")
+            .unwrap()
+            .starts_with(&cookie(WORKSPACE_B))
+    );
 
     // 無い ID と形の正しくない ID は、理由を出して切り替えない。
     for id in ["cccccccccccccccccccccccccccccccc", "xyz"] {
@@ -472,7 +512,11 @@ async fn workspace_page_shows_own_id_and_switches() {
     )
     .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
-    assert!(set_cookies(&response)[0].contains("Max-Age=0"));
+    assert!(
+        set_cookie_named(&response, "__Host-workspace")
+            .unwrap()
+            .contains("Max-Age=0")
+    );
     // 消すのは Cookie だけで、ワークスペースは残る。
     assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
 }
@@ -517,4 +561,224 @@ async fn post_answered_with_a_page_keeps_the_url() {
     // GET には付けない。
     let response = screen_get(&backend, "/", Some(&cookie(WORKSPACE_A))).await;
     assert!(!response.headers.contains_key("hx-push-url"));
+}
+
+#[tokio::test]
+async fn flash_message_is_shown_once() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let response = screen_post(&backend, "/recipes", Some(&a), "name=x&servings=1").await;
+    let flash = set_cookie_named(&response, "__Host-flash").unwrap();
+    let flash = flash.split(';').next().unwrap();
+    // 移動先で出し、Cookie を消す。
+    let with_flash = format!("{a}; {flash}");
+    let response = screen_get(&backend, &response.location, Some(&with_flash)).await;
+    assert!(
+        response
+            .body
+            .contains(r#"role="status">レシピを登録しました"#),
+        "{}",
+        response.body
+    );
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .is_some_and(|cookie| cookie.contains("Max-Age=0"))
+    );
+    // 知らない種類のコードは出さない（文は Cookie に入れない）。
+    let response = screen_get(&backend, "/", Some(&format!("{a}; __Host-flash=<script>"))).await;
+    assert!(!response.body.contains(r#"role="status""#));
+}
+
+#[tokio::test]
+async fn all_field_errors_are_shown_on_the_form() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let long_name = "🍛".repeat(101);
+    let form = format!(
+        "name={}&servings=0&ingredients={}&steps={}",
+        urlencode(&long_name),
+        "a".repeat(2_001),
+        "b".repeat(5_001)
+    );
+    let response = screen_post(&backend, "/recipes", Some(&a), &form).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    // まとめた一覧に 4 件、各欄の下にも 1 件ずつ出す。
+    assert!(
+        response.body.contains("入力に誤りがあります（4 件）"),
+        "{}",
+        response.body
+    );
+    for (field, message) in [
+        ("name", "料理名は 100 文字までです"),
+        (
+            "servings",
+            "何人分かは 1 から 100 までの整数で入力してください",
+        ),
+        ("ingredients", "材料は 2,000 文字までです"),
+        ("steps", "手順は 5,000 文字までです"),
+    ] {
+        assert!(
+            response
+                .body
+                .contains(&format!(r##"<a href="#{field}">{message}</a>"##)),
+            "{field}"
+        );
+        assert!(
+            response.body.contains(&format!(
+                r#"<p id="{field}-error" class="field-error">{message}</p>"#
+            )),
+            "{field}"
+        );
+        assert!(
+            response
+                .body
+                .contains(&format!(r#"aria-describedby="{field}-error""#)),
+            "{field}"
+        );
+    }
+    // ブラウザの標準の検証は使わない（maxlength は UTF-16 で数え、サーバーとずれるため）。
+    assert!(response.body.contains("novalidate"));
+    assert!(!response.body.contains("maxlength"));
+    assert!(!response.body.contains("required"));
+    // 100 文字ちょうどの絵文字の料理名は受け付ける（コードポイントで数える）。
+    let form = format!("name={}&servings=1", urlencode(&"🍛".repeat(100)));
+    let response = screen_post(&backend, "/recipes", Some(&a), &form).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+}
+
+#[tokio::test]
+async fn too_large_form_body_is_rejected() {
+    let backend = backend_with_workspaces();
+    let body = format!("name=x&servings=1&steps={}", "a".repeat(MAX_BODY_BYTES));
+    let request = |content_length: Option<usize>| {
+        let mut builder = Request::post("/recipes")
+            .header(header::HOST, HOST)
+            .header(header::ORIGIN, format!("https://{HOST}"))
+            .header(header::COOKIE, cookie(WORKSPACE_A))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if let Some(length) = content_length {
+            builder = builder.header(header::CONTENT_LENGTH, length);
+        }
+        builder.body(Body::from(body.clone())).unwrap()
+    };
+    // Content-Length があれば、本文を読む前に断る。
+    // Content-Length の無い本文（chunked）も、読む途中で上限で止める。
+    for content_length in [Some(body.len()), None] {
+        let response = send(router(backend.clone()), request(content_length)).await;
+        assert_eq!(
+            response.status,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{content_length:?}: {}",
+            response.body
+        );
+    }
+    assert!(backend.recipes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn own_workspace_can_visit_demo_and_come_back() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..backend_with_workspaces()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let a = cookie(WORKSPACE_A);
+    let response = screen_get(&backend, "/workspace", Some(&a)).await;
+    assert!(response.body.contains("共有のデモを見る"));
+
+    // デモを見る印は 1 時間で切れる Cookie。自分の ID の Cookie は残す。
+    let response = screen_post(&backend, "/workspace/demo", Some(&a), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        set_cookie_named(&response, "__Host-demo-view").unwrap(),
+        "__Host-demo-view=1; Path=/; Max-Age=3600; Secure; HttpOnly; SameSite=Lax"
+    );
+    assert_eq!(set_cookie_named(&response, "__Host-workspace"), None);
+
+    // デモを見ている間は、どの画面にも「自分のレシピ帳に戻る」を出し、登録はデモに入る。
+    let visiting = format!("{a}; __Host-demo-view=1");
+    for path in ["/", "/recipes/new", "/workspace"] {
+        let response = screen_get(&backend, path, Some(&visiting)).await;
+        assert!(response.body.contains("自分のレシピ帳に戻る"), "{path}");
+        assert!(!response.body.contains(DEMO), "{path}");
+    }
+    let path = create_recipe(&backend, DEMO, "デモのカレー").await;
+    let response = screen_get(&backend, &path, Some(&visiting)).await;
+    assert_eq!(response.status, StatusCode::OK);
+    // ワークスペースの画面では、デモを見ている間も自分の ID を出す。
+    let response = screen_get(&backend, "/workspace", Some(&visiting)).await;
+    assert!(response.body.contains(WORKSPACE_A));
+
+    // 戻ると、印を消す。
+    let response = screen_post(&backend, "/workspace/own", Some(&visiting), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(
+        set_cookie_named(&response, "__Host-demo-view")
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn demo_view_needs_own_workspace_and_demo() {
+    // 自分のワークスペースが無い人と、デモの無い環境では、印を付けない。
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..backend_with_workspaces()
+    };
+    let response = screen_post(&backend, "/workspace/demo", None, "").await;
+    assert_eq!(set_cookie_named(&response, "__Host-demo-view"), None);
+    let backend = backend_with_workspaces();
+    let response = screen_post(&backend, "/workspace/demo", Some(&cookie(WORKSPACE_A)), "").await;
+    assert_eq!(set_cookie_named(&response, "__Host-demo-view"), None);
+    // デモが無ければ、印があっても自分のワークスペースを使う。
+    let response = screen_get(
+        &backend,
+        "/",
+        Some(&format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A))),
+    )
+    .await;
+    assert!(!response.body.contains("共有のデモ"));
+}
+
+#[tokio::test]
+async fn delete_asks_with_a_dialog_without_javascript() {
+    let backend = backend_with_workspaces();
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let id = path.strip_prefix("/recipes/").unwrap();
+    for page in ["/", path.as_str()] {
+        let response = screen_get(&backend, page, Some(&cookie(WORKSPACE_A))).await;
+        assert!(
+            response
+                .body
+                .contains(&format!(r#"commandfor="delete-{id}" command="show-modal""#)),
+            "{page}"
+        );
+        assert!(
+            response
+                .body
+                .contains(&format!(r#"<dialog id="delete-{id}""#))
+        );
+        assert!(response.body.contains("元には戻せません"));
+        assert!(!response.body.contains("hx-confirm"));
+    }
+}
+
+#[tokio::test]
+async fn empty_switch_id_is_asked_for() {
+    let backend = backend_with_workspaces();
+    let response = screen_post(&backend, "/workspace/switch", None, "id=").await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains("ワークスペースの ID を入力してください")
+    );
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="workspace-id-error""#)
+    );
 }

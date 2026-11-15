@@ -1,15 +1,14 @@
 {% extends "base.html" %}
 {% block title %}レシピの一覧{% endblock %}
+{% block heading %}レシピの一覧{% endblock %}
+{% block head_actions %}
+<a class="button-link" href="/recipes/new">レシピを登録する</a>
+{% endblock %}
 {% block content %}
-{% include "demo_notice.html" %}
-<div class="page-head">
-  <h1>レシピの一覧</h1>
-  <a class="button-link" href="/recipes/new">レシピを登録する</a>
-</div>
 <form method="get" action="/" role="search" class="search">
   <label for="q">料理名で探す</label>
   {#- 入力しながら、一覧（#results）だけを入れ替える。URL も検索の条件に合わせる。 #}
-  <input id="q" type="search" name="q" value="{{ q }}" maxlength="100" placeholder="料理名で探す" autocomplete="off"
+  <input id="q" type="search" name="q" value="{{ q }}" placeholder="料理名で探す" autocomplete="off"
          hx-get="/" hx-trigger="input changed delay:300ms, search"
          hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true">
   <button type="submit">探す</button>
@@ -24,11 +23,10 @@
     <li>
       <a href="/recipes/{{ recipe.id }}">{{ recipe.name }}</a>
       <span class="servings">{{ recipe.servings }} 人分</span>
-      <form method="post" action="/recipes/{{ recipe.id }}/delete" hx-confirm="「{{ recipe.name }}」を削除しますか？">
-        <input type="hidden" name="q" value="{{ q }}">
-        <input type="hidden" name="page" value="{{ page }}">
-        <button type="submit" class="text danger">削除</button>
-      </form>
+      <div class="card-actions">
+        {%- let back = Some((q.as_str(), page)) %}
+        {% include "delete_dialog.html" %}
+      </div>
     </li>
     {%- endfor %}
   </ul>

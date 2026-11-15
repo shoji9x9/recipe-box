@@ -123,52 +123,79 @@ pub struct RecipeInput {
     pub steps: Option<String>,
 }
 
-/// 入力の項目を確かめる。正しくなければ、最初に見つかった項目のエラーを返す。
+/// 入力の項目の誤り。`field` は項目の名前、`message` は人向けの説明（API と画面で同じ文）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldError {
+    pub field: &'static str,
+    pub message: &'static str,
+}
+
+/// 入力の項目を確かめる。正しくなければ、最初に見つかった項目のエラーを返す（API が使う）。
+pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
+    check(input).map_err(|errors| {
+        let first = errors[0];
+        ApiError::InvalidField {
+            field: first.field,
+            message: first.message,
+        }
+    })
+}
+
+/// 入力の項目を確かめる。正しくなければ、すべての項目の誤りを、項目の順（料理名・何人分か・材料・手順）に返す。
+/// 画面はすべての誤りを一度に出し、API は最初の 1 つだけを返す（[`validate`]）。
 ///
 /// 長さは Unicode のコードポイントの数で数える（`chars().count()`）。
 /// バイト数や UTF-16 の長さで数えると、日本語や絵文字でリライトの後と結果が変わるため。
-pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
-    let invalid = |field, message| ApiError::InvalidField { field, message };
+/// 同じ理由で、画面の入力欄には `maxlength`（UTF-16 の長さで数える）を付けない。
+pub fn check(input: RecipeInput) -> Result<RecipeFields, Vec<FieldError>> {
+    let mut errors = Vec::new();
+    let mut invalid = |field, message| errors.push(FieldError { field, message });
 
-    let name = input
-        .name
-        .ok_or(invalid("name", "料理名（name）は必須です"))?;
+    let name = input.name.unwrap_or_default();
     // trim は Unicode の White_Space の文字を空白とみなす。
     // JavaScript の trim は U+FEFF なども空白とみなすので、リライトの後は /^\p{White_Space}*$/u で同じ判定をする。
     if name.trim().is_empty() {
-        return Err(invalid("name", "料理名（name）を入力してください"));
-    }
-    if name.chars().count() > MAX_NAME_CHARS {
-        return Err(invalid("name", "料理名（name）は 100 文字までです"));
+        invalid("name", "料理名を入力してください");
+    } else if name.chars().count() > MAX_NAME_CHARS {
+        invalid("name", "料理名は 100 文字までです");
     }
 
-    let servings = input
-        .servings
-        .ok_or(invalid("servings", "何人分か（servings）は必須です"))?;
-    let servings = servings_to_int(servings).ok_or(invalid(
-        "servings",
-        "何人分か（servings）は 1 から 100 までの整数です",
-    ))?;
+    let servings = match input.servings {
+        None => {
+            invalid("servings", "何人分かを入力してください");
+            None
+        }
+        Some(value) => {
+            let servings = servings_to_int(value);
+            if servings.is_none() {
+                invalid(
+                    "servings",
+                    "何人分かは 1 から 100 までの整数で入力してください",
+                );
+            }
+            servings
+        }
+    };
 
     // 材料と手順は省いてよい。省いたら空にする。
     let ingredients = input.ingredients.unwrap_or_default();
     if ingredients.chars().count() > MAX_INGREDIENTS_CHARS {
-        return Err(invalid(
-            "ingredients",
-            "材料（ingredients）は 2,000 文字までです",
-        ));
+        invalid("ingredients", "材料は 2,000 文字までです");
     }
     let steps = input.steps.unwrap_or_default();
     if steps.chars().count() > MAX_STEPS_CHARS {
-        return Err(invalid("steps", "手順（steps）は 5,000 文字までです"));
+        invalid("steps", "手順は 5,000 文字までです");
     }
 
-    Ok(RecipeFields {
-        name,
-        servings,
-        ingredients,
-        steps,
-    })
+    match servings {
+        Some(servings) if errors.is_empty() => Ok(RecipeFields {
+            name,
+            servings,
+            ingredients,
+            steps,
+        }),
+        _ => Err(errors),
+    }
 }
 
 /// 何人分かの値が 1 から 100 までの整数なら、整数にして返す。
@@ -259,7 +286,7 @@ pub async fn list<B: Backend>(
 fn invalid_query() -> ApiError {
     ApiError::InvalidField {
         field: "q",
-        message: "検索の条件（q）が正しくありません",
+        message: "検索の条件が正しくありません",
     }
 }
 
@@ -271,7 +298,7 @@ pub fn parse_list_params(params: &[(String, String)]) -> Result<(Option<String>,
     if pattern.is_some_and(|q| q.chars().count() > MAX_QUERY_CHARS) {
         return Err(ApiError::InvalidField {
             field: "q",
-            message: "検索の条件（q）は 100 文字までです",
+            message: "検索する料理名は 100 文字までです",
         });
     }
     let page = single_param(params, "page")
@@ -279,7 +306,7 @@ pub fn parse_list_params(params: &[(String, String)]) -> Result<(Option<String>,
         .and_then(parse_page)
         .ok_or(ApiError::InvalidField {
             field: "page",
-            message: "ページ（page）は 1 から 2 までの整数です",
+            message: "ページの番号は 1 から 2 までの整数です",
         })?;
     Ok((pattern.map(str::to_owned), page))
 }
