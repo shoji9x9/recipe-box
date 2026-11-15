@@ -8,6 +8,7 @@
 //
 // 手順:
 //   1. seed/recipes.json と seed/photos/ を、API と同じ決まりで確かめる（入れ始めてから失敗しないように）。
+//      ID が、印（mise run pin）の付いたワークスペースのものかを、wrangler で D1 を読んで確かめる。
 //   2. 公開 API で、デモのレシピを全部消す（レシピを消すと、その写真も消える）。
 //   3. 公開 API で、サンプルのレシピを入れる。
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
@@ -248,6 +249,21 @@ async function main() {
   const recipes = loadRecipes();
   const photoCount = recipes.reduce((sum, recipe) => sum + recipe.files.length, 0);
   console.log(`${target === "--local" ? "ローカル" : "本番"}のデモに、レシピ ${recipes.length} 件と写真 ${photoCount} 枚を入れる`);
+
+  // 消し始める前に、ID が印（pinned）の付いたワークスペースかを D1 で確かめる。
+  // 間違えてほかの人のワークスペースの ID を渡しても消さないためと、写真を入れる wrangler の認証を先に確かめるためである
+  // （認証が無いと分かるのが写真を入れるときだと、写真の無いデモが残る）。
+  const status = JSON.parse(
+    await wrangler("d1", "execute", "DB", "--json", "--command", `SELECT pinned FROM workspaces WHERE id = '${workspaceId}'`),
+  );
+  const pinned = status.at(-1)?.results?.[0]?.pinned;
+  if (pinned === undefined) {
+    fail("その ID のワークスペースが無い");
+  }
+  // D1（SQLite）は BOOLEAN を 0 と 1 で返す。
+  if (pinned !== 1) {
+    fail("そのワークスペースには、自動削除と削除から外す印が無い。デモなら、先に mise run pin で印を付ける");
+  }
 
   // 2. 今のレシピを全部消す。消すと一覧が詰まるので、1 ページ目を読み直しながら消す。
   let deleted = 0;
