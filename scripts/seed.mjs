@@ -34,8 +34,21 @@ const photoDir = join(seedDir, "photos");
 const appDir = join(root, "apps", "recipe-box-rs");
 // 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
 const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
-// ログで ~ に置き換えるホームのディレクトリ。空か / なら置き換えない（ほかの文字まで置き換えてしまうため）。
-const home = homedir().replace(/\/+$/, "");
+// ログで . と ~ に置き換える、リポジトリとホームのディレクトリのパス（端末の利用者名が入る）。
+// パスの後ろが区切り（/・空白・引用符・括弧・文の終わりなど）のときだけ置き換え、/home/u で /home/u2 を崩さない。
+// 空か / なら置き換えない（ほかの文字まで置き換えてしまうため）。
+function pathPattern(path) {
+  const trimmed = path.replace(/\/+$/, "");
+  if (trimmed === "") {
+    return null;
+  }
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(String.raw`${escaped}(?=$|[/\s'"${"`"}),:;\]])`, "g");
+}
+const PATHS = [
+  [pathPattern(root), "."],
+  [pathPattern(homedir()), "~"],
+].filter(([pattern]) => pattern !== null);
 
 const BASE_URLS = {
   "--local": "http://localhost:8787",
@@ -98,11 +111,9 @@ if (!ID_PATTERN.test(workspaceId)) {
 // 表示やエラーの文から、デモの ID を伏せる。
 // アカウントの ID（16 進数 32 文字）や D1 のデータベースの ID（UUID の形）も、公開の Actions のログに出さないよう伏せる。
 // 16 進数 32 文字以上の並びはすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
-// 端末の利用者名が入る、リポジトリとホームのディレクトリのパスも、. と ~ に置き換える。
+// リポジトリとホームのディレクトリのパスも、. と ~ に置き換える（PATHS）。
 function redact(text) {
-  return String(text)
-    .replaceAll(`${root}/`, "./")
-    .replaceAll(home === "" ? "\0" : `${home}/`, "~/")
+  return PATHS.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), String(text))
     .replaceAll(workspaceId, "***")
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
     .replace(/[0-9a-f]{32,}/gi, "***");
@@ -251,7 +262,7 @@ async function wrangler(...wranglerArgs) {
     return stdout;
   } catch (error) {
     // 理由は stderr か stdout（--json のとき）にある。Node のエラーの文は、コマンドの全体（ホームのディレクトリのパスと SQL）を
-    // 含むので使わず、終了コードかシグナル（起動できなければ ENOENT などのコード）だけを添える。
+    // 含むので、ふつうは使わず、終了コードかシグナル（起動できなければ ENOENT などのコード）だけを添える。
     // 制御文字（色など）は、伏せる前に取り除く（制御文字に挟まれた値も伏せるため）。
     // ログのファイルの場所の行は、理由にならないので除く。
     const output = redact(
@@ -264,8 +275,10 @@ async function wrangler(...wranglerArgs) {
           .join("\n"),
       ),
     );
-    // 終了コードもシグナルも無ければ（起動の前の失敗など）、エラーの名前を添える。
-    const detail = [error.code, error.signal].filter((value) => value != null).join("・") || error.name;
+    // 終了コードもシグナルも無ければ（起動の前の失敗など）、伏せたエラーの文の最初の行を添える。
+    const detail =
+      [error.code, error.signal].filter((value) => value != null).join("・") ||
+      redact(stripVTControlCharacters(String(error.message)).split("\n")[0]).slice(0, REASON_LENGTH);
     // 伏せた後で切り詰める。長いときは、頭（stderr の [ERROR]）と終わり（stdout の JSON のエラー）の両方を残す。
     const text = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
     throw new Error(`wrangler が失敗した（${detail}）\n${text}`);
@@ -274,14 +287,14 @@ async function wrangler(...wranglerArgs) {
 
 // wrangler の失敗の文から、理由を短く選ぶ。wrangler は理由を JSON の "text" か「[ERROR]」の行に書き、
 // API のエラーでは、原因を [code: ...] の付いた行（JSON では notes の "text"）に書く。
-// どれも無ければ、1 行目（終了コードかシグナル）と wrangler の出力の最初の行を並べる。
+// どれも無ければ、1 行目（wrangler が失敗した、と終了コードなど）と wrangler の出力の最初の行を並べる。
 function shortReason(message) {
   const lines = message
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line !== "");
-  const chosen = [lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]"))].filter(Boolean);
-  const used = chosen.length > 0 ? chosen : lines.slice(0, 2);
+  const found = lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]"));
+  const used = found === undefined ? lines.slice(0, 2) : [found];
   const main = used.join(" ");
   const code = lines.find((l) => !used.includes(l) && l.includes("[code:"));
   return (code === undefined ? main : `${main} ${code}`).slice(0, REASON_LENGTH);
