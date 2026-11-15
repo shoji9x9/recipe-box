@@ -13,7 +13,7 @@ use askama::Template;
 use axum::{
     Extension, Form,
     extract::{
-        Multipart, Path, Query, Request, State,
+        FromRequest, Multipart, Path, Query, Request, State,
         multipart::MultipartRejection,
         rejection::{FormRejection, QueryRejection},
     },
@@ -27,8 +27,9 @@ use crate::{
     backend::Backend,
     error::ApiError,
     limits::{check_body_size, check_write},
-    photo::{self, Photo, PhotoId},
+    photo::{self, Photo, PhotoBody, PhotoId},
     recipe::{self, FieldError, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput},
+    stream::RawPhotoBody,
     workspace::{self, WorkspaceId},
 };
 
@@ -884,17 +885,22 @@ pub async fn photo_file<B: Backend>(
     Ok(photo::photo_response(&backend, viewer.id(), &id, &photo_id).await?)
 }
 
-/// `POST /recipes/{id}/photos`: フォーム（multipart）の `photo` の写真を追加し、詳細へ戻る。
+/// `POST /recipes/{id}/photos`: 写真を追加し、詳細へ戻る。
+///
+/// 本文は 2 つの形を受け付ける。
+/// - フォーム（multipart）の `photo` の欄。JavaScript が動かなくても使える。
+/// - 写真のバイト列そのもの（JavaScript が 1 枚ずつ送る）。本番では本文を読みためずに R2 へ流す（[`stream`]）。
 pub async fn add_photo<B: Backend>(
     State(backend): State<B>,
     Extension(session): Extension<Session>,
     Path(id): Path<String>,
-    multipart: Result<Multipart, MultipartRejection>,
+    raw: Option<Extension<RawPhotoBody>>,
+    request: Request,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
     let id = parse_id(&id)?;
-    let bytes = match read_photo_field(multipart).await {
-        Ok(Some(bytes)) => bytes,
+    let body = match read_photo_body(raw, request).await {
+        Ok(Some(body)) => body,
         Ok(None) => {
             return detail_page(
                 &backend,
@@ -908,10 +914,24 @@ pub async fn add_photo<B: Backend>(
         }
         Err(error) => return photo_failure(&backend, &viewer, &session, &id, error).await,
     };
-    match photo::add(&backend, viewer.id(), &id, bytes).await {
+    match photo::add(&backend, viewer.id(), &id, body).await {
         Ok(_) => Ok(see_other_with(&format!("/recipes/{id}"), Flash::PhotoAdded)),
         Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
     }
+}
+
+/// 写真を追加するリクエストの本文を読む。写真が無ければ `None`。
+async fn read_photo_body(
+    raw: Option<Extension<RawPhotoBody>>,
+    request: Request,
+) -> Result<Option<PhotoBody>, ApiError> {
+    if raw.is_none() && photo::has_multipart_body(request.headers()) {
+        let multipart = Multipart::from_request(request, &()).await;
+        return Ok(read_photo_field(multipart).await?.map(PhotoBody::Bytes));
+    }
+    // 写真のバイト列そのもの。空の本文は、ファイルを選ばずに送ったときと同じに扱う。
+    let body = photo::read_bytes_body(raw, request).await?;
+    Ok((body.len() > 0).then_some(body))
 }
 
 /// フォームの `photo` の欄のデータを読む。ファイルが選ばれていなければ `None`。
@@ -1209,13 +1229,20 @@ pub async fn guard_writes<B: Backend>(
     guard(&backend, request, next, recipe::MAX_BODY_BYTES).await
 }
 
-/// 写真を送るフォームの [`guard_writes`]。本文の上限だけが違う（[`PHOTO_FORM_MAX_BYTES`]）。
+/// 写真を送るフォームの [`guard_writes`]。本文の上限だけが違う。
+///
+/// multipart のフォームは区切りの分を足した [`PHOTO_FORM_MAX_BYTES`]、写真のバイト列そのものは 1 枚の写真の上限にする。
 pub async fn guard_photo_writes<B: Backend>(
     State(backend): State<B>,
     request: Request,
     next: Next,
 ) -> Response {
-    guard(&backend, request, next, PHOTO_FORM_MAX_BYTES).await
+    let max_body_bytes = if photo::has_multipart_body(request.headers()) {
+        PHOTO_FORM_MAX_BYTES
+    } else {
+        photo::MAX_PHOTO_BYTES
+    };
+    guard(&backend, request, next, max_body_bytes).await
 }
 
 /// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限。
@@ -1238,7 +1265,7 @@ async fn guard<B: Backend>(
     } else if let Err(error) =
         check_write(backend, request.method(), request.headers(), max_body_bytes).await
     {
-        match (&error, photo_recipe_path(request.uri().path())) {
+        match (&error, photo::photo_recipe_path(request.uri().path())) {
             // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
             // よく起きるので、一般の説明ではなく写真の上限を出し、レシピに戻れるようにする。
             (ApiError::PayloadTooLarge, Some(recipe_path)) => render(
@@ -1261,13 +1288,6 @@ async fn guard<B: Backend>(
             .insert(HX_PUSH_URL, HeaderValue::from_static("false"));
     }
     response
-}
-
-/// 写真を送るフォームのパス（`/recipes/<id>/photos`）なら、レシピの詳細のパスを返す。
-fn photo_recipe_path(path: &str) -> Option<&str> {
-    let recipe_path = path.strip_suffix("/photos")?;
-    let id = recipe_path.strip_prefix("/recipes/")?;
-    RecipeId::parse(id).map(|_| recipe_path)
 }
 
 /// 確かめるだけのルート（[`check_form`]）の前に確かめる middleware。送り元と本文の大きさだけを確かめる。

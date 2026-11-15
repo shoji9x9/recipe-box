@@ -19,6 +19,8 @@ axum = { version = "0.8.9", default-features = false, features = [
   "query",
 ] }
 console_error_panic_hook = "0.1.7"
+# Workers の waitUntil で動かした処理の結果を、リクエストの側で受け取るのに使う。版は worker が使うものに合わせる。
+futures-channel = "0.3.34"
 serde = { version = "1.0.229", features = ["derive"] }
 tower-service = "0.3.3"
 # Web Crypto の乱数を呼ぶのに使う。版は worker が使うものに合わせる。

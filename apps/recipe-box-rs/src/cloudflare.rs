@@ -5,11 +5,11 @@
 //!
 //! SQL は標準の範囲で書き、レシピを扱うクエリは必ず `workspace_id` で絞り込む（AGENTS.md）。
 
-use std::future::Future;
+use std::{future::Future, rc::Rc};
 
 use wasm_bindgen::prelude::wasm_bindgen;
 use worker::{
-    Bucket, D1Database, D1Result, Env, HttpMetadata,
+    Bucket, Context, D1Database, D1Result, Data, Env, HttpMetadata,
     send::{SendFuture, SendWrapper},
     wasm_bindgen::JsValue,
 };
@@ -19,7 +19,7 @@ use crate::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
         WorkspaceLimits, WorkspaceStatus,
     },
-    photo::{Photo, PhotoId},
+    photo::{Photo, PhotoBody, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -52,12 +52,24 @@ extern "C" {
 #[derive(Clone)]
 pub struct CloudflareBackend {
     env: SendWrapper<Env>,
+    /// リクエストの context（`waitUntil` に使う）。定期実行には無い。
+    ctx: Option<SendWrapper<Rc<Context>>>,
 }
 
 impl CloudflareBackend {
+    /// 定期実行に使う。リクエストが無いので、[`Backend::run_to_completion`] は `task` をそのまま待つ。
     pub fn new(env: Env) -> Self {
         Self {
             env: SendWrapper::new(env),
+            ctx: None,
+        }
+    }
+
+    /// リクエストを処理するときに使う。
+    pub fn with_context(env: Env, ctx: Context) -> Self {
+        Self {
+            env: SendWrapper::new(env),
+            ctx: Some(SendWrapper::new(Rc::new(ctx))),
         }
     }
 }
@@ -800,10 +812,36 @@ impl Backend for CloudflareBackend {
         })
     }
 
+    fn run_to_completion<T: Send + 'static>(
+        &self,
+        task: impl Future<Output = T> + Send + 'static,
+    ) -> impl Future<Output = Option<T>> + Send {
+        // 呼んだ時点で waitUntil に登録する（返した Future を待つ前に接続が切れても、task は動く）。
+        // 定期実行（context が無い）では、task をそのまま待つ。
+        let (receiver, inline) = match &self.ctx {
+            Some(ctx) => {
+                let (sender, receiver) = futures_channel::oneshot::channel();
+                ctx.wait_until(async move {
+                    // 待っていた側が先に取り消されていれば（接続が切れたとき）、結果は捨てる。
+                    let _ = sender.send(task.await);
+                });
+                (Some(receiver), None)
+            }
+            None => (None, Some(task)),
+        };
+        async move {
+            match (receiver, inline) {
+                (Some(receiver), _) => receiver.await.ok(),
+                (None, Some(task)) => Some(task.await),
+                (None, None) => None,
+            }
+        }
+    }
+
     fn put_object(
         &self,
         key: &str,
-        bytes: Vec<u8>,
+        body: PhotoBody,
         content_type: &str,
     ) -> impl Future<Output = BackendResult<()>> + Send {
         let env = self.env.clone();
@@ -811,8 +849,13 @@ impl Backend for CloudflareBackend {
         let content_type = content_type.to_owned();
         SendFuture::new(async move {
             let action = "写真を R2 に書き込めない";
+            let data = match body {
+                PhotoBody::Bytes(bytes) => Data::Bytes(bytes),
+                // 長さの分かるストリーム（FixedLengthStream の読む側）なので、R2 がそのまま読める。
+                PhotoBody::Stream(stream) => Data::ReadableStream(stream.readable.0),
+            };
             bucket(&env)?
-                .put(key, bytes)
+                .put(key, data)
                 .http_metadata(HttpMetadata {
                     content_type: Some(content_type),
                     ..HttpMetadata::default()
