@@ -139,11 +139,12 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &WorkspaceId,
     ) -> impl Future<Output = BackendResult<Option<WorkspaceStatus>>> + Send;
 
-    /// 印が無く、最終利用日時が `before` より前のワークスペースを返す（自動削除の対象）。
+    /// 印が無く、最終利用日時が `before` より前のワークスペースの ID を返す（自動削除の対象）。
+    /// ID の形は確かめない（呼び出し側が確かめ、正しくない行を失敗に数える）。
     fn list_unused_workspaces(
         &self,
         before: i64,
-    ) -> impl Future<Output = BackendResult<Vec<WorkspaceId>>> + Send;
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send;
 
     /// 1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、`before` より前のものを消す。
     fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send;

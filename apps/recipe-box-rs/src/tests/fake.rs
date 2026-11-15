@@ -77,6 +77,8 @@ pub struct FakeBackend {
     pub photo_added_after_first_delete: bool,
     /// `true` なら、ワークスペースを消す直前に、別のリクエストが同じワークスペースを消したことにする。
     pub workspace_vanishes_on_delete: bool,
+    /// `true` なら、古い記録の削除だけが失敗したことにする。
+    pub broken_records: bool,
     /// `true` なら、自動削除の対象を選ぶところだけが失敗したことにする。
     pub broken_list: bool,
     /// 自動削除の対象を選んだ直後に、別のリクエストがこのワークスペースを使った（最終利用日時を今にした）ことにする。
@@ -111,6 +113,7 @@ impl Default for FakeBackend {
             workspace_vanishes_on_delete: false,
             used_after_listing: None,
             broken_list: false,
+            broken_records: false,
             injected_photo: Arc::default(),
         }
     }
@@ -259,22 +262,22 @@ impl Backend for FakeBackend {
     fn list_unused_workspaces(
         &self,
         before: i64,
-    ) -> impl Future<Output = BackendResult<Vec<WorkspaceId>>> + Send {
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
         if self.broken_list {
             return ready(Err(BackendError("壊れた一覧".into())));
         }
         ready(self.check().map(|()| {
             let pinned = self.pinned.lock().unwrap();
-            let mut ids: Vec<WorkspaceId> = self
+            let mut ids: Vec<String> = self
                 .workspaces
                 .lock()
                 .unwrap()
                 .iter()
                 .filter(|(id, last_used_at)| **last_used_at < before && !pinned.contains(*id))
-                .map(|(id, _)| WorkspaceId::parse(id).unwrap())
+                .map(|(id, _)| id.clone())
                 .collect();
             // テストで順番を決めるため、ID で並べる（本物の SQL は順番を決めない）。
-            ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            ids.sort();
             if let Some(used) = &self.used_after_listing {
                 let now = self.now_millis();
                 self.workspaces.lock().unwrap().insert(used.clone(), now);
@@ -284,6 +287,9 @@ impl Backend for FakeBackend {
     }
 
     fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.broken_records {
+            return ready(Err(BackendError("壊れた記録".into())));
+        }
         ready(self.check().map(|()| {
             self.photo_uploads.lock().unwrap().retain(|&t| t >= before);
             self.workspace_creations

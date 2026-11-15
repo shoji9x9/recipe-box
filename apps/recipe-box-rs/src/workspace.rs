@@ -180,10 +180,11 @@ pub async fn remove<B: Backend>(backend: &B, workspace: &WorkspaceId) -> Result<
         return Err(ApiError::DemoWorkspaceProtected);
     }
     // R2 を消す前に確かめる（D1 の削除でも印を確かめるが、それより前に R2 の写真を消してしまうため）。
-    match backend.workspace_status(workspace).await? {
-        None => return Err(ApiError::WorkspaceNotFound),
-        Some(status) if status.pinned => return Err(ApiError::DemoWorkspaceProtected),
-        Some(_) => {}
+    let Some(status) = backend.workspace_status(workspace).await? else {
+        return Err(ApiError::WorkspaceNotFound);
+    };
+    if status.pinned {
+        return Err(ApiError::DemoWorkspaceProtected);
     }
     if remove_with_photos(backend, workspace, None).await? {
         Ok(())
@@ -258,6 +259,14 @@ pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
         }
     };
     for id in ids {
+        // 形の正しくない ID の行（アプリは作らない）は消せないので、失敗に数えて知らせ、ほかは消す。
+        let Some(id) = WorkspaceId::parse(&id) else {
+            log_error(&BackendError(
+                "使われていないワークスペースの ID の形が正しくない".to_owned(),
+            ));
+            summary.failed += 1;
+            continue;
+        };
         // 共有のデモは、印を付け忘れていても消さない。
         if demo.as_ref() == Some(&id) {
             summary.skipped += 1;

@@ -19,7 +19,6 @@ use crate::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
         WorkspaceLimits, WorkspaceStatus,
     },
-    error::log_error,
     photo::{Photo, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
@@ -64,35 +63,9 @@ impl CloudflareBackend {
 }
 
 /// workers-rs のエラーを [`BackendError`] にする。どの操作で失敗したかを添える。
-///
-/// エラーの文に、ワークスペースの ID（持ち主の証）を含む R2 のキーなどが入りうるので、ID の形の文字列を伏せる。
+/// エラーの文に入りうる ID（R2 のキーなど）は、ログに出すときに伏せる（[`crate::error::log_error`]）。
 fn backend_error(action: &str, error: &worker::Error) -> BackendError {
-    BackendError(format!("{action}: {}", redact_ids(&error.to_string())))
-}
-
-/// 16 進数の小文字 32 文字（ワークスペース・レシピ・写真の ID の形）の並びを `***` に置き換える。
-fn redact_ids(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut run = String::new();
-    let flush = |run: &mut String, out: &mut String| {
-        // ID が続けて並んでいても伏せるよう、32 文字以上をまとめて伏せる。
-        if run.len() >= 32 {
-            out.push_str("***");
-        } else {
-            out.push_str(run);
-        }
-        run.clear();
-    };
-    for c in text.chars() {
-        if c.is_ascii_digit() || ('a'..='f').contains(&c) {
-            run.push(c);
-        } else {
-            flush(&mut run, &mut out);
-            out.push(c);
-        }
-    }
-    flush(&mut run, &mut out);
-    out
+    BackendError(format!("{action}: {error}"))
 }
 
 /// 整数（時刻や人数）を JavaScript の数値にする。
@@ -319,7 +292,7 @@ impl Backend for CloudflareBackend {
     fn list_unused_workspaces(
         &self,
         before: i64,
-    ) -> impl Future<Output = BackendResult<Vec<WorkspaceId>>> + Send {
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
         let env = self.env.clone();
         let before = SendWrapper::new(int_to_js(before));
         SendFuture::new(async move {
@@ -335,19 +308,7 @@ impl Backend for CloudflareBackend {
                 .map_err(|e| backend_error(action, &e))?
                 .results::<IdRow>()
                 .map_err(|e| backend_error(action, &e))?;
-            // 形の正しくない ID の行（アプリは作らない）は飛ばし、ほかのワークスペースは消せるようにする。
-            Ok(rows
-                .into_iter()
-                .filter_map(|row| {
-                    let id = WorkspaceId::parse(&row.id);
-                    if id.is_none() {
-                        log_error(&BackendError(format!(
-                            "{action}: ID の形が正しくない行を飛ばした"
-                        )));
-                    }
-                    id
-                })
-                .collect())
+            Ok(rows.into_iter().map(|row| row.id).collect())
         })
     }
 
@@ -891,24 +852,5 @@ impl Backend for CloudflareBackend {
                 .await
                 .map_err(|e| backend_error("写真を R2 から消せない", &e))
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::redact_ids;
-
-    #[test]
-    fn ids_are_redacted_from_error_messages() {
-        let id = "0123456789abcdef0123456789abcdef";
-        assert_eq!(
-            redact_ids(&format!("cannot delete photos/{id}/{id}/{id}: 500")),
-            "cannot delete photos/***/***/***: 500"
-        );
-        // 続けて並んだ ID も伏せる。短い 16 進数（状態コードや 31 文字）は残す。
-        assert_eq!(
-            redact_ids(&format!("{id}{id} 1f {}", &id[1..])),
-            format!("*** 1f {}", &id[1..])
-        );
     }
 }

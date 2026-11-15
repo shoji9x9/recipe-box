@@ -201,9 +201,12 @@ impl From<BackendError> for ApiError {
 }
 
 /// エラーをログに出す。Workers では `console.error` に、テストでは標準エラー出力に出す。
+///
+/// どの経路のエラーでも、文の中の ID（ワークスペースの ID は持ち主の証）を伏せてから出す（[`crate::id::redact`]）。
 pub(crate) fn log_error(error: &BackendError) {
+    let message = crate::id::redact(&error.to_string());
     #[cfg(target_arch = "wasm32")]
-    worker::console_error!("{error}");
+    worker::console_error!("{message}");
     #[cfg(not(target_arch = "wasm32"))]
-    eprintln!("{error}");
+    eprintln!("{message}");
 }

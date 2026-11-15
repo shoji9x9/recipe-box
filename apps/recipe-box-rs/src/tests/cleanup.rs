@@ -197,3 +197,25 @@ async fn records_are_deleted_even_if_listing_fails() {
     assert_eq!(*backend.photo_uploads.lock().unwrap(), [today]);
     assert_eq!(*backend.workspace_creations.lock().unwrap(), [today]);
 }
+
+#[tokio::test]
+async fn failed_record_deletion_is_reported_and_workspaces_are_deleted() {
+    let backend = FakeBackend {
+        broken_records: true,
+        ..setup()
+    };
+    let summary = delete_unused(&backend).await;
+    assert!(summary.records_failed);
+    assert!(summary.has_failure());
+    assert_eq!(summary.deleted, 1);
+}
+
+#[tokio::test]
+async fn malformed_workspace_id_is_counted_as_failure() {
+    let backend = setup();
+    // アプリは作らない、形の正しくない ID の行。
+    backend.add_workspace("not-a-workspace-id", BEFORE - 1);
+    let summary = delete_unused(&backend).await;
+    assert_eq!((summary.deleted, summary.failed), (1, 1));
+    assert!(summary.has_failure());
+}
