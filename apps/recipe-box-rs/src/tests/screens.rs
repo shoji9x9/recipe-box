@@ -906,6 +906,21 @@ async fn check_route_only_validates() {
     // 直った欄は、誤りが消える。
     let response = screen_post(&backend, "/recipes/check", None, "name=x&servings=2").await;
     assert!(!response.body.contains("field-error"));
+    // 欄から離れたときは、誤りの一覧を入れ替えない（押している途中の一覧のリンクを入れ替えると、クリックが失われる）。
+    let response = screen_post(
+        &backend,
+        "/recipes",
+        Some(&cookie(WORKSPACE_A)),
+        "name=&servings=",
+    )
+    .await;
+    assert!(response.body.contains(r#"hx-post="/recipes/check""#));
+    assert!(
+        !response.body.contains("hx-select-oob"),
+        "{}",
+        response.body
+    );
+    assert!(!response.body.contains("hx-swap-oob"));
     assert!(backend.recipes.lock().unwrap().is_empty());
     // ほかの画面の POST と同じく、別のサイトからは受け付けない。
     let request = Request::post("/recipes/check")

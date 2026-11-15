@@ -6,18 +6,16 @@
     検証はサーバーだけで行うので、ブラウザの標準の検証は使わない（novalidate。required・maxlength も付けない）。
     確かめるのは、最初は送信したとき（onSubmit）だけで、誤りが出た後は欄から離れたときにも確かめ直す（onBlur）。
     欄から離れたときに確かめ直すのは、その欄の誤りだけで、一覧は送信したときだけ作る（form_field_attrs.html）。 #}
-<div>
-  {%- if !errors.is_empty() %}
-  <div class="error-summary" role="alert" tabindex="-1"{% if focus_summary %} autofocus{% endif %}>
-    <h2>入力に誤りがあります（{{ errors.len() }} 件）</h2>
-    <ul>
-      {%- for error in errors %}
-      <li><a href="#{{ error.field }}">{{ error.message }}</a></li>
-      {%- endfor %}
-    </ul>
-  </div>
-  {%- endif %}
+{%- if !errors.is_empty() %}
+<div class="error-summary" role="alert" tabindex="-1"{% if focus_summary %} autofocus{% endif %}>
+  <h2>入力に誤りがあります（{{ errors.len() }} 件）</h2>
+  <ul>
+    {%- for error in errors %}
+    <li><a href="#{{ error.field }}">{{ error.message }}</a></li>
+    {%- endfor %}
+  </ul>
 </div>
+{%- endif %}
 <form method="post" action="{{ action }}" class="recipe-form" novalidate>
   <div class="field" id="field-name">
     <label for="name">料理名（必須・100 文字まで）</label>
