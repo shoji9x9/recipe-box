@@ -34,6 +34,8 @@ const photoDir = join(seedDir, "photos");
 const appDir = join(root, "apps", "recipe-box-rs");
 // 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
 const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
+// ログで ~ に置き換えるホームのディレクトリ。空か / なら置き換えない（ほかの文字まで置き換えてしまうため）。
+const home = homedir().replace(/\/+$/, "");
 
 const BASE_URLS = {
   "--local": "http://localhost:8787",
@@ -99,8 +101,8 @@ if (!ID_PATTERN.test(workspaceId)) {
 // 端末の利用者名が入る、リポジトリとホームのディレクトリのパスも、. と ~ に置き換える。
 function redact(text) {
   return String(text)
-    .replaceAll(root, ".")
-    .replaceAll(homedir(), "~")
+    .replaceAll(`${root}/`, "./")
+    .replaceAll(home === "" ? "\0" : `${home}/`, "~/")
     .replaceAll(workspaceId, "***")
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
     .replace(/[0-9a-f]{32,}/gi, "***");
@@ -242,6 +244,8 @@ async function wrangler(...wranglerArgs) {
   try {
     const { stdout } = await run(wranglerBin, [...wranglerArgs, target], {
       cwd: appDir,
+      // 色の制御文字を出させない（--json の出力を JSON として読むためと、制御文字で値が分かれると伏せられなくなるため）。
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
       maxBuffer: 16 * 1024 * 1024,
     });
     return stdout;
@@ -260,9 +264,8 @@ async function wrangler(...wranglerArgs) {
           .join("\n"),
       ),
     );
-    const codes = [error.code, error.signal].filter((value) => value != null).join("・");
-    // 終了コードもシグナルも無ければ（起動の前の失敗など）、伏せたエラーの文を添える。
-    const detail = codes || redact(`${error.name}: ${error.message}`).slice(0, REASON_LENGTH);
+    // 終了コードもシグナルも無ければ（起動の前の失敗など）、エラーの名前を添える。
+    const detail = [error.code, error.signal].filter((value) => value != null).join("・") || error.name;
     // 伏せた後で切り詰める。長いときは、頭（stderr の [ERROR]）と終わり（stdout の JSON のエラー）の両方を残す。
     const text = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
     throw new Error(`wrangler が失敗した（${detail}）\n${text}`);
@@ -277,11 +280,10 @@ function shortReason(message) {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line !== "");
-  const main =
-    lines.find((l) => l.includes('"text"')) ??
-    lines.find((l) => l.includes("[ERROR]")) ??
-    lines.slice(0, 2).join(" ");
-  const code = lines.find((l) => l !== main && l.includes("[code:"));
+  const chosen = [lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]"))].filter(Boolean);
+  const used = chosen.length > 0 ? chosen : lines.slice(0, 2);
+  const main = used.join(" ");
+  const code = lines.find((l) => !used.includes(l) && l.includes("[code:"));
   return (code === undefined ? main : `${main} ${code}`).slice(0, REASON_LENGTH);
 }
 
