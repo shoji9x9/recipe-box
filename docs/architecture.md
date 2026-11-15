@@ -25,4 +25,4 @@
 | Node のパッケージマネージャー | pnpm |
 | git フック | lefthook |
 
-Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった。ただし公式ブログによると、Rust の Worker の開発とデプロイは wrangler に任せている。そのため wrangler を使い、リライト後に改めて検討する。
+Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった。ただし公式ブログによると、Rust の Worker の開発とデプロイは wrangler に任せている。そのため wrangler を使う。

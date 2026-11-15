@@ -443,6 +443,18 @@ button.danger {
   margin: 0;
 }
 
+.demo-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.demo-banner-actions a {
+  font-size: 14px;
+  font-weight: 600;
+}
+
 /* ページ全体へのメッセージ: 見出しの下に、自動では消さない */
 .message {
   margin: 0 0 24px;

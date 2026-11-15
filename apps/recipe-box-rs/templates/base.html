@@ -21,9 +21,12 @@
     {%- if layout.demo_shared %}
     <section class="demo-banner">
       <p>誰でも見て編集できる、共有のデモです。個人情報や、人に見られて困ることを書かないでください。デモは毎日リセットします。</p>
-      <form method="post" action="/workspace">
-        <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
-      </form>
+      <div class="demo-banner-actions">
+        <a href="/workspace#workspace-id">ほかの端末の ID を使う</a>
+        <form method="post" action="/workspace">
+          <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
+        </form>
+      </div>
     </section>
     {%- endif %}
     {%- if layout.demo_visiting %}

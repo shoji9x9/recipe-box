@@ -157,6 +157,41 @@ async fn demo_is_shown_without_cookie_and_its_id_is_hidden() {
 }
 
 #[tokio::test]
+async fn demo_visitor_can_use_id_from_another_device() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    backend.add_workspace(WORKSPACE_A, NOW);
+
+    // デモの帯から、ID を入れる欄へ移れる。
+    let response = screen_get(&backend, "/", None).await;
+    assert!(
+        response.body.contains(r#"href="/workspace#workspace-id""#),
+        "{}",
+        response.body
+    );
+    let response = screen_get(&backend, "/workspace", None).await;
+    assert!(response.body.contains(r#"action="/workspace/switch""#));
+    assert!(response.body.contains(r#"id="workspace-id""#));
+
+    let response = screen_post(
+        &backend,
+        "/workspace/switch",
+        None,
+        &format!("id={WORKSPACE_A}"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(
+        set_cookie_named(&response, "__Host-workspace")
+            .unwrap()
+            .starts_with(&cookie(WORKSPACE_A))
+    );
+}
+
+#[tokio::test]
 async fn demo_that_does_not_exist_falls_back_to_landing() {
     let backend = FakeBackend {
         demo: Some(DEMO.to_owned()),
