@@ -111,19 +111,34 @@ export function lstatWithoutLinks(path, base) {
   return stat;
 }
 
-// lstatWithoutLinks の失敗を、shown（表示する名前）を使った文にする。
-export function linkErrorMessage(error, shown) {
-  if (error.reason === "link") {
-    return `${shown} か、その上のディレクトリがシンボリックリンクになっている`;
+// path が、base の下にリンクを通らずに置かれた、ふつうのファイルかを確かめ、lstat の結果を返す。
+// ハードリンクも、リポジトリの外のファイルと中身を共有しうるので断る（git はハードリンクを記録しない）。
+// FIFO などは読むと止まるので、ふつうのファイルだけを受け付ける。
+// 合わなければ、shown（表示する名前）を使った文の Error を投げる。fs の失敗でない例外（プログラムの誤り）は、そのまま投げる。
+export function regularFileWithoutLinks(path, base, shown) {
+  let stat;
+  try {
+    stat = lstatWithoutLinks(path, base);
+  } catch (error) {
+    if (error.reason === "link") {
+      throw new Error(`${shown} か、その上のディレクトリがシンボリックリンクになっている`);
+    }
+    if (error.reason === "outside") {
+      throw new Error(`${shown} がリポジトリの下に無い`);
+    }
+    // fs のシステムの失敗（ENOENT・EACCES など）は syscall を持つ。
+    if (error.syscall === undefined) {
+      throw error;
+    }
+    throw new Error(`${shown} を読めない（${error.code}）`);
   }
-  if (error.reason === "outside") {
-    return `${shown} がリポジトリの下に無い`;
+  if (!stat.isFile()) {
+    throw new Error(`${shown} がふつうのファイルでない`);
   }
-  if (error.code === undefined) {
-    // fs の失敗でない（プログラムの誤りなど）なら、データの問題に見せず、そのまま投げる。
-    throw error;
+  if (stat.nlink > 1) {
+    throw new Error(`${shown} がハードリンクになっている`);
   }
-  return `${shown} を読めない（${error.code}）`;
+  return stat;
 }
 
 // seed/recipes.json の中身（JSON を読んだ値）を、API と同じ決まりで確かめる。写真は photoDir の下から探す。
@@ -166,17 +181,10 @@ export function validateRecipes(recipes, photoDir, base) {
       const path = join(photoDir, file);
       let stat;
       try {
-        stat = lstatWithoutLinks(path, base);
+        stat = regularFileWithoutLinks(path, base, `写真 seed/photos/${file}`);
       } catch (error) {
-        throw new Error(`${where}: ${linkErrorMessage(error, `写真 seed/photos/${file}`)}`);
-      }
-      // ディレクトリなどは、先頭を読むときに理由の分からない失敗になるので、先に断る。
-      if (!stat.isFile()) {
-        throw new Error(`${where}: 写真 seed/photos/${file} がふつうのファイルでない`);
-      }
-      // ハードリンクは、リポジトリの外のファイルと中身を共有しうるので断る（git はハードリンクを記録しない）。
-      if (stat.nlink > 1) {
-        throw new Error(`${where}: 写真 seed/photos/${file} がハードリンクになっている`);
+        // プログラムの誤りなど、ここで作った文でない例外にも、どのレシピかを添える（stack は cause に残す）。
+        throw new Error(`${where}: ${error.message}`, { cause: error });
       }
       const { size } = stat;
       if (size === 0 || size > MAX_PHOTO_BYTES) {

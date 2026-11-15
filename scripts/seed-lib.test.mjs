@@ -14,8 +14,8 @@ import {
   MAX_SERVINGS,
   MAX_STEPS,
   MAX_WORKSPACE_PHOTO_BYTES,
-  linkErrorMessage,
   lstatWithoutLinks,
+  regularFileWithoutLinks,
   pathPattern,
   redact,
   shortReason,
@@ -128,11 +128,17 @@ describe("lstatWithoutLinks", () => {
     assert.equal(reason(join(base, "..data", "x")), "ENOENT");
   });
 
-  test("理由ごとの文", () => {
-    assert.match(linkErrorMessage({ reason: "link" }, "x"), /シンボリックリンク/);
-    assert.match(linkErrorMessage({ reason: "outside" }, "x"), /リポジトリの下に無い/);
-    assert.match(linkErrorMessage({ code: "EACCES" }, "x"), /読めない（EACCES）/);
-    assert.throws(() => linkErrorMessage(new TypeError("bug"), "x"), TypeError);
+  test("ふつうのファイルだけを、理由の分かる文で受け付ける", () => {
+    const check = (path) => regularFileWithoutLinks(path, base, "x");
+    assert.equal(check(join(base, "seed", "recipes.json")).isFile(), true);
+    assert.throws(() => check(join(base, "seed", "photos-link", "a.jpg")), /x か、その上のディレクトリがシンボリックリンク/);
+    assert.throws(() => check(tmpdir()), /x がリポジトリの下に無い/);
+    assert.throws(() => check(join(base, "seed", "missing.json")), /x を読めない（ENOENT）/);
+    assert.throws(() => check(join(base, "seed")), /x がふつうのファイルでない/);
+    linkSync(join(base, "seed", "recipes.json"), join(base, "seed", "hard.json"));
+    assert.throws(() => check(join(base, "seed", "recipes.json")), /x がハードリンク/);
+    // プログラムの誤り（fs のシステムの失敗でないもの）は、データの問題に見せない。
+    assert.throws(() => regularFileWithoutLinks(undefined, base, "x"), TypeError);
   });
 });
 

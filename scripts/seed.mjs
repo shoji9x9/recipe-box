@@ -28,9 +28,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import {
-  linkErrorMessage,
-  lstatWithoutLinks,
   pathPattern,
+  regularFileWithoutLinks,
   redact as redactWith,
   shortReason,
   validateRecipes,
@@ -117,15 +116,10 @@ function sleep(ms) {
 function loadRecipes() {
   const path = join(seedDir, "recipes.json");
   // 写真と同じく、リンクを通ってリポジトリの外のファイルを読まない。
-  let stat;
   try {
-    stat = lstatWithoutLinks(path, root);
+    regularFileWithoutLinks(path, root, "seed/recipes.json");
   } catch (error) {
-    fail(linkErrorMessage(error, "seed/recipes.json"));
-  }
-  // FIFO などを読むと止まるので、ふつうのファイルだけを読む。
-  if (!stat.isFile()) {
-    fail("seed/recipes.json がふつうのファイルでない");
+    fail(error.message);
   }
   let recipes;
   try {
