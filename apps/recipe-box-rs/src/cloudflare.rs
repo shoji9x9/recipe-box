@@ -209,17 +209,33 @@ impl Backend for CloudflareBackend {
             // 上限の判定と保存を 1 つの文にして、同時に作られても上限を超えないようにする。
             // FROM の (VALUES (0)) は、1 行だけの表として使う（標準の SQL の書き方）。
             // 全体を数えるので、workspace_id では絞り込まない（AGENTS.md のワークスペースを作るクエリ）。
-            let result = run(
-                &db,
-                "INSERT INTO workspaces (id, created_at, last_used_at) \
-                 SELECT ?, ?, ? FROM (VALUES (0)) AS one \
-                 WHERE (SELECT COUNT(*) FROM workspaces) < ? \
-                 AND (SELECT COUNT(*) FROM workspaces WHERE created_at >= ?) < ?",
-                &values.0,
-                action,
-            )
-            .await?;
-            Ok(changed_rows(&result, action)? > 0)
+            // 1 日に作った数は、消しても残る workspace_creations で数える（作ると消すを繰り返して超えさせない）。
+            let insert = db
+                .prepare(
+                    "INSERT INTO workspaces (id, created_at, last_used_at) \
+                     SELECT ?, ?, ? FROM (VALUES (0)) AS one \
+                     WHERE (SELECT COUNT(*) FROM workspaces) < ? \
+                     AND (SELECT COUNT(*) FROM workspace_creations WHERE created_at >= ?) < ?",
+                )
+                .bind(&values.0)
+                .map_err(|e| backend_error(action, &e))?;
+            // 作れたときだけ、作った記録を入れる（上の文で行が入ったかを、同じ ID の行が在るかで見る）。
+            let record = db
+                .prepare(
+                    "INSERT INTO workspace_creations (id, created_at) \
+                     SELECT id, created_at FROM workspaces WHERE id = ?",
+                )
+                .bind(&[values.0[0].clone()])
+                .map_err(|e| backend_error(action, &e))?;
+            // batch は 1 つのトランザクションとして、順に実行される。
+            let results = db
+                .batch(vec![insert, record])
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            let Some(inserted) = results.first() else {
+                return Err(BackendError(format!("{action}: batch の結果が無い")));
+            };
+            Ok(changed_rows(inserted, action)? > 0)
         })
     }
 

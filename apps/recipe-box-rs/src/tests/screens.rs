@@ -1393,3 +1393,56 @@ async fn too_large_photo_form_without_content_length_is_shown_on_the_detail_page
     assert!(response.body.contains("<h2>材料</h2>"));
     assert!(backend.photos.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn deleting_workspace_while_visiting_demo_keeps_demo_and_removes_photos() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..backend_with_workspaces()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let recipe = path.trim_start_matches("/recipes/").to_owned();
+    let photo = "11111111111111111111111111111111";
+    backend.add_photo_row(WORKSPACE_A, &recipe, photo, 3);
+    backend.objects.lock().unwrap().insert(
+        format!("photos/{WORKSPACE_A}/{recipe}/{photo}"),
+        (vec![0xff, 0xd8, 0xff], "image/jpeg".to_owned()),
+    );
+    create_recipe(&backend, DEMO, "デモのカレー").await;
+
+    // 一時的にデモを見ている間に消しても、消すのは自分のワークスペースで、デモは残る。
+    let visiting = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A));
+    let response = screen_post(
+        &backend,
+        "/workspace/delete",
+        Some(&visiting),
+        &format!("id={WORKSPACE_A}"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    assert!(backend.workspaces.lock().unwrap().contains_key(DEMO));
+    assert!(
+        backend
+            .recipes
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|(workspace, _)| workspace == DEMO)
+    );
+    // 写真のデータも R2 から消える。
+    assert!(backend.objects.lock().unwrap().is_empty());
+    assert!(backend.photos.lock().unwrap().is_empty());
+
+    // Cookie を書き換えてデモの ID にしても、自分のワークスペースとして扱わないので、デモは消えない。
+    let response = screen_post(
+        &backend,
+        "/workspace/delete",
+        Some(&cookie(DEMO)),
+        &format!("id={DEMO}"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(backend.workspaces.lock().unwrap().contains_key(DEMO));
+}

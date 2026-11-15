@@ -38,6 +38,8 @@ pub struct FakeBackend {
     pub workspaces: Arc<Mutex<HashMap<String, i64>>>,
     /// ワークスペースの ID と作った日時。
     pub workspace_created_at: Arc<Mutex<HashMap<String, i64>>>,
+    /// ワークスペースを作った記録（作った日時）。ワークスペースを消しても残す。
+    pub workspace_creations: Arc<Mutex<Vec<i64>>>,
     /// レシピ。
     pub recipes: Arc<Mutex<HashMap<RecipeKey, Recipe>>>,
     /// 次に返す乱数の 1 バイト目。呼ぶたびに 1 増やし、毎回ちがう ID になるようにする。
@@ -82,6 +84,7 @@ impl Default for FakeBackend {
         Self {
             workspaces: Arc::default(),
             workspace_created_at: Arc::default(),
+            workspace_creations: Arc::default(),
             recipes: Arc::default(),
             next_random: Arc::default(),
             now: Arc::new(AtomicI64::new(NOW)),
@@ -111,6 +114,7 @@ impl FakeBackend {
             .lock()
             .unwrap()
             .insert(id.to_owned(), last_used_at);
+        self.workspace_creations.lock().unwrap().push(last_used_at);
         self.workspaces
             .lock()
             .unwrap()
@@ -219,14 +223,17 @@ impl Backend for FakeBackend {
     ) -> impl Future<Output = BackendResult<bool>> + Send {
         ready(self.check().map(|()| {
             // 本物の SQL と同じく、全体の数と since 以後に作った数を数えてから保存する。
+            // 1 日に作った数は、消しても残る作った記録で数える。
             let mut created_at = self.workspace_created_at.lock().unwrap();
+            let mut creations = self.workspace_creations.lock().unwrap();
             let total = i64::try_from(created_at.len()).unwrap();
             let recent =
-                i64::try_from(created_at.values().filter(|&&t| t >= limits.since).count()).unwrap();
+                i64::try_from(creations.iter().filter(|&&t| t >= limits.since).count()).unwrap();
             if total >= limits.max_total || recent >= limits.max_created_since {
                 return false;
             }
             created_at.insert(id.to_string(), now);
+            creations.push(now);
             self.workspaces.lock().unwrap().insert(id.to_string(), now);
             true
         }))

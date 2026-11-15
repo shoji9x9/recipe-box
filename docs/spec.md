@@ -143,6 +143,7 @@ stateDiagram-v2
 | `workspaces` | ワークスペース。最終利用日時と、自動削除の対象から外す印を持つ。消すと、レシピの行も消える（`ON DELETE CASCADE`） |
 | `recipes` | レシピ。`workspace_id`、`name`（料理名・必須）、`search_name`（検索用。料理名の ASCII の英字だけを小文字にしたもので、アプリが作る）、`servings`（何人分・1〜100 の整数）、`ingredients`（材料・複数行）、`steps`（手順・複数行）、作った日時と最後に変えた日時 |
 | `photos` | 写真の情報。`workspace_id`・`recipe_id`・`id`・`content_type`（形式）・`size`（バイト）・`created_at`。写真のデータは R2 のキー `photos/<workspace_id>/<recipe_id>/<id>` に置く。レシピを消すと行も消える（`ON DELETE CASCADE`） |
+| `workspace_creations` | ワークスペースを作った記録（`id`・`created_at`）。アプリ全体の 1 日に作る数を数える。ワークスペースを消しても残す |
 | `photo_uploads` | 写真を追加した記録（`id`・`created_at`）。アプリ全体の 1 日の追加の回数を数える。写真を消しても残す |
 
 ## API
@@ -273,7 +274,8 @@ stateDiagram-v2
 - 発行の回数は、1 つの IP アドレス（IPv6 は上位 64 ビットの範囲）から 60 秒に 10 回までにする。超えたら `429`（`too_many_requests`）を返す。
   Cloudflare の Rate Limiting は拠点ごとにおおよそで数えるので、厳密な上限ではない（複数の拠点を通れば、拠点の数だけ増えうる）。
 - アプリ全体のワークスペースは 100 個まで、作るのは UTC の 1 日に 20 個までにする。超えたら `503`（`capacity_reached`）を返す。
-  D1 の行を数えて厳密に判定し、数えることと保存することを 1 つの SQL で行う（[セキュリティ](security.md)の「費用の対策」）。
+  D1 の行を数えて厳密に判定し、数えることと保存することを 1 つのトランザクションで行う（[セキュリティ](security.md)の「費用の対策」）。
+  1 日に作った数は、ワークスペースを消しても残る作った記録で数える（作ると消すを繰り返して超えさせない）。
 - API は `X-Workspace-Id` ヘッダーで、画面は Cookie（HttpOnly・Secure・SameSite=Lax）で ID を受け取る。
   ヘッダーが無ければ `400`（`workspace_id_missing`）、形が正しくないか 2 つ以上あれば `400`（`workspace_id_invalid`）、そのワークスペースが無ければ `404`（`workspace_not_found`）を返す。
 - ワークスペースを使うと、最終利用日時を更新する。ただし、読むだけの API でも DB に書き込むことになるので、前の更新から 1 時間以上たっているときだけ更新する。

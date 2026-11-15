@@ -255,3 +255,20 @@ async fn create_workspace_checks_rate_limit_before_capacity() {
     let response = send(router(backend), create_workspace_request()).await;
     assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn deleting_workspaces_does_not_reset_daily_limit() {
+    let backend = FakeBackend::default();
+    for _ in 0..MAX_WORKSPACES_PER_DAY {
+        let response = send(router(backend.clone()), create_workspace_request()).await;
+        assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+        let id = response.json()["id"].as_str().unwrap().to_owned();
+        let response = call(&backend, Method::DELETE, "/api/workspaces", Some(&id), None).await;
+        assert_eq!(response.status, StatusCode::NO_CONTENT);
+    }
+    // 作ると消すを繰り返しても、その日に作った数は戻らない。
+    assert!(backend.workspaces.lock().unwrap().is_empty());
+    let response = send(router(backend.clone()), create_workspace_request()).await;
+    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.json()["error"], "capacity_reached");
+}
