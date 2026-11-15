@@ -1454,6 +1454,14 @@ async fn workspace_deleted_by_another_request_is_treated_as_deleted() {
         workspace_vanishes_on_delete: true,
         ..backend_with_workspaces()
     };
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let recipe = path.trim_start_matches("/recipes/").to_owned();
+    let photo = "11111111111111111111111111111111";
+    backend.add_photo_row(WORKSPACE_A, &recipe, photo, 3);
+    backend.objects.lock().unwrap().insert(
+        format!("photos/{WORKSPACE_A}/{recipe}/{photo}"),
+        (vec![0xff, 0xd8, 0xff], "image/jpeg".to_owned()),
+    );
     let response = screen_post(
         &backend,
         "/workspace/delete",
@@ -1461,8 +1469,14 @@ async fn workspace_deleted_by_another_request_is_treated_as_deleted() {
         &format!("id={WORKSPACE_A}"),
     )
     .await;
-    // 消えたことに変わりはないので、消せたときと同じく移り、Cookie も消す。
+    // 消えたことに変わりはないので、消せたときと同じく、知らせを付けて一覧へ移り、Cookie も消す。
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location, "/");
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .unwrap()
+            .starts_with("__Host-flash=workspace-deleted;")
+    );
     for name in ["__Host-workspace", "__Host-demo-view"] {
         assert!(
             set_cookie_named(&response, name)
@@ -1471,5 +1485,6 @@ async fn workspace_deleted_by_another_request_is_treated_as_deleted() {
             "{name}"
         );
     }
-    assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    // D1 を消す前の R2 の削除は、済んでいる。
+    assert!(backend.objects.lock().unwrap().is_empty());
 }

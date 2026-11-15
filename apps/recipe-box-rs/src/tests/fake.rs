@@ -375,11 +375,6 @@ impl Backend for FakeBackend {
         workspace: &WorkspaceId,
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
         ready(self.check().map(|()| {
-            if self.workspace_vanishes_on_delete {
-                // 別のリクエストが先に消したので、この削除では何も消さない。
-                self.workspaces.lock().unwrap().remove(workspace.as_str());
-                return None;
-            }
             self.workspaces.lock().unwrap().remove(workspace.as_str())?;
             // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
             let removed = self.workspace_photo_keys(workspace);
@@ -391,6 +386,10 @@ impl Backend for FakeBackend {
                 .lock()
                 .unwrap()
                 .retain(|(w, _, _)| w != workspace.as_str());
+            // 別のリクエストが先に（同じように）消していたなら、この削除では何も消えていない。
+            if self.workspace_vanishes_on_delete {
+                return None;
+            }
             Some(removed)
         }))
     }
