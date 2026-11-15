@@ -1,0 +1,4 @@
+# taplo（TOML のフォーマッター）の設定。taplo は .gitignore を読まないので、ここで除く。
+# - node_modules: 外から入れたパッケージ。
+# - .claude/worktrees: Claude Code の git worktree（作業ごとのリポジトリの写し）。
+exclude = ["node_modules/**", ".claude/worktrees/**"]
