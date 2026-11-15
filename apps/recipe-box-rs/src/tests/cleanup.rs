@@ -183,11 +183,17 @@ async fn workspace_used_after_listing_keeps_its_photos() {
 #[tokio::test]
 async fn records_are_deleted_even_if_listing_fails() {
     let backend = FakeBackend {
-        broken: true,
+        broken_list: true,
         ..setup()
     };
+    let today = start_of_utc_day(NOW);
+    *backend.photo_uploads.lock().unwrap() = vec![today - 1, today];
+    *backend.workspace_creations.lock().unwrap() = vec![today - 1, today];
     let summary = delete_unused(&backend).await;
     assert!(summary.list_failed);
-    assert!(summary.records_failed);
+    assert!(!summary.records_failed);
     assert!(summary.has_failure());
+    // 対象を選べなくても、古い記録は消す。
+    assert_eq!(*backend.photo_uploads.lock().unwrap(), [today]);
+    assert_eq!(*backend.workspace_creations.lock().unwrap(), [today]);
 }

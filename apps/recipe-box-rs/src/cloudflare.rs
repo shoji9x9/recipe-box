@@ -17,8 +17,9 @@ use worker::{
 use crate::{
     backend::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
-        WorkspaceLimits,
+        WorkspaceLimits, WorkspaceStatus,
     },
+    error::log_error,
     photo::{Photo, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
@@ -63,8 +64,35 @@ impl CloudflareBackend {
 }
 
 /// workers-rs のエラーを [`BackendError`] にする。どの操作で失敗したかを添える。
+///
+/// エラーの文に、ワークスペースの ID（持ち主の証）を含む R2 のキーなどが入りうるので、ID の形の文字列を伏せる。
 fn backend_error(action: &str, error: &worker::Error) -> BackendError {
-    BackendError(format!("{action}: {error}"))
+    BackendError(format!("{action}: {}", redact_ids(&error.to_string())))
+}
+
+/// 16 進数の小文字 32 文字（ワークスペース・レシピ・写真の ID の形）の並びを `***` に置き換える。
+fn redact_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        // ID が続けて並んでいても伏せるよう、32 文字以上をまとめて伏せる。
+        if run.len() >= 32 {
+            out.push_str("***");
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_digit() || ('a'..='f').contains(&c) {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 /// 整数（時刻や人数）を JavaScript の数値にする。
@@ -121,9 +149,10 @@ struct IdRow {
     id: String,
 }
 
-/// `SELECT pinned` の行。
+/// `SELECT last_used_at, pinned` の行。
 #[derive(serde::Deserialize)]
-struct PinnedRow {
+struct StatusRow {
+    last_used_at: i64,
     pinned: i64,
 }
 
@@ -263,24 +292,27 @@ impl Backend for CloudflareBackend {
         })
     }
 
-    fn workspace_pinned(
+    fn workspace_status(
         &self,
         id: &WorkspaceId,
-    ) -> impl Future<Output = BackendResult<Option<bool>>> + Send {
+    ) -> impl Future<Output = BackendResult<Option<WorkspaceStatus>>> + Send {
         let env = self.env.clone();
         let id = id.to_string();
         SendFuture::new(async move {
-            let action = "ワークスペースの印を読めない";
+            let action = "ワークスペースの状態を読めない";
             let db = database(&env)?;
             // D1（SQLite）は BOOLEAN を 0 と 1 の整数で返すので、整数で受け取る。
             let row = db
-                .prepare("SELECT pinned FROM workspaces WHERE id = ?")
+                .prepare("SELECT last_used_at, pinned FROM workspaces WHERE id = ?")
                 .bind(&[id.into()])
                 .map_err(|e| backend_error(action, &e))?
-                .first::<PinnedRow>(None)
+                .first::<StatusRow>(None)
                 .await
                 .map_err(|e| backend_error(action, &e))?;
-            Ok(row.map(|row| row.pinned != 0))
+            Ok(row.map(|row| WorkspaceStatus {
+                last_used_at: row.last_used_at,
+                pinned: row.pinned != 0,
+            }))
         })
     }
 
@@ -303,12 +335,19 @@ impl Backend for CloudflareBackend {
                 .map_err(|e| backend_error(action, &e))?
                 .results::<IdRow>()
                 .map_err(|e| backend_error(action, &e))?;
-            rows.into_iter()
-                .map(|row| {
-                    WorkspaceId::parse(&row.id)
-                        .ok_or_else(|| BackendError(format!("{action}: ID の形が正しくない")))
+            // 形の正しくない ID の行（アプリは作らない）は飛ばし、ほかのワークスペースは消せるようにする。
+            Ok(rows
+                .into_iter()
+                .filter_map(|row| {
+                    let id = WorkspaceId::parse(&row.id);
+                    if id.is_none() {
+                        log_error(&BackendError(format!(
+                            "{action}: ID の形が正しくない行を飛ばした"
+                        )));
+                    }
+                    id
                 })
-                .collect()
+                .collect())
         })
     }
 
@@ -852,5 +891,24 @@ impl Backend for CloudflareBackend {
                 .await
                 .map_err(|e| backend_error("写真を R2 から消せない", &e))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_ids;
+
+    #[test]
+    fn ids_are_redacted_from_error_messages() {
+        let id = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            redact_ids(&format!("cannot delete photos/{id}/{id}/{id}: 500")),
+            "cannot delete photos/***/***/***: 500"
+        );
+        // 続けて並んだ ID も伏せる。短い 16 進数（状態コードや 31 文字）は残す。
+        assert_eq!(
+            redact_ids(&format!("{id}{id} 1f {}", &id[1..])),
+            format!("*** 1f {}", &id[1..])
+        );
     }
 }

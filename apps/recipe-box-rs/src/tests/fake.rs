@@ -15,7 +15,7 @@ use std::{
 use crate::{
     backend::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
-        WorkspaceLimits,
+        WorkspaceLimits, WorkspaceStatus,
     },
     photo::{Photo, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -77,6 +77,8 @@ pub struct FakeBackend {
     pub photo_added_after_first_delete: bool,
     /// `true` なら、ワークスペースを消す直前に、別のリクエストが同じワークスペースを消したことにする。
     pub workspace_vanishes_on_delete: bool,
+    /// `true` なら、自動削除の対象を選ぶところだけが失敗したことにする。
+    pub broken_list: bool,
     /// 自動削除の対象を選んだ直後に、別のリクエストがこのワークスペースを使った（最終利用日時を今にした）ことにする。
     pub used_after_listing: Option<String>,
     /// `photo_added_after_first_delete` の写真を、もう追加したか。
@@ -108,6 +110,7 @@ impl Default for FakeBackend {
             photo_added_after_first_delete: false,
             workspace_vanishes_on_delete: false,
             used_after_listing: None,
+            broken_list: false,
             injected_photo: Arc::default(),
         }
     }
@@ -240,16 +243,16 @@ impl Backend for FakeBackend {
         }))
     }
 
-    fn workspace_pinned(
+    fn workspace_status(
         &self,
         id: &WorkspaceId,
-    ) -> impl Future<Output = BackendResult<Option<bool>>> + Send {
+    ) -> impl Future<Output = BackendResult<Option<WorkspaceStatus>>> + Send {
         ready(self.check().map(|()| {
-            self.workspaces
-                .lock()
-                .unwrap()
-                .contains_key(id.as_str())
-                .then(|| self.pinned.lock().unwrap().contains(id.as_str()))
+            let last_used_at = *self.workspaces.lock().unwrap().get(id.as_str())?;
+            Some(WorkspaceStatus {
+                last_used_at,
+                pinned: self.pinned.lock().unwrap().contains(id.as_str()),
+            })
         }))
     }
 
@@ -257,6 +260,9 @@ impl Backend for FakeBackend {
         &self,
         before: i64,
     ) -> impl Future<Output = BackendResult<Vec<WorkspaceId>>> + Send {
+        if self.broken_list {
+            return ready(Err(BackendError("壊れた一覧".into())));
+        }
         ready(self.check().map(|()| {
             let pinned = self.pinned.lock().unwrap();
             let mut ids: Vec<WorkspaceId> = self

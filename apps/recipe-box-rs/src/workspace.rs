@@ -180,10 +180,10 @@ pub async fn remove<B: Backend>(backend: &B, workspace: &WorkspaceId) -> Result<
         return Err(ApiError::DemoWorkspaceProtected);
     }
     // R2 を消す前に確かめる（D1 の削除でも印を確かめるが、それより前に R2 の写真を消してしまうため）。
-    match backend.workspace_pinned(workspace).await? {
+    match backend.workspace_status(workspace).await? {
         None => return Err(ApiError::WorkspaceNotFound),
-        Some(true) => return Err(ApiError::DemoWorkspaceProtected),
-        Some(false) => {}
+        Some(status) if status.pinned => return Err(ApiError::DemoWorkspaceProtected),
+        Some(_) => {}
     }
     if remove_with_photos(backend, workspace, None).await? {
         Ok(())
@@ -266,12 +266,8 @@ pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
         match remove_unused(backend, &id, before).await {
             Ok(true) => summary.deleted += 1,
             Ok(false) => summary.skipped += 1,
-            Err(error) => {
-                log_error(&BackendError(format!(
-                    "使われていないワークスペースを消せない: {error:?}"
-                )));
-                summary.failed += 1;
-            }
+            // 失敗の理由は、失敗したところでログに出している。
+            Err(_) => summary.failed += 1,
         }
     }
     // UTC の今日の 0 時より前の記録は、1 日の数に入らない。
@@ -291,12 +287,9 @@ async fn remove_unused<B: Backend>(
     workspace: &WorkspaceId,
     before: i64,
 ) -> Result<bool, ApiError> {
-    match backend.workspace_last_used_at(workspace).await? {
-        Some(last_used_at) if last_used_at < before => {}
+    match backend.workspace_status(workspace).await? {
+        Some(status) if status.last_used_at < before && !status.pinned => {}
         _ => return Ok(false),
-    }
-    if backend.workspace_pinned(workspace).await? != Some(false) {
-        return Ok(false);
     }
     remove_with_photos(backend, workspace, Some(before)).await
 }
@@ -311,7 +304,13 @@ async fn remove_photo_objects<B: Backend>(
         .iter()
         .map(|photo| {
             // D1 の行はアプリが作った ID だけを持つが、R2 のキーの形を型で保つため、ここでも確かめる。
-            let recipe = RecipeId::parse(&photo.recipe_id).ok_or(ApiError::Internal)?;
+            let recipe = RecipeId::parse(&photo.recipe_id).ok_or_else(|| {
+                // BackendError からの変換ではないので、ここでログに出す。
+                log_error(&BackendError(
+                    "写真の行のレシピの ID の形が正しくない".to_owned(),
+                ));
+                ApiError::Internal
+            })?;
             Ok(object_key(workspace, &recipe, &photo.id))
         })
         .collect::<Result<_, ApiError>>()?;

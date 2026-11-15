@@ -51,6 +51,14 @@ pub struct PhotoLimits {
     pub since: i64,
 }
 
+/// ワークスペースの最終利用日時と印。削除してよいかを決めるのに使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceStatus {
+    pub last_used_at: i64,
+    /// 自動削除と削除から外す印。
+    pub pinned: bool,
+}
+
 /// 写真を指す、レシピの ID と写真の ID の組（R2 のキーを作るのに使う）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PhotoKey {
@@ -125,11 +133,11 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &WorkspaceId,
     ) -> impl Future<Output = BackendResult<Option<i64>>> + Send;
 
-    /// ワークスペースに、自動削除と削除から外す印（`pinned`）が付いているかを返す。ワークスペースが無ければ `None` を返す。
-    fn workspace_pinned(
+    /// ワークスペースの最終利用日時と、自動削除と削除から外す印（`pinned`）を返す。ワークスペースが無ければ `None` を返す。
+    fn workspace_status(
         &self,
         id: &WorkspaceId,
-    ) -> impl Future<Output = BackendResult<Option<bool>>> + Send;
+    ) -> impl Future<Output = BackendResult<Option<WorkspaceStatus>>> + Send;
 
     /// 印が無く、最終利用日時が `before` より前のワークスペースを返す（自動削除の対象）。
     fn list_unused_workspaces(
