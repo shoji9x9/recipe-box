@@ -875,10 +875,8 @@ async fn fields_are_checked_on_submit_then_on_blur() {
     // 送信して誤りが出た後は、どの欄も、離れたときに確かめ直す（reValidateMode: onBlur）。
     let response = screen_post(&backend, "/recipes", Some(&a), "name=&servings=2").await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    // 誤りの一覧は送信したときに出す。欄から離れたときに入れ替えないよう、一覧を入れ替える属性は付けない。
+    // 誤りの一覧は送信したときに出す。
     assert!(response.body.contains(r#"class="error-summary""#));
-    assert!(!response.body.contains(r#"id="error-summary""#));
-    assert!(!response.body.contains("hx-select-oob"));
     for field in ["name", "servings", "ingredients", "steps"] {
         assert!(
             response.body.contains(&format!(
@@ -909,9 +907,14 @@ async fn check_route_only_validates() {
             .body
             .contains(r#"<p id="name-error" class="field-error">料理名を入力してください</p>"#)
     );
-    // 欄から離れたときに確かめ直すので、フォーカスは動かさない。続けて確かめられるよう、属性は残す。
+    // 欄から離れたときに確かめ直すので、フォーカスは動かさない（どこにも autofocus を付けない）。続けて確かめられるよう、属性は残す。
     assert!(!response.body.contains("autofocus"));
     assert!(response.body.contains(r#"hx-post="/recipes/check""#));
+    // 誤りが複数あっても、一覧は出さない。各欄の誤りは出す。
+    let many = format!("name=&servings=0&ingredients={}", "a".repeat(2001));
+    let response = screen_post(&backend, "/recipes/check", None, &many).await;
+    assert!(!response.body.contains(r#"class="error-summary""#));
+    assert_eq!(response.body.matches(r#"class="field-error""#).count(), 3);
     // 直った欄は、誤りが消える。
     let response = screen_post(&backend, "/recipes/check", None, "name=x&servings=2").await;
     assert!(!response.body.contains("field-error"));

@@ -276,7 +276,7 @@ struct FormPage {
     servings: String,
     ingredients: String,
     steps: String,
-    /// すべての項目の誤り（フォームの上の一覧に出す）。
+    /// フォームの上の誤りの一覧に出す、すべての項目の誤り。欄から離れて確かめ直したときは空（[`Validation::Revalidated`]）。
     errors: Vec<FieldError>,
     name_error: Option<&'static str>,
     servings_error: Option<&'static str>,
@@ -295,7 +295,8 @@ enum Validation {
     NotSubmitted,
     /// 送信して誤りが出た。誤りの一覧にフォーカスを移し、以後は欄から離れたときにも確かめる。
     Submitted,
-    /// 送信した後に、欄から離れて確かめ直した。フォーカスは動かさない。
+    /// 送信した後に、欄から離れて確かめ直した。誤りの一覧は出さず（欄の誤りだけを出す）、フォーカスも動かさない。
+    /// 一覧を入れ替えると、押している途中の一覧のリンクが入れ替わり、クリックが失われるため。
     Revalidated,
 }
 
@@ -616,7 +617,11 @@ fn form_page(
         servings_error: error_of("servings"),
         ingredients_error: error_of("ingredients"),
         steps_error: error_of("steps"),
-        errors,
+        errors: if validation == Validation::Revalidated {
+            Vec::new()
+        } else {
+            errors
+        },
         layout,
         revalidate: validation != Validation::NotSubmitted,
         focus_summary: validation == Validation::Submitted,
@@ -715,15 +720,13 @@ pub async fn check_form(
 ) -> Result<Response, ScreenError> {
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     let errors = recipe::check(form.to_input()).err().unwrap_or_default();
-    let mut page = form_page(
+    let page = form_page(
         Layout::default(),
         &FormKind::New,
         &form,
         errors,
         Validation::Revalidated,
     );
-    // 誤りの一覧は使わないので出さない（各欄の誤りは、欄ごとの値で出す）。
-    page.errors.clear();
     Ok(render(StatusCode::OK, &page))
 }
 
