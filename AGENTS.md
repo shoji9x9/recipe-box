@@ -2,7 +2,8 @@
 
 このリポジトリで作業するコーディングエージェント向けの決まり。
 アプリの概要と使い方は [README.md](README.md) に、仕様は [docs/spec.md](docs/spec.md) に、方針と技術構成は [docs/architecture.md](docs/architecture.md) に、セキュリティは [docs/security.md](docs/security.md) に、開発の手順は [docs/development.md](docs/development.md) にある。
-仕様を変えるときは、`docs/spec.md` も一緒に直す。README.md には概要と使い方だけを書き、詳細は `docs/` に置く。
+動きや値を変えるときは、それを書いた文書をすべて一緒に直す（仕様は `docs/spec.md`、上限などの費用の対策は `docs/security.md`、手順は `docs/development.md`、利用者に見える値や操作は `README.md` の使い方も）。
+README.md には概要と使い方だけを書き、詳細は `docs/` に置く。
 
 ## 文書
 
