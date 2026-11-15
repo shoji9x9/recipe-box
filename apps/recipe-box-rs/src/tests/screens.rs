@@ -1063,9 +1063,11 @@ async fn photo_bytes_can_be_sent_without_multipart() {
     let a = cookie(WORKSPACE_A);
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
 
+    // JavaScript が送るので、詳細の画面に移らせず、知らせ（flash）も付けない。
     let response = post_raw_photo(&backend, &path, &a, "image/jpeg", jpeg(10)).await;
-    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    assert_eq!(response.location, path);
+    assert_eq!(response.status, StatusCode::NO_CONTENT, "{}", response.body);
+    assert_eq!(response.location, "");
+    assert!(set_cookie_named(&response, "__Host-flash").is_none());
     {
         let stored = backend.objects.lock().unwrap();
         assert_eq!(stored.len(), 1);

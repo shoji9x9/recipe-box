@@ -2,7 +2,8 @@
 //
 // JavaScript が動かなければ、フォームは今までどおり multipart で 1 枚ずつ送る（docs/spec.md の「画面」）。
 // 1 枚ずつ、写真のバイト列そのものを同じパスに送る。本文が 1 枚の写真の大きさに収まり、サーバーは本文を
-// 読みためずに R2 へ流せる。送り終えたら詳細の画面を読み直し、何枚入ったかと、入らなかった写真の理由を出す。
+// 読みためずに R2 へ流せる。サーバーは、追加できたら 204 を返す（フォームのときの 303 で詳細の画面に移らせない）。
+// 送り終えたら詳細の画面を読み直し、何枚入ったかと、入らなかった写真の理由を出す。
 "use strict";
 
 (() => {
@@ -31,7 +32,7 @@
   }
 
   // 1 枚を送り、追加できたら null、できなければ理由の文を返す。
-  async function sendOne(form, file, detailPath) {
+  async function sendOne(form, file) {
     let response;
     try {
       response = await fetch(form.action, {
@@ -42,11 +43,10 @@
     } catch {
       return "通信できませんでした";
     }
-    // 追加できると、303 で詳細の画面に移る。fetch はその移動を追うので、移った先が詳細の画面で 200 なら成功。
-    // ワークスペースが無いとき（303 で最初の画面へ）や、エラーの画面（4xx・5xx）は失敗にする。
-    if (response.ok && response.redirected && new URL(response.url).pathname === detailPath) {
+    if (response.status === 204) {
       return null;
     }
+    // ワークスペースが無いとき（303 で最初の画面へ移る）など、エラーの画面でない応答は、決まった文にする。
     if (response.ok) {
       return "追加できませんでした";
     }
@@ -98,14 +98,26 @@
     head.after(...messages);
   }
 
-  // 詳細の画面を読み直す。htmx があれば、ページの移動と同じく本文だけを入れ替える。
-  async function reload(detailPath) {
-    if (window.htmx) {
-      await window.htmx.ajax("GET", detailPath, { target: "body", swap: "innerHTML" });
-      return true;
+  // 詳細の画面を読み直して、結果を出す。htmx があれば、ページの移動と同じく本文だけを入れ替える。
+  // 読み直せなければ、今の画面のまま結果を出す（追加した写真は、ページを読み直すと出る）。
+  async function finish(form, detailPath, added, failures) {
+    // 送っている間に、ほかの画面に移っていれば、その画面を入れ替えない。
+    if (window.location.pathname !== detailPath) {
+      return;
     }
-    window.location.assign(detailPath);
-    return false;
+    let reloaded = false;
+    try {
+      if (window.htmx) {
+        await window.htmx.ajax("GET", detailPath, { target: "body", swap: "innerHTML" });
+        reloaded = true;
+      }
+    } catch {
+      // 今の画面のまま結果を出す。
+    }
+    if (!reloaded) {
+      setStatus(form, "送り終えました。ページを読み直すと、追加した写真が出ます");
+    }
+    showResults(added, failures);
   }
 
   function setStatus(form, text) {
@@ -120,37 +132,49 @@
     status.textContent = text;
   }
 
+  // 送らずに断る写真の理由。サーバーも同じ上限で断るので、送る手間を省くだけである。
+  function localReason(form, file) {
+    if (file.size === 0) {
+      return "空のファイルは追加できません";
+    }
+    if (file.size > Number(form.dataset.maxBytes)) {
+      return form.dataset.tooLarge;
+    }
+    return null;
+  }
+
   async function upload(form, files) {
+    const failures = [];
+    const sending = [];
+    for (const file of files) {
+      const reason = localReason(form, file);
+      if (reason === null) {
+        sending.push(file);
+      } else {
+        failures.push([file.name, reason]);
+      }
+    }
     const remaining = Number(form.dataset.remaining);
-    const maxBytes = Number(form.dataset.maxBytes);
-    if (files.length > remaining) {
-      setStatus(form, `写真はあと ${remaining} 枚まで追加できます。選んだ ${files.length} 枚から減らしてください`);
+    if (sending.length > remaining) {
+      setStatus(form, `写真はあと ${remaining} 枚まで追加できます。選んだ写真を減らしてください`);
       return;
     }
-    const detailPath = new URL(form.action).pathname.replace(/\/photos$/, "");
-    const controls = form.querySelectorAll("input, button");
-    for (const control of controls) {
+    // 詳細の画面のパス。フォームの送り先（/recipes/<id>/photos）の親である。
+    const detailPath = new URL(form.action).pathname.replace(/\/photos\/?$/, "");
+    for (const control of form.querySelectorAll("input, button")) {
       control.disabled = true;
     }
     let added = 0;
-    const failures = [];
-    for (const [index, file] of files.entries()) {
-      setStatus(form, `写真を送っています（${index + 1} / ${files.length} 枚目）`);
-      // 大きすぎる写真は、送る前に断る（サーバーも同じ上限で断る）。
-      const reason = file.size > maxBytes ? form.dataset.tooLarge : await sendOne(form, file, detailPath);
+    for (const [index, file] of sending.entries()) {
+      setStatus(form, `写真を送っています（${index + 1} / ${sending.length} 枚目）`);
+      const reason = await sendOne(form, file);
       if (reason === null) {
         added += 1;
       } else {
         failures.push([file.name, reason]);
       }
     }
-    try {
-      if (await reload(detailPath)) {
-        showResults(added, failures);
-      }
-    } catch {
-      window.location.assign(detailPath);
-    }
+    await finish(form, detailPath, added, failures);
   }
 
   // htmx（hx-boost）より先に受け取るため、捕捉の段階で聞く。
