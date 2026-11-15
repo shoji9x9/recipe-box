@@ -103,8 +103,8 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 - `modern-web-guidance`: 画面の HTML・CSS・JavaScript を書く前に、今の Web の作り方の指針（ブラウザの機能・アクセシビリティ・性能）を引く。
   入れ方は `gh skill install GoogleChrome/modern-web-guidance modern-web-guidance --agent claude-code --scope project --pin <commit>`。
   - スキルの `SKILL.md` と指針は、`npx -y modern-web-guidance@latest ...` を実行するよう書いているが、その代わりに `mise run mwg -- <サブコマンド> ...` を使う（例: `mise run mwg -- search "<検索の語>" --skill-version <SKILL.md に書かれた値>`、`mise run mwg -- retrieve "<id>"`）。
-    ツールは `mise run mwg` か、その中身の `scripts/mwg.sh` を直接呼ぶ形でだけ動かす。ほかの方法（`npx`・`pnpm`・`npm`・`yarn`・`bun` などの起動の仕組みや、`node_modules` の中のファイル）では、どの形でも動かさない。`scripts/mwg.sh` の中のコマンドを写して使うことも含む。
-    プロジェクトの devDependencies として、版を固定して入れ替えること（`pnpm add -D -E modern-web-guidance@<版>`・`pnpm install`）は、ツールを動かさないので、この決まりに当たらない。
+    ツールは `mise run mwg` でだけ動かす（mise で固定した node と pnpm を使うため）。ほかの方法（`scripts/mwg.sh` を直接呼ぶこと、その中のコマンドを写して使うこと、`npx`・`pnpm`・`npm`・`yarn`・`bun` などの起動の仕組み、`node_modules` の中のファイル）では、どの形でも動かさない。
+    ツールを動かさない依存の管理（`pnpm add -D -E modern-web-guidance@<版>`・`pnpm install`・`pnpm remove` など）は、この決まりに当たらない。
     Claude Code では、よくある起動の形を、コマンドの先頭で `.claude/settings.json` の `permissions.deny` によって止めているが、止まらない形もある。
     広く止めると、この語を含む `grep` や `git commit` まで止まるので、止める形は絞っている。この決まりが主で、deny は補いである。
     - `@latest` は 7 日の待ち（「依存の追加と更新」）を守れないので、`package.json` で版を固定したパッケージを使う。
