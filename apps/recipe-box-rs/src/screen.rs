@@ -837,7 +837,7 @@ async fn detail_page<B: Backend>(
             // 共有のデモでは追加・削除できない（デモの ID の Cookie は、identify が自分のワークスペースから外す）。
             photos_editable: matches!(viewer, Viewer::Own(_)),
             max_photos: photo::MAX_PHOTOS_PER_RECIPE,
-            remaining_photos: photo::MAX_PHOTOS_PER_RECIPE.saturating_sub(count),
+            remaining_photos: (photo::MAX_PHOTOS_PER_RECIPE - count).max(0),
             max_photo_bytes: photo::MAX_PHOTO_BYTES,
             photo_too_large: PHOTO_TOO_LARGE,
         },

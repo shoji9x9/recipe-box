@@ -31,7 +31,10 @@
     return "追加できませんでした";
   }
 
-  // 1 枚を送り、追加できたら null、できなければ理由の文を返す。
+  // ワークスペースが無いなど、続けて送っても追加できないときの印。
+  const STOP = Symbol("stop");
+
+  // 1 枚を送り、追加できたら null、できなければ理由の文を返す。続けても追加できなければ STOP を返す。
   async function sendOne(form, file) {
     let response;
     try {
@@ -46,9 +49,9 @@
     if (response.status === 204) {
       return null;
     }
-    // ワークスペースが無いとき（303 で最初の画面へ移る）など、エラーの画面でない応答は、決まった文にする。
+    // ワークスペースが無いとき（303 で最初の画面へ移る）など、エラーの画面でない応答は、残りも送らない。
     if (response.ok) {
-      return "追加できませんでした";
+      return STOP;
     }
     return failureReason(response);
   }
@@ -105,17 +108,22 @@
     if (window.location.pathname !== detailPath) {
       return;
     }
-    let reloaded = false;
+    // 読み直せなかったときのために、先にフォームを使える状態に戻す（読み直せば、フォームごと入れ替わる）。
+    form.dataset.remaining = String(Math.max(0, Number(form.dataset.remaining) - added));
+    for (const control of form.querySelectorAll("input, button")) {
+      control.disabled = false;
+    }
+    const input = form.querySelector('input[type="file"]');
+    if (input) {
+      input.value = "";
+    }
+    setStatus(form, "送り終えました。ページを読み直すと、追加した写真が出ます");
     try {
       if (window.htmx) {
         await window.htmx.ajax("GET", detailPath, { target: "body", swap: "innerHTML" });
-        reloaded = true;
       }
     } catch {
       // 今の画面のまま結果を出す。
-    }
-    if (!reloaded) {
-      setStatus(form, "送り終えました。ページを読み直すと、追加した写真が出ます");
     }
     showResults(added, failures);
   }
@@ -156,7 +164,12 @@
     }
     const remaining = Number(form.dataset.remaining);
     if (sending.length > remaining) {
-      setStatus(form, `写真はあと ${remaining} 枚まで追加できます。選んだ写真を減らしてください`);
+      // 送らずに断る写真があれば、それも一緒に知らせる（選び直すときに除けるように）。
+      const others = failures.map(([name, reason]) => `${name}: ${reason}`).join("。");
+      setStatus(
+        form,
+        `写真はあと ${remaining} 枚まで追加できます。選んだ写真を減らしてください${others ? `。ほかに、追加できない写真があります（${others}）` : ""}`,
+      );
       return;
     }
     // 詳細の画面のパス。フォームの送り先（/recipes/<id>/photos）の親である。
@@ -168,6 +181,12 @@
     for (const [index, file] of sending.entries()) {
       setStatus(form, `写真を送っています（${index + 1} / ${sending.length} 枚目）`);
       const reason = await sendOne(form, file);
+      if (reason === STOP) {
+        for (const rest of sending.slice(index)) {
+          failures.push([rest.name, "追加できませんでした。ページを読み直してください"]);
+        }
+        break;
+      }
       if (reason === null) {
         added += 1;
       } else {
