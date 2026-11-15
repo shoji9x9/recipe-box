@@ -127,7 +127,8 @@ function loadRecipes() {
     }
     return validateRecipes(recipes, photoDir, root);
   } catch (error) {
-    fail(error?.message ?? String(error));
+    // プログラムの誤りは、データの誤りと見分けられるよう、型の名前を添える。
+    fail(error instanceof SeedDataError ? error.message : `${error?.name ?? "Error"}: ${error?.message || String(error)}`);
   }
 }
 

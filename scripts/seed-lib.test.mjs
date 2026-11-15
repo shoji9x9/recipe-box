@@ -1,7 +1,7 @@
 // scripts/seed-lib.mjs の単体テスト（mise run test で実行する）。
 // 伏せ字は、公開の Actions のログにデモの ID などを出さないための要なので、形ごとに確かめる。
 import assert from "node:assert/strict";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -236,6 +236,13 @@ describe("validateRecipes", () => {
     rejects([recipe({ photos: [file] })], /シンボリックリンク/, join(linkedSeed, "photos"));
     // 写真を使わないレシピだけなら、ディレクトリを読まない
     validate([recipe()], linkedPhotos);
+  });
+
+  // root は権限に関わらず開けるので、確かめられない。
+  test("写真を開けないときは、データの誤りにする", { skip: process.getuid?.() === 0 }, () => {
+    const file = photo("locked.jpg", 10);
+    chmodSync(join(dir, file), 0o000);
+    rejects([recipe({ photos: [file] })], /locked\.jpg を読めない（EACCES）/);
   });
 
   test("データの誤りでない例外は、レシピの番号を添えずにそのまま投げる", () => {

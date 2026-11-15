@@ -117,10 +117,19 @@ export function lstatWithoutLinks(path, base) {
   return stat;
 }
 
+// fs のシステムの失敗（ENOENT・EACCES など。syscall を持つ）なら、shown を読めないという SeedDataError にして投げる。
+// それ以外（プログラムの誤り）は、データの誤りに見せずにそのまま投げる。
+function throwAsReadFailure(error, shown) {
+  if (error.syscall === undefined) {
+    throw error;
+  }
+  throw new SeedDataError(`${shown} を読めない（${error.code}）`);
+}
+
 // path が、base の下にリンクを通らずに置かれた、ふつうのファイルかを確かめ、lstat の結果を返す。
 // ハードリンクも、リポジトリの外のファイルと中身を共有しうるので断る（git はハードリンクを記録しない）。
 // FIFO などは読むと止まるので、ふつうのファイルだけを受け付ける。
-// 合わなければ、shown（表示する名前）を使った文の Error を投げる。fs の失敗でない例外（プログラムの誤り）は、そのまま投げる。
+// 合わなければ、shown（表示する名前）を使った文の SeedDataError を投げる。fs の失敗でない例外（プログラムの誤り）は、そのまま投げる。
 export function regularFileWithoutLinks(path, base, shown) {
   let stat;
   try {
@@ -132,11 +141,7 @@ export function regularFileWithoutLinks(path, base, shown) {
     if (error.reason === "outside") {
       throw new SeedDataError(`${shown} がリポジトリの下に無い`);
     }
-    // fs のシステムの失敗（ENOENT・EACCES など）は syscall を持つ。
-    if (error.syscall === undefined) {
-      throw error;
-    }
-    throw new SeedDataError(`${shown} を読めない（${error.code}）`);
+    throwAsReadFailure(error, shown);
   }
   if (!stat.isFile()) {
     throw new SeedDataError(`${shown} がふつうのファイルでない`);
@@ -202,10 +207,7 @@ export function validateRecipes(recipes, photoDir, base) {
       try {
         head = readHead(path);
       } catch (error) {
-        if (error.syscall === undefined) {
-          throw error;
-        }
-        throw new SeedDataError(`${where}: 写真 seed/photos/${file} を読めない（${error.code}）`);
+        throwAsReadFailure(error, `${where}: 写真 seed/photos/${file}`);
       }
       const contentType = photoContentType(head);
       if (contentType === null) {
