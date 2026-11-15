@@ -50,10 +50,10 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、seed のスクリプトの単体テストを実行する"
+description = "Rust のテストと、スクリプト（seed・modern-web-guidance）の単体テストを実行する"
 run = [
   "cargo test --workspace --locked",
-  "node --test scripts/seed-lib.test.mjs",
+  "node --test scripts/seed-lib.test.mjs scripts/mwg.test.mjs",
 ]
 
 [tasks.build]

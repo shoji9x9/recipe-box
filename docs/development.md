@@ -25,7 +25,7 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp・modern-web-guida
 | `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
 | `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
 | `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 と R2（をまねたもの）を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う |
-| `mise run test` | Rust のテストと、seed のスクリプトの単体テスト（`scripts/seed-lib.test.mjs`）を実行する |
+| `mise run test` | Rust のテストと、スクリプトの単体テスト（seed の `scripts/seed-lib.test.mjs`、modern-web-guidance の `scripts/mwg.test.mjs`）を実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
 | `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck）と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
