@@ -376,19 +376,6 @@ fn remove_cookie(response: &mut Response, name: &str) {
     add_cookie(response, name, "", 0);
 }
 
-/// 応答が、`name` の Cookie を付けるか消すか（`Set-Cookie` にあるか）。
-fn sets_cookie(response: &Response, name: &str) -> bool {
-    response
-        .headers()
-        .get_all(header::SET_COOKIE)
-        .iter()
-        .any(|value| {
-            value
-                .to_str()
-                .is_ok_and(|text| text.starts_with(&format!("{name}=")))
-        })
-}
-
 /// Cookie の値を読む。無いか、同じ名前が 2 つ以上あれば `None`（どちらを使うか決められないため）。
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut found = None;
@@ -419,7 +406,9 @@ fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
 /// Cookie から、画面を見ている人の状態を読む middleware。すべての画面の前に動く。
 ///
 /// - ワークスペースの Cookie があれば、在ることを確かめて最終利用日時を更新する。
-///   無くなっていれば（自動削除など）、どの画面でも Cookie を消す。
+///   無くなっていれば（自動削除など）か、共有のデモの ID なら、どの画面でも Cookie を消す。
+///   消す `Set-Cookie` は、ハンドラーの `Set-Cookie` より前に置く。同じ応答でワークスペースを作った・切り替えたときは、
+///   ブラウザが後ろの `Set-Cookie` を当てるので、新しい Cookie が残る。
 /// - 一度だけ出すメッセージがあれば読み、画面を返すときに消す（移動のときは、移動先で読むので残す）。
 pub async fn identify<B: Backend>(
     State(backend): State<B>,
@@ -429,15 +418,14 @@ pub async fn identify<B: Backend>(
     let headers = request.headers();
     let flash = cookie_value(headers, FLASH_COOKIE).and_then(Flash::parse);
     let viewing_demo = cookie_value(headers, DEMO_VIEW_COOKIE) == Some("1");
-    // Cookie の ID が共有のデモの ID なら（Cookie を手で書き換えたなど）、自分のワークスペースとして扱わない。
+    // Cookie の ID が共有のデモの ID なら（Cookie を手で書き換えたなど）、自分のワークスペースとして扱わず、Cookie を消す。
     // デモでは写真を追加・削除させないなど、デモかどうかで扱いが変わるので、どの画面でも同じに決めるため。
-    // Cookie は消さない（運営がデモの ID を指定し直したときに、元のワークスペースに戻れるように）。
-    // デモの ID かどうかを応答の時間で分からないよう、ほかの ID と同じく D1 を読んでから決める。
+    // デモの ID かどうかが分からないよう、無い ID と同じく D1 を読み、同じく Cookie を消す（応答の時間とヘッダーをそろえる）。
     let demo = backend.demo_workspace_id();
     let cookie_id = cookie_workspace(headers);
     let (own, stale) = match cookie_id {
         Some(id) => match workspace::touch(&backend, &id).await {
-            Ok(true) if demo.as_ref() == Some(&id) => (None, false),
+            Ok(true) if demo.as_ref() == Some(&id) => (None, true),
             Ok(true) => (Some(id), false),
             Ok(false) => (None, true),
             Err(error) => return error_page(&error),
@@ -450,12 +438,20 @@ pub async fn identify<B: Backend>(
         flash,
     });
     let mut response = next.run(request).await;
-    // 消えたワークスペースの Cookie を消す。ただし、ハンドラーが同じ応答で付け直した Cookie
-    // （ワークスペースを作った・切り替えたとき）は、後ろに削除を足すと打ち消されるので、消さない。
-    if stale && !sets_cookie(&response, WORKSPACE_COOKIE) {
+    if stale {
+        // ハンドラーの Set-Cookie を一度外し、消す Set-Cookie を先に置いてから戻す。
+        let handler_cookies: Vec<HeaderValue> = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .cloned()
+            .collect();
+        // remove は、その名前の値をすべて外す。
+        response.headers_mut().remove(header::SET_COOKIE);
         remove_cookie(&mut response, WORKSPACE_COOKIE);
-        if !sets_cookie(&response, DEMO_VIEW_COOKIE) {
-            remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+        remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+        for cookie in handler_cookies {
+            response.headers_mut().append(header::SET_COOKIE, cookie);
         }
     }
     if flash.is_some() && !response.status().is_redirection() {

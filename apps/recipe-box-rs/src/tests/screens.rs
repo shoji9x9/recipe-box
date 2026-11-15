@@ -1227,12 +1227,16 @@ async fn demo_id_is_never_treated_as_own_workspace() {
     assert!(response.body.contains("見つかりません"));
     assert_eq!(set_cookie_named(&response, "__Host-workspace"), None);
 
-    // Cookie を手で書き換えても、デモとして扱う（写真の追加・削除のボタンを出さず、送られても断る）。
-    // Cookie は消さない（運営がデモの ID を指定し直したときに、元のワークスペースに戻れるように）。
+    // Cookie を手で書き換えても、デモとして扱い、無い ID と同じく Cookie を消す
+    // （写真の追加・削除のボタンを出さず、送られても断る）。
     let demo_cookie = cookie(DEMO);
     let response = screen_get(&backend, &path, Some(&demo_cookie)).await;
     assert_eq!(response.status, StatusCode::OK);
-    assert_eq!(set_cookie_named(&response, "__Host-workspace"), None);
+    assert!(
+        set_cookie_named(&response, "__Host-workspace")
+            .unwrap()
+            .contains("Max-Age=0")
+    );
     assert!(
         response.body.contains("共有のデモです"),
         "{}",
@@ -1255,7 +1259,11 @@ async fn demo_id_is_never_treated_as_own_workspace() {
     assert!(!response.body.contains("自分のレシピ帳に戻る"));
     let response = screen_post(&backend, "/workspace/demo", Some(&demo_cookie), "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
-    assert_eq!(set_cookies(&response), Vec::<String>::new());
+    assert!(
+        !set_cookies(&response)
+            .iter()
+            .any(|cookie| cookie.starts_with("__Host-demo-view=1"))
+    );
 }
 
 #[test]
@@ -1301,9 +1309,11 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
         .into_iter()
         .filter(|cookie| cookie.starts_with("__Host-workspace="))
         .collect();
-    // 消えた ID の Cookie を消す Set-Cookie を後ろに足して、新しい Cookie を打ち消さない。
-    assert_eq!(cookies.len(), 1, "{cookies:?}");
-    assert!(cookies[0].starts_with(&cookie(WORKSPACE_B)));
+    // 消えた ID の Cookie を消す Set-Cookie は、新しい Cookie より前に置く（ブラウザは後ろのものを当てる）。
+    assert!(
+        cookies.last().unwrap().starts_with(&cookie(WORKSPACE_B)),
+        "{cookies:?}"
+    );
 
     let response = screen_post(&backend, "/workspace", Some(&gone), "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
@@ -1311,6 +1321,8 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
         .into_iter()
         .filter(|cookie| cookie.starts_with("__Host-workspace="))
         .collect();
-    assert_eq!(cookies.len(), 1, "{cookies:?}");
-    assert!(!cookies[0].contains("Max-Age=0"));
+    assert!(
+        !cookies.last().unwrap().contains("Max-Age=0"),
+        "{cookies:?}"
+    );
 }
