@@ -40,6 +40,8 @@ const BASE_URLS = {
   "--remote": "https://recipe-box.shoji9x9.workers.dev",
 };
 const BUCKET = "recipe-box-photos";
+// seed が使う R2 の操作と、ログでの呼び方。
+const R2_ACTIONS = { put: "R2 への書き込み", delete: "R2 からの削除" };
 // API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
 // 値はアプリ（apps/recipe-box-rs/src/recipe.rs・photo.rs）と同じにする。アプリの値を変えたら、ここも直す。
 const MAX_RECIPES = 80;
@@ -91,12 +93,12 @@ if (!ID_PATTERN.test(workspaceId)) {
 
 // 表示やエラーの文から、デモの ID を伏せる。
 // アカウントの ID（16 進数 32 文字）や D1 のデータベースの ID（UUID の形）も、公開の Actions のログに出さないよう伏せる。
-// 16 進数 32 文字の値はすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
+// 16 進数 32 文字以上の並びはすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
 function redact(text) {
   return String(text)
     .replaceAll(workspaceId, "***")
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
-    .replace(/[0-9a-f]{32}/gi, "***");
+    .replace(/\b[0-9a-f]{32,}\b/gi, "***");
 }
 
 function sleep(ms) {
@@ -239,21 +241,31 @@ async function wrangler(...wranglerArgs) {
     });
     return stdout;
   } catch (error) {
-    throw new Error(redact(`${error.stderr ?? ""}${error.stdout ?? ""}${error.message}`).slice(-2000));
+    // 理由は stderr か stdout（--json のとき）にある。Node のエラーの文（コマンドの全体を含む）は、起動できなかったときだけ使う。
+    const output = [error.stderr, error.stdout].filter((text) => text?.trim()).join("\n");
+    throw new Error(redact(output || error.message).slice(0, 2000));
   }
 }
 
-// wrangler の失敗の文から、理由の 1 行を選ぶ。wrangler は理由を JSON の "text" か「[ERROR]」の行に書き、
-// 最後の行はログのファイルの場所なので、それらの行を優先し、無ければコマンドとログの場所以外の最初の行にする。
+// wrangler の失敗の文から、理由を短く選ぶ。wrangler は理由を JSON の "text" か「[ERROR]」の行に書き、
+// API のエラーでは、原因（[code: ...] の付いた行）を、その次の行に書く。ログのファイルの場所の行は除く。
 function shortReason(message) {
   const lines = message
     // 色の制御文字を取り除く。
     .replace(/\x1b\[[0-9;]*m/g, "")
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("Command failed:") && !line.includes("Logs were written"));
-  const line = lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]")) ?? lines[0] ?? "";
-  return line.slice(0, 200);
+    .filter((line) => line !== "" && !line.includes("Logs were written"));
+  const text = lines.find((l) => l.includes('"text"'));
+  if (text !== undefined) {
+    return text.slice(0, 200);
+  }
+  const index = lines.findIndex((l) => l.includes("[ERROR]"));
+  if (index < 0) {
+    return (lines[0] ?? "").slice(0, 200);
+  }
+  const next = lines[index + 1];
+  return (next?.includes("[code:") ? `${lines[index]} ${next}` : lines[index]).slice(0, 300);
 }
 
 // wrangler を動かし、失敗したら待ち時間を延ばしながら RETRY_ATTEMPTS 回まで試す。最後の失敗は投げる。
@@ -276,11 +288,10 @@ async function wranglerWithRetry(what, ...wranglerArgs) {
 // R2 の操作を、wrangler が失敗したら待ってやり直す。やり直しても失敗したら、投げずに false を返す。
 async function r2(action, photo, ...extra) {
   const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
-  const names = { put: "R2 への書き込み", delete: "R2 からの削除" };
-  if (!(action in names)) {
+  if (!Object.hasOwn(R2_ACTIONS, action)) {
     throw new Error(`R2 の操作 ${action} は使わない`);
   }
-  const what = `写真 ${photo.file} の${names[action]}`;
+  const what = `写真 ${photo.file} の${R2_ACTIONS[action]}`;
   try {
     await wranglerWithRetry(what, "r2", "object", action, key, ...extra);
     return true;
