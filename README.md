@@ -1,16 +1,16 @@
 # recipe-box
 
-料理のレシピを登録・検索できる、小さな Web アプリケーション。ログインは要りません。
+料理のレシピを登録・検索できる、小さな Web アプリケーション。
+
+デモ: <https://recipe-box.shoji9x9.workers.dev>
 
 [shoji9x9/skills](https://github.com/shoji9x9/skills) の `replace-strategy` とその姉妹スキル（`golden-dataset`・`parity-suite`・`parity-replace`・`parity-diff` など）を試すための題材として作っています。
-最初に Rust で作り（リライト前）、後でスキルを使って TypeScript に書き換えます（リライト後）。
 
 ## できること
 
 - レシピの登録・編集・削除（料理名・何人分か・材料・手順）
 - レシピの一覧と、料理名での検索（20 件ずつのページ分け）
 - ほかの端末からも、同じレシピ帳を使う
-- 画面と同じことができる API（[仕様](docs/spec.md#api)）
 
 ## 使い方
 
