@@ -878,7 +878,7 @@ async fn fields_are_checked_on_submit_then_on_blur() {
     for field in ["name", "servings", "ingredients", "steps"] {
         assert!(
             response.body.contains(&format!(
-                r##"hx-post="/recipes/check" hx-trigger="blur delay:300ms" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}""##
+                r##"hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}" hx-swap="outerHTML">"##
             )),
             "{field}"
         );
@@ -906,7 +906,6 @@ async fn check_route_only_validates() {
     // 直った欄は、誤りが消える。
     let response = screen_post(&backend, "/recipes/check", None, "name=x&servings=2").await;
     assert!(!response.body.contains("field-error"));
-    assert!(response.body.contains(r#"<div id="error-summary">"#));
     assert!(backend.recipes.lock().unwrap().is_empty());
     // ほかの画面の POST と同じく、別のサイトからは受け付けない。
     let request = Request::post("/recipes/check")

@@ -42,7 +42,7 @@
 }
 
 /* 誤りの一覧のリンクなどで、ページの中を移るときは滑らかに動かす（動きを減らす設定の人には動かさない）。
-   ページの中の移動はリンクで行うので、JavaScript を使わずに、ページ全体に指定する。 */
+   JavaScript を使わないよう、ページ全体に指定する。フォーカスやアドレスの # で動くスクロールも滑らかになる。 */
 @media (prefers-reduced-motion: no-preference) {
   html {
     scroll-behavior: smooth;

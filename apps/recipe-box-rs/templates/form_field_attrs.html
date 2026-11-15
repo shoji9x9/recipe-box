@@ -1,5 +1,6 @@
 {#- 送信して誤りが出た後（revalidate）は、欄から離れたときに、その欄をサーバーで確かめ直す（react-hook-form の reValidateMode: onBlur）。
-    フォーム全体を送って確かめ、返ってきた画面から、その欄（入力と誤り）と、誤りの一覧だけを入れ替える。
-    離れてから 300 ms 待って確かめる。誤りの一覧のリンクを押すと、押した時点で欄から離れるので、待たないと、
-    ボタンを離す前に一覧（押しているリンク）が入れ替わり、ブラウザーがクリックとみなさない（押した要素と離した要素が違うため）。 #}
-{%- if revalidate %} hx-post="/recipes/check" hx-trigger="blur delay:300ms" hx-include="closest form" hx-target="#field-{{ field }}" hx-select="#field-{{ field }}" hx-swap="outerHTML" hx-select-oob="#error-summary"{% endif %}
+    フォーム全体を送って確かめ、返ってきた画面から、その欄（入力と誤り）だけを入れ替える。
+    誤りの一覧は入れ替えない（送信したときだけ作る）。一覧のリンクを押すと、押した時点で欄から離れるので、
+    一覧を入れ替えると、ボタンを離す前に押しているリンクが入れ替わり、ブラウザがクリックとみなさない（押した要素と離した要素が違うため）。
+    一覧は欄より上にあるので、欄を入れ替えても一覧のリンクは動かない。 #}
+{%- if revalidate %} hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{{ field }}" hx-select="#field-{{ field }}" hx-swap="outerHTML"{% endif %}
