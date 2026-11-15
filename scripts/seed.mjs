@@ -35,7 +35,8 @@ const appDir = join(root, "apps", "recipe-box-rs");
 // 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
 const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
 // ログで . と ~ に置き換える、リポジトリとホームのディレクトリのパス（端末の利用者名が入る）。
-// 前後がファイル名の文字（英数字・_・-・.）でないときだけ置き換え、/home/u で /home/u2 や /mnt/home/u を崩さない。
+// 後ろがファイル名の文字（英数字・_・-）でないときだけ置き換え、/home/u で /home/u2 を崩さない。
+// 前は問わない（/mnt/home/u のように長いパスの終わりに出ても伏せる。表示が少し崩れても、利用者名を出さないことを優先する）。
 // 絶対パスでないか / だけなら置き換えない（ほかの文字まで置き換えてしまうため）。
 function pathPattern(path) {
   const trimmed = path.replace(/\/+$/, "");
@@ -43,7 +44,7 @@ function pathPattern(path) {
     return null;
   }
   const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(String.raw`(?<![\w.-])${escaped}(?![\w-])`, "g");
+  return new RegExp(String.raw`${escaped}(?![\w-])`, "g");
 }
 const PATHS = [
   [pathPattern(root), "."],
@@ -84,7 +85,8 @@ const RETRY_WAIT_MS = 5_000;
 const ID_PATTERN = /^[0-9a-f]{32}$/;
 const PHOTO_FILE_PATTERN = /^[a-z0-9][a-z0-9-]*\.(jpg|png|webp)$/;
 
-// 表示する文は、ここで必ず伏せる（redact）。呼ぶ側で伏せ忘れても、ID とパスを出さないためである。
+// 失敗の文は、ここで必ず伏せる（redact）。呼ぶ側で伏せ忘れても、ID とパスを出さないためである。
+// 進み具合の表示（console.log）と、手で消すキーの表示（shownKey）は、ID もパスも含まないので、そのまま出す。
 function fail(message) {
   console.error(`seed: ${redact(message)}`);
   process.exit(1);
@@ -118,12 +120,8 @@ if (!ID_PATTERN.test(workspaceId)) {
 // 16 進数 32 文字以上の並びはすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
 // リポジトリとホームのディレクトリのパスも、. と ~ に置き換える（PATHS）。
 function redact(text) {
-  let result = PATHS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), String(text));
-  // ID の形を確かめる前（空のときなど）に呼ばれたら、デモの ID の置き換えを飛ばす（空の文字列で置き換えると文が崩れる）。
-  if (ID_PATTERN.test(workspaceId)) {
-    result = result.replaceAll(workspaceId, "***");
-  }
-  return result
+  // デモの ID（16 進数 32 文字）は、下の 32 文字以上の並びを伏せる置き換えで伏せる。
+  return PATHS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), String(text))
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
     .replace(/[0-9a-f]{32,}/gi, "***");
 }
@@ -469,6 +467,7 @@ async function main() {
   const removed = await r2("delete", probe);
   rmSync(probeFile, { force: true });
   if (!removed) {
+    // キーの ID を見せる必要があるので、redact を通さない（デモの ID は shownKey が伏せている）。
     console.error(`確かめるために書いたデータを R2 から消せなかった。手で消す: ${shownKey(probe)}`);
   }
   if (!written || !removed) {
