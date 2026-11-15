@@ -41,6 +41,19 @@
   box-sizing: border-box;
 }
 
+/* 誤りの一覧のリンクなどで、ページの中を移るときは滑らかに動かす（動きを減らす設定の人には動かさない） */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ページの中で移った先の欄が、上に固定したヘッダーに隠れないよう、欄の名前の分も含めて上を空ける */
+input,
+textarea {
+  scroll-margin-top: 120px;
+}
+
 body {
   margin: 0;
   font-family: var(--font);
