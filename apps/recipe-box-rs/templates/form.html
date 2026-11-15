@@ -5,19 +5,17 @@
 {#- 入力の誤りは、まとめた一覧（各欄へのリンク）と、各欄のすぐ下の両方に出す。
     検証はサーバーだけで行うので、ブラウザの標準の検証は使わない（novalidate。required・maxlength も付けない）。
     確かめるのは、最初は送信したとき（onSubmit）だけで、誤りが出た後は欄から離れたときにも確かめ直す（onBlur）。
-    一覧の入れ物（#error-summary）は、欄から離れたときに入れ替えるため、誤りが無くても置いておく。 #}
-<div id="error-summary">
-  {%- if !errors.is_empty() %}
-  <div class="error-summary" role="alert" tabindex="-1"{% if focus_summary %} autofocus{% endif %}>
-    <h2>入力に誤りがあります（{{ errors.len() }} 件）</h2>
-    <ul>
-      {%- for error in errors %}
-      <li><a href="#{{ error.field }}">{{ error.message }}</a></li>
-      {%- endfor %}
-    </ul>
-  </div>
-  {%- endif %}
+    欄から離れたときに確かめ直すのは、その欄の誤りだけで、一覧は送信したときだけ作る（form_field_attrs.html）。 #}
+{%- if !errors.is_empty() %}
+<div class="error-summary" role="alert" tabindex="-1"{% if focus_summary %} autofocus{% endif %}>
+  <h2>入力に誤りがあります（{{ errors.len() }} 件）</h2>
+  <ul>
+    {%- for error in errors %}
+    <li><a href="#{{ error.field }}">{{ error.message }}</a></li>
+    {%- endfor %}
+  </ul>
 </div>
+{%- endif %}
 <form method="post" action="{{ action }}" class="recipe-form" novalidate>
   <div class="field" id="field-name">
     <label for="name">料理名（必須・100 文字まで）</label>

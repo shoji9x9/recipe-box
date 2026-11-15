@@ -875,10 +875,12 @@ async fn fields_are_checked_on_submit_then_on_blur() {
     // 送信して誤りが出た後は、どの欄も、離れたときに確かめ直す（reValidateMode: onBlur）。
     let response = screen_post(&backend, "/recipes", Some(&a), "name=&servings=2").await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    // 誤りの一覧は送信したときに出す。
+    assert!(response.body.contains(r#"class="error-summary""#));
     for field in ["name", "servings", "ingredients", "steps"] {
         assert!(
             response.body.contains(&format!(
-                r##"hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}""##
+                r##"hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}" hx-swap="outerHTML">"##
             )),
             "{field}"
         );
@@ -892,21 +894,30 @@ async fn check_route_only_validates() {
     let backend = backend_with_workspaces();
     // ワークスペースの Cookie が無くても確かめられ、何も保存しない。
     let response = screen_post(&backend, "/recipes/check", None, "name=&servings=2").await;
-    // 確かめること自体は成功なので 200。誤りは一覧と欄に出す。
+    // 確かめること自体は成功なので 200。誤りは欄のすぐ下に出す（画面は欄だけを入れ替える）。
     assert_eq!(response.status, StatusCode::OK);
-    assert!(response.body.contains("入力に誤りがあります（1 件）"));
+    // 誤りの一覧は、欄から離れたときには出さない（入れ替えると、押している途中の一覧のリンクのクリックが失われる）。
+    assert!(
+        !response.body.contains(r#"class="error-summary""#),
+        "{}",
+        response.body
+    );
     assert!(
         response
             .body
             .contains(r#"<p id="name-error" class="field-error">料理名を入力してください</p>"#)
     );
-    // 欄から離れたときに確かめ直すので、フォーカスは動かさない。続けて確かめられるよう、属性は残す。
+    // 欄から離れたときに確かめ直すので、フォーカスは動かさない（どこにも autofocus を付けない）。続けて確かめられるよう、属性は残す。
     assert!(!response.body.contains("autofocus"));
     assert!(response.body.contains(r#"hx-post="/recipes/check""#));
+    // 誤りが複数あっても、一覧は出さない。各欄の誤りは出す。
+    let many = format!("name=&servings=0&ingredients={}", "a".repeat(2001));
+    let response = screen_post(&backend, "/recipes/check", None, &many).await;
+    assert!(!response.body.contains(r#"class="error-summary""#));
+    assert_eq!(response.body.matches(r#"class="field-error""#).count(), 3);
     // 直った欄は、誤りが消える。
     let response = screen_post(&backend, "/recipes/check", None, "name=x&servings=2").await;
     assert!(!response.body.contains("field-error"));
-    assert!(response.body.contains(r#"<div id="error-summary">"#));
     assert!(backend.recipes.lock().unwrap().is_empty());
     // ほかの画面の POST と同じく、別のサイトからは受け付けない。
     let request = Request::post("/recipes/check")
