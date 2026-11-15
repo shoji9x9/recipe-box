@@ -19,7 +19,7 @@
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,6 +115,17 @@ function photoContentType(bytes) {
   return null;
 }
 
+// 形式を決めるのに要る、ファイルの先頭の 12 バイトだけを読む。
+function readHead(path) {
+  const fd = openSync(path, "r");
+  try {
+    const head = Buffer.alloc(12);
+    return head.subarray(0, readSync(fd, head, 0, head.length, 0));
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function length(text) {
   return [...text].length;
 }
@@ -168,7 +179,7 @@ function loadRecipes() {
       if (size === 0 || size > MAX_PHOTO_BYTES) {
         fail(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
       }
-      const contentType = photoContentType(readFileSync(path));
+      const contentType = photoContentType(readHead(path));
       if (contentType === null) {
         fail(`${where}: 写真 ${file} が JPEG・PNG・WebP のどれでもない`);
       }
@@ -260,12 +271,12 @@ async function eachPhoto(photos, task) {
   return failed;
 }
 
-// 写真のうち、D1 に行が在るものの ID を返す。
 // SQL の IN に並べる、写真の ID の一覧。ID は seed が作った 16 進数なので、そのまま埋め込める。
 function photoIdList(photos) {
   return photos.map((photo) => `'${photo.id}'`).join(", ");
 }
 
+// 写真のうち、D1 に行が在るものの ID を返す。
 async function existingPhotoIds(photos) {
   if (photos.length === 0) {
     return new Set();
@@ -328,12 +339,12 @@ async function main() {
   const probe = { file: "（R2 の権限の確認）", recipeId: "seed-check", id: randomBytes(16).toString("hex") };
   const probeFile = join(tmpdir(), `recipe-box-seed-${probe.id}`);
   writeFileSync(probeFile, "seed");
-  try {
-    if (!(await r2("put", probe, "--file", probeFile)) || !(await r2("delete", probe))) {
-      fail("R2 に書けないか、消せない。wrangler の認証と API トークンの権限を確かめる");
-    }
-  } finally {
-    rmSync(probeFile, { force: true });
+  // 書けないと報告されても書けていることがあるので、書いた結果に関わらず消す。
+  const written = await r2("put", probe, "--file", probeFile);
+  const removed = await r2("delete", probe);
+  rmSync(probeFile, { force: true });
+  if (!written || !removed) {
+    fail("R2 に書けないか、消せない。wrangler の認証と API トークンの権限を確かめる");
   }
 
   // 2. 今のレシピを全部消す。消すと一覧が詰まるので、1 ページ目を読み直しながら消す。
@@ -388,8 +399,14 @@ async function main() {
         `SELECT '${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index} ` +
         `FROM recipes WHERE workspace_id = '${workspaceId}' AND id = '${photo.recipeId}'`,
     );
-    for (let i = 0; i < statements.length; i += INSERT_BATCH) {
-      await wrangler("d1", "execute", "DB", "--command", statements.slice(i, i + INSERT_BATCH).join("; "));
+    try {
+      for (let i = 0; i < statements.length; i += INSERT_BATCH) {
+        await wrangler("d1", "execute", "DB", "--command", statements.slice(i, i + INSERT_BATCH).join("; "));
+      }
+    } catch (error) {
+      // 途中で失敗したら、もう入れた行（R2 のデータはまだ無い）を消してから止まる。
+      await deletePhotoRows(photos);
+      throw error;
     }
     const rows = await existingPhotoIds(photos);
     inserted = photos.filter((photo) => rows.has(photo.id));
@@ -401,11 +418,12 @@ async function main() {
     // 書けなかった写真も、失敗と報告されても実際は書けていることがあるので、R2 のデータを消してから行を消す（アプリの削除と同じ順）。
     const after = await existingPhotoIds(inserted);
     const gone = inserted.filter((photo) => !after.has(photo.id) || failed.has(photo));
-    const notDeleted = await eachPhoto(gone, (photo) => r2("delete", photo));
-    if (notDeleted.length > 0) {
-      fail(`写真 ${notDeleted.length} 枚のデータを R2 から消せなかった`);
+    const notDeleted = new Set(await eachPhoto(gone, (photo) => r2("delete", photo)));
+    // R2 から消せなかった写真の行は残し（データが残っていれば、行からたどれる）、消せた写真の行を消す。
+    await deletePhotoRows([...failed].filter((photo) => !notDeleted.has(photo)));
+    if (notDeleted.size > 0) {
+      fail(`写真 ${notDeleted.size} 枚のデータを R2 から消せなかった`);
     }
-    await deletePhotoRows([...failed]);
     if (failed.size > 0) {
       fail(`写真 ${failed.size} 枚を R2 に書けなかった。もう一度実行する`);
     }
