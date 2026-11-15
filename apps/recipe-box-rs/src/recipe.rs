@@ -35,7 +35,7 @@ pub const MAX_STEPS_CHARS: usize = 5_000;
 ///
 /// 費用を守るための上限。アプリ全体のワークスペースの数の上限（[`crate::workspace::MAX_WORKSPACES`]）と
 /// 掛け合わせ、1 件の最大の大きさ（約 29 KB）を掛けた量が、D1 の保存量の上限に余裕を持って収まるようにする。
-pub const MAX_RECIPES_PER_WORKSPACE: i64 = 40;
+pub const MAX_RECIPES_PER_WORKSPACE: i64 = 80;
 /// 検索の文字列の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_QUERY_CHARS: usize = 100;
 /// 一覧の 1 ページのレシピの数。
@@ -306,7 +306,7 @@ pub fn parse_list_params(params: &[(String, String)]) -> Result<(Option<String>,
         .and_then(parse_page)
         .ok_or(ApiError::InvalidField {
             field: "page",
-            message: "ページの番号は 1 から 2 までの整数です",
+            message: "ページの番号は 1 から 4 までの整数です",
         })?;
     Ok((pattern.map(str::to_owned), page))
 }
@@ -492,8 +492,8 @@ mod tests {
 
     #[test]
     fn page_error_message_matches_max_page() {
-        // page のエラーの文（"1 から 2 までの整数"）は定数から作れないので、上限を変えたら文も直す。
-        assert_eq!(super::MAX_PAGE, 2);
+        // page のエラーの文（"1 から 4 までの整数"）は定数から作れないので、上限を変えたら文も直す。
+        assert_eq!(super::MAX_PAGE, 4);
     }
 
     #[test]

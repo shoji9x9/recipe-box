@@ -13,7 +13,8 @@ use askama::Template;
 use axum::{
     Extension, Form,
     extract::{
-        Path, Query, Request, State,
+        Multipart, Path, Query, Request, State,
+        multipart::MultipartRejection,
         rejection::{FormRejection, QueryRejection},
     },
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
@@ -26,6 +27,7 @@ use crate::{
     backend::Backend,
     error::ApiError,
     limits::{check_body_size, check_write},
+    photo::{self, Photo, PhotoId},
     recipe::{self, FieldError, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput},
     workspace::{self, WorkspaceId},
 };
@@ -48,6 +50,10 @@ const DEMO_VIEW_MAX_AGE: u32 = 60 * 60;
 const FLASH_COOKIE: &str = "__Host-flash";
 /// メッセージを渡す Cookie を残す期間。移動の直後に読むので短くする。
 const FLASH_MAX_AGE: u32 = 60;
+
+/// 写真を送るフォーム（multipart）の本文の大きさの上限（バイト）。
+/// 1 枚の写真の上限に、multipart の区切りやヘッダーの分（64 KiB）を足す。写真そのものの大きさは、別に確かめる。
+pub const PHOTO_FORM_MAX_BYTES: usize = photo::MAX_PHOTO_BYTES + 64 * 1024;
 
 /// htmx に、アドレスバーの URL を変えるかを指示する応答のヘッダー。
 const HX_PUSH_URL: HeaderName = HeaderName::from_static("hx-push-url");
@@ -78,10 +84,12 @@ enum Flash {
     DemoViewStarted,
     DemoViewEnded,
     WorkspaceForgotten,
+    PhotoAdded,
+    PhotoDeleted,
 }
 
 impl Flash {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 10] = [
         Self::RecipeCreated,
         Self::RecipeSaved,
         Self::RecipeDeleted,
@@ -90,6 +98,8 @@ impl Flash {
         Self::DemoViewStarted,
         Self::DemoViewEnded,
         Self::WorkspaceForgotten,
+        Self::PhotoAdded,
+        Self::PhotoDeleted,
     ];
 
     /// Cookie に入れるコード。
@@ -103,6 +113,8 @@ impl Flash {
             Self::DemoViewStarted => "demo-view-started",
             Self::DemoViewEnded => "demo-view-ended",
             Self::WorkspaceForgotten => "workspace-forgotten",
+            Self::PhotoAdded => "photo-added",
+            Self::PhotoDeleted => "photo-deleted",
         }
     }
 
@@ -120,6 +132,8 @@ impl Flash {
             }
             Self::DemoViewEnded => "自分のレシピ帳に戻りました",
             Self::WorkspaceForgotten => "このブラウザでの利用をやめました",
+            Self::PhotoAdded => "写真を追加しました",
+            Self::PhotoDeleted => "写真を削除しました",
         }
     }
 
@@ -263,6 +277,12 @@ struct ListPage {
 struct DetailPage {
     layout: Layout,
     recipe: Recipe,
+    photos: Vec<Photo>,
+    /// 写真を追加・削除できるか（共有のデモではできない）。
+    photos_editable: bool,
+    /// 写真をもう 1 枚追加できるか（レシピの枚数の上限に達していない）。
+    can_add_photo: bool,
+    max_photos: i64,
 }
 
 #[derive(Template)]
@@ -749,14 +769,164 @@ pub async fn detail<B: Backend>(
     Path(id): Path<String>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let recipe = load(&backend, &viewer, &parse_id(&id)?).await?;
+    let id = parse_id(&id)?;
+    detail_page(&backend, &viewer, &session, &id, StatusCode::OK, None).await
+}
+
+/// レシピの詳細の画面。`alert` があれば、見出しの下に誤りの知らせとして出す（写真の追加の失敗など）。
+async fn detail_page<B: Backend>(
+    backend: &B,
+    viewer: &Viewer,
+    session: &Session,
+    id: &RecipeId,
+    status: StatusCode,
+    alert: Option<&'static str>,
+) -> Result<Response, ScreenError> {
+    let recipe = load(backend, viewer, id).await?;
+    let photos = backend
+        .list_photos(viewer.id(), id)
+        .await
+        .map_err(ApiError::from)?;
+    let mut layout = Layout::new(Some(viewer), session);
+    if let Some(alert) = alert {
+        layout = layout.with_alert(alert);
+    }
+    let count = i64::try_from(photos.len()).unwrap_or(i64::MAX);
     Ok(render(
-        StatusCode::OK,
+        status,
         &DetailPage {
-            layout: Layout::new(Some(&viewer), &session),
+            layout,
             recipe,
+            photos,
+            photos_editable: matches!(viewer, Viewer::Own(_)),
+            can_add_photo: count < photo::MAX_PHOTOS_PER_RECIPE,
+            max_photos: photo::MAX_PHOTOS_PER_RECIPE,
         },
     ))
+}
+
+/// 写真の操作の失敗のうち、詳細の画面に知らせとして出すものの説明。ほかの失敗はエラーの画面にする。
+fn photo_alert(error: &ApiError) -> Option<&'static str> {
+    match error {
+        ApiError::PayloadTooLarge => Some("写真は 1 枚 4,000,000 バイト（約 4 MB）までです"),
+        ApiError::UnsupportedPhotoType
+        | ApiError::PhotoLimitReached
+        | ApiError::PhotoStorageLimitReached
+        | ApiError::PhotoNotFound
+        | ApiError::DemoPhotosDisabled
+        | ApiError::CapacityReached
+        | ApiError::TooManyRequests => Some(error.parts().2),
+        _ => None,
+    }
+}
+
+/// 写真の操作が失敗したときの応答。知らせにできる失敗は詳細の画面に出し、ほかはエラーの画面にする。
+async fn photo_failure<B: Backend>(
+    backend: &B,
+    viewer: &Viewer,
+    session: &Session,
+    id: &RecipeId,
+    error: ApiError,
+) -> Result<Response, ScreenError> {
+    match photo_alert(&error) {
+        Some(alert) => {
+            let status = error.parts().0;
+            detail_page(backend, viewer, session, id, status, Some(alert)).await
+        }
+        None => Err(error.into()),
+    }
+}
+
+/// `GET /recipes/{id}/photos/{photo_id}`: 写真のデータ。
+pub async fn photo_file<B: Backend>(
+    State(backend): State<B>,
+    Extension(session): Extension<Session>,
+    Path((id, photo_id)): Path<(String, String)>,
+) -> Result<Response, ScreenError> {
+    let viewer = require_viewer(&backend, &session).await?;
+    let id = parse_id(&id)?;
+    let photo_id = PhotoId::parse(&photo_id).ok_or(ApiError::PhotoNotFound)?;
+    Ok(photo::photo_response(&backend, viewer.id(), &id, &photo_id).await?)
+}
+
+/// `POST /recipes/{id}/photos`: フォーム（multipart）の `photo` の写真を追加し、詳細へ戻る。
+pub async fn add_photo<B: Backend>(
+    State(backend): State<B>,
+    Extension(session): Extension<Session>,
+    Path(id): Path<String>,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Result<Response, ScreenError> {
+    let viewer = require_viewer(&backend, &session).await?;
+    let id = parse_id(&id)?;
+    let bytes = match read_photo_field(multipart).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            return detail_page(
+                &backend,
+                &viewer,
+                &session,
+                &id,
+                StatusCode::BAD_REQUEST,
+                Some("追加する写真を選んでください"),
+            )
+            .await;
+        }
+        Err(error) => return photo_failure(&backend, &viewer, &session, &id, error).await,
+    };
+    match photo::add(&backend, viewer.id(), &id, bytes).await {
+        Ok(_) => Ok(see_other_with(&format!("/recipes/{id}"), Flash::PhotoAdded)),
+        Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
+    }
+}
+
+/// フォームの `photo` の欄のデータを読む。ファイルが選ばれていなければ `None`。
+async fn read_photo_field(
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Result<Option<Vec<u8>>, ApiError> {
+    let mut multipart = multipart.map_err(|_| ApiError::InvalidBody)?;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => return Ok(None),
+            Err(error) => return Err(multipart_error(error.status())),
+        };
+        if field.name() != Some("photo") {
+            continue;
+        }
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|error| multipart_error(error.status()))?;
+        // ファイルを選ばずに送ると、中身の空の欄が届く。
+        return Ok((!bytes.is_empty()).then(|| Vec::from(bytes)));
+    }
+}
+
+/// multipart を読めなかったときの失敗。本文の上限を超えたときだけ `PayloadTooLarge` にする。
+fn multipart_error(status: StatusCode) -> ApiError {
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::PayloadTooLarge
+    } else {
+        ApiError::InvalidBody
+    }
+}
+
+/// `POST /recipes/{id}/photos/{photo_id}/delete`: 写真を消し、詳細へ戻る。
+pub async fn delete_photo<B: Backend>(
+    State(backend): State<B>,
+    Extension(session): Extension<Session>,
+    Path((id, photo_id)): Path<(String, String)>,
+) -> Result<Response, ScreenError> {
+    let viewer = require_viewer(&backend, &session).await?;
+    let id = parse_id(&id)?;
+    let photo_id = PhotoId::parse(&photo_id).ok_or(ApiError::PhotoNotFound)?;
+    match photo::remove(&backend, viewer.id(), &id, &photo_id).await {
+        Ok(()) => Ok(see_other_with(
+            &format!("/recipes/{id}"),
+            Flash::PhotoDeleted,
+        )),
+        Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
+    }
 }
 
 /// `GET /recipes/{id}/edit`: 編集のフォーム。今の値を入れておく。
@@ -974,6 +1144,25 @@ pub async fn guard_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
+    guard(&backend, request, next, recipe::MAX_BODY_BYTES).await
+}
+
+/// 写真を送るフォームの [`guard_writes`]。本文の上限だけが違う（[`PHOTO_FORM_MAX_BYTES`]）。
+pub async fn guard_photo_writes<B: Backend>(
+    State(backend): State<B>,
+    request: Request,
+    next: Next,
+) -> Response {
+    guard(&backend, request, next, PHOTO_FORM_MAX_BYTES).await
+}
+
+/// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限。
+async fn guard<B: Backend>(
+    backend: &B,
+    request: Request,
+    next: Next,
+    max_body_bytes: usize,
+) -> Response {
     let is_post = request.method() == Method::POST;
     let mut response = if is_post && !same_origin(request.headers()) {
         render(
@@ -983,13 +1172,8 @@ pub async fn guard_writes<B: Backend>(
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
             },
         )
-    } else if let Err(error) = check_write(
-        &backend,
-        request.method(),
-        request.headers(),
-        recipe::MAX_BODY_BYTES,
-    )
-    .await
+    } else if let Err(error) =
+        check_write(backend, request.method(), request.headers(), max_body_bytes).await
     {
         error_page(&error)
     } else {
@@ -1047,12 +1231,16 @@ fn same_origin(headers: &HeaderMap) -> bool {
 }
 
 /// 画面の応答に、セキュリティのためのヘッダーを付ける middleware。
+///
+/// ハンドラーがすでに付けたヘッダーは変えない。写真のデータは、ブラウザーに残させる `Cache-Control` と、
+/// 写真に合わせた CSP を自分で付けるため（[`photo::photo_response`]）。
 pub async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     for (name, value) in SECURITY_HEADERS {
         response
             .headers_mut()
-            .insert(name, HeaderValue::from_static(value));
+            .entry(name)
+            .or_insert(HeaderValue::from_static(value));
     }
     response
 }

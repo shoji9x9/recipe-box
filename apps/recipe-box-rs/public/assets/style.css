@@ -393,6 +393,54 @@ button.danger {
   margin-top: 0;
 }
 
+/* 写真: 角を丸めた正方形のタイル */
+.photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.photos li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.photos img {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  background: var(--surface-soft);
+}
+
+.photo-form label {
+  margin-top: 8px;
+}
+
+.photo-form .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.photo-form input[type="file"] {
+  flex: 1 1 240px;
+  width: auto;
+  min-height: 48px;
+  padding: 10px 12px;
+}
+
+.note {
+  font-size: 14px;
+  color: var(--muted);
+}
+
 .multiline {
   margin: 0;
   white-space: pre-wrap;

@@ -14,6 +14,8 @@ askama = "0.16.1"
 axum = { version = "0.8.9", default-features = false, features = [
   "form",
   "json",
+  # 画面から写真を送るフォーム（multipart/form-data）を読む。
+  "multipart",
   "query",
 ] }
 console_error_panic_hook = "0.1.7"

@@ -450,8 +450,8 @@ async fn list_pages_keep_the_search() {
     // 入力しながらの検索は #results だけを入れ替えるので、そこに誤りが無いと一覧が黙って空になる。
     for (path, message) in [
         (
-            "/?page=3".to_owned(),
-            "ページの番号は 1 から 2 までの整数です",
+            "/?page=5".to_owned(),
+            "ページの番号は 1 から 4 までの整数です",
         ),
         (
             format!("/?q={}", "a".repeat(101)),
@@ -943,4 +943,214 @@ async fn check_route_does_not_use_the_write_limit() {
         .unwrap();
     let response = send(router(backend.clone()), request).await;
     assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// 写真を送るフォーム（multipart/form-data）の本文。`photo` が `None` なら、ファイルを選ばずに送ったときの空の欄にする。
+fn photo_form(photo: Option<&[u8]>) -> (String, Vec<u8>) {
+    let boundary = "----recipe-box-test-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+            if photo.is_some() { "dish.jpg" } else { "" }
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(photo.unwrap_or_default());
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+async fn post_photo(
+    backend: &FakeBackend,
+    recipe_path: &str,
+    cookie: Option<&str>,
+    photo: Option<&[u8]>,
+) -> TestResponse {
+    let (content_type, body) = photo_form(photo);
+    let mut builder = Request::post(format!("{recipe_path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header("cf-connecting-ip", "192.0.2.1")
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, body.len());
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    send(
+        router(backend.clone()),
+        builder.body(Body::from(body)).unwrap(),
+    )
+    .await
+}
+
+/// JPEG の先頭のバイトで始まり、全体で `size` バイトのデータ。
+fn jpeg(size: usize) -> Vec<u8> {
+    let mut bytes = vec![0; size];
+    bytes[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
+    bytes
+}
+
+/// 詳細の画面にある写真の URL（`/recipes/<id>/photos/<photo_id>`）。
+fn photo_srcs(body: &str) -> Vec<String> {
+    body.split(r#"<img src=""#)
+        .skip(1)
+        .map(|rest| rest.split('"').next().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn photo_can_be_added_shown_and_deleted_on_the_detail_page() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert!(response.body.contains("写真はありません"));
+    assert!(response.body.contains(r#"enctype="multipart/form-data""#));
+
+    let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location, path);
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .unwrap()
+            .starts_with("__Host-flash=photo-added;")
+    );
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    let srcs = photo_srcs(&response.body);
+    assert_eq!(srcs.len(), 1);
+    assert!(response.body.contains(r#"alt="カレーの写真 1""#));
+
+    // 写真のデータは、画面の Cookie で読める。ブラウザーに残させ、画面の no-store で上書きしない。
+    let response = screen_get(&backend, &srcs[0], Some(&a)).await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.content_type, "image/jpeg");
+    assert_eq!(response.bytes, jpeg(10));
+    assert_eq!(
+        response.headers[header::CACHE_CONTROL],
+        "private, max-age=86400"
+    );
+    assert!(
+        response.headers[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .contains("sandbox")
+    );
+    // ほかのワークスペースからは読めない。
+    let response = screen_get(&backend, &srcs[0], Some(&cookie(WORKSPACE_B))).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+
+    let response = screen_post(&backend, &format!("{}/delete", srcs[0]), Some(&a), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .unwrap()
+            .starts_with("__Host-flash=photo-deleted;")
+    );
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert_eq!(photo_srcs(&response.body), Vec::<String>::new());
+    assert!(backend.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn photo_errors_are_shown_on_the_detail_page() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    for (photo, status, message) in [
+        (
+            None,
+            StatusCode::BAD_REQUEST,
+            "追加する写真を選んでください",
+        ),
+        (
+            Some(b"GIF89a".to_vec()),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "写真は JPEG・PNG・WebP のどれかにしてください",
+        ),
+        (
+            Some(jpeg(crate::photo::MAX_PHOTO_BYTES + 1)),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "写真は 1 枚 4,000,000 バイト（約 4 MB）までです",
+        ),
+    ] {
+        let response = post_photo(&backend, &path, Some(&a), photo.as_deref()).await;
+        assert_eq!(response.status, status, "{message}");
+        assert!(response.body.contains(message), "{}", response.body);
+        // 詳細の画面のまま出し、レシピの内容も見える。
+        assert!(response.body.contains("<h2>材料</h2>"), "{message}");
+    }
+    assert!(backend.photos.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn add_form_is_hidden_when_the_recipe_has_the_maximum_photos() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    for _ in 0..crate::photo::MAX_PHOTOS_PER_RECIPE {
+        let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER);
+    }
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+    assert!(response.body.contains("写真は 5 枚まで付けられます"));
+    let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    assert!(response.body.contains("5 枚まで"), "{}", response.body);
+}
+
+#[tokio::test]
+async fn demo_shows_photos_but_cannot_add_or_delete_them() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let path = create_recipe(&backend, DEMO, "デモのカレー").await;
+    let recipe = path.rsplit('/').next().unwrap().to_owned();
+    // seed は R2 と D1 に直接入れる。
+    let photo = "11111111111111111111111111111111";
+    backend.add_photo_row(DEMO, &recipe, photo, 3);
+    backend.objects.lock().unwrap().insert(
+        format!("photos/{DEMO}/{recipe}/{photo}"),
+        (jpeg(3), "image/jpeg".to_owned()),
+    );
+
+    let response = screen_get(&backend, &path, None).await;
+    assert_eq!(photo_srcs(&response.body).len(), 1);
+    assert!(
+        response
+            .body
+            .contains("共有のデモでは、写真を追加・削除できません")
+    );
+    assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+    assert!(!response.body.contains("写真を削除"));
+    let response = screen_get(&backend, &format!("{path}/photos/{photo}"), None).await;
+    assert_eq!(response.status, StatusCode::OK);
+
+    // フォームを使わずに送っても断る。
+    let response = post_photo(&backend, &path, None, Some(&jpeg(10))).await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let response = screen_post(&backend, &format!("{path}/photos/{photo}/delete"), None, "").await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn photo_form_from_another_site_is_rejected() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let (content_type, body) = photo_form(Some(&jpeg(10)));
+    let request = Request::post(format!("{path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, "https://evil.example")
+        .header(header::COOKIE, &a)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert!(backend.photos.lock().unwrap().is_empty());
 }
