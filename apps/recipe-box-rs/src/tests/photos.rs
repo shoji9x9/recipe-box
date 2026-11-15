@@ -399,6 +399,24 @@ async fn failed_r2_write_leaves_no_photo_row() {
 }
 
 #[tokio::test]
+async fn photo_task_dropped_by_the_runtime_is_an_internal_error() {
+    let (backend, recipe) = setup().await;
+    let backend = FakeBackend {
+        task_dropped: true,
+        ..backend
+    };
+    let response = upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        response.json()["error"],
+        "internal_error",
+        "{}",
+        response.body
+    );
+    assert!(backend.photos.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn photo_whose_row_vanishes_while_writing_is_removed_from_r2() {
     let (backend, recipe) = setup().await;
     let backend = FakeBackend {
