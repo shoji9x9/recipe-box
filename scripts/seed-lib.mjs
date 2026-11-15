@@ -1,5 +1,5 @@
 // scripts/seed.mjs の、外部（API・wrangler・標準入力）に触れない部分。単体テスト（seed-lib.test.mjs）で確かめる。
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 
 // API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
@@ -130,11 +130,12 @@ export function validateRecipes(recipes, photoDir) {
       const path = join(photoDir, file);
       let stat;
       try {
-        stat = statSync(path);
+        // リンクを辿らない（seed/photos/ の下のシンボリックリンクから、外のファイルを読ませない）。
+        stat = lstatSync(path);
       } catch {
         throw new Error(`${where}: 写真 seed/photos/${file} が無い`);
       }
-      // ディレクトリなどは、先頭を読むときに理由の分からない失敗になるので、先に断る。
+      // シンボリックリンクとディレクトリなどを断る（ディレクトリは、先頭を読むときに理由の分からない失敗になる）。
       if (!stat.isFile()) {
         throw new Error(`${where}: 写真 seed/photos/${file} がふつうのファイルでない`);
       }

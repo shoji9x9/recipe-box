@@ -1,7 +1,7 @@
 // scripts/seed-lib.mjs の単体テスト（mise run test で実行する）。
 // 伏せ字は、公開の Actions のログにデモの ID などを出さないための要なので、形ごとに確かめる。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -158,6 +158,8 @@ describe("validateRecipes", () => {
     rejects([recipe({ photos: ["missing.jpg"] })], /無い/);
     mkdirSync(join(dir, "dir.jpg"));
     rejects([recipe({ photos: ["dir.jpg"] })], /ふつうのファイルでない/);
+    symlinkSync(join(dir, "twice.jpg"), join(dir, "link.jpg"));
+    rejects([recipe({ photos: ["link.jpg"] })], /ふつうのファイルでない/);
   });
 
   test("写真は 1 バイトから上限のバイト数まで", () => {
@@ -179,12 +181,11 @@ describe("validateRecipes", () => {
 
   test("写真の合計は、ワークスペースの上限まで", () => {
     const perRecipe = MAX_PHOTOS_PER_RECIPE;
-    // 上限ちょうどになるよう、最大の大きさの写真を並べ、割り切れない分を最後の 1 枚にする。最後に 1 バイトの写真を足すと超える。
-    const full = Math.floor(MAX_WORKSPACE_PHOTO_BYTES / MAX_PHOTO_BYTES);
-    const rest = MAX_WORKSPACE_PHOTO_BYTES - full * MAX_PHOTO_BYTES;
-    const sizes = [...Array(full).fill(MAX_PHOTO_BYTES), ...(rest > 0 ? [rest] : []), 1];
-    const files = sizes.map((size, i) => photo(`t${i}.jpg`, Math.max(size, 4)));
-    const count = files.length - 1;
+    // 上限ちょうどになるよう、最大の大きさの写真を並べ、最後の 1 枚で端数を合わせる。そこへ写真を 1 枚足すと超える。
+    const count = Math.ceil(MAX_WORKSPACE_PHOTO_BYTES / MAX_PHOTO_BYTES);
+    const last = MAX_WORKSPACE_PHOTO_BYTES - (count - 1) * MAX_PHOTO_BYTES;
+    const sizes = [...Array(count - 1).fill(MAX_PHOTO_BYTES), last, jpeg.length];
+    const files = sizes.map((size, i) => photo(`t${i}.jpg`, size));
     const chunk = (list) =>
       Array.from({ length: Math.ceil(list.length / perRecipe) }, (_, i) =>
         recipe({ photos: list.slice(i * perRecipe, (i + 1) * perRecipe) }),
