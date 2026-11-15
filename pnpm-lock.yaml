@@ -178,6 +178,9 @@ importers:
       htmx.org:
         specifier: 2.0.11
         version: 2.0.11
+      modern-web-guidance:
+        specifier: 0.0.197
+        version: 0.0.197
       wrangler:
         specifier: ^4.158.0
         version: 4.158.0
@@ -845,6 +848,11 @@ packages:
     resolution: {integrity: sha512-pYZ2n85+FYUb7s0oIVcQxO63/+wgaknm+A/kQjctJqshvHPJs3UtnzaIZ7xrrHMOk8atD7yAfauf6G9VAv7Upg==}
     engines: {node: '>=22.0.0'}
 
+  modern-web-guidance@0.0.197:
+    resolution: {integrity: sha512-+svoxOlW0GYmj1GW8QfUrycD2MIB8F/C3WuKHzN7BpYBgFzvGvhY7Zbo7JjfYMRQAHdsIYYOWP1J32aUVuzYOQ==}
+    engines: {node: '>=22.0.0', vscode: ^1.90.0}
+    hasBin: true
+
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
     engines: {node: '>=6'}
@@ -1495,6 +1503,8 @@ snapshots:
       - '@types/node'
       - bufferutil
       - utf-8-validate
+
+  modern-web-guidance@0.0.197: {}
 
   parent-module@1.0.1:
     dependencies:

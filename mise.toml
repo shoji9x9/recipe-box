@@ -41,6 +41,8 @@ run = [
   "ghalint run",
   "zizmor --offline .github",
   "shellcheck scripts/*.sh",
+  # modern-web-guidance のスキルとパッケージの版がそろっているか（AGENTS.md の「スキル」）。
+  "scripts/check-mwg-version.sh",
 ]
 
 [tasks.audit]
@@ -48,10 +50,10 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、seed のスクリプトの単体テストを実行する"
+description = "Rust のテストと、スクリプト（seed・modern-web-guidance）の単体テストを実行する"
 run = [
   "cargo test --workspace --locked",
-  "node --test scripts/seed-lib.test.mjs",
+  "node --test scripts/seed-lib.test.mjs scripts/mwg.test.mjs",
 ]
 
 [tasks.build]
@@ -88,3 +90,8 @@ description = "ローカルの D1 にマイグレーションを当て、Worker 
 dir = "apps/recipe-box-rs"
 depends = ["migrate"]
 run = "pnpm exec wrangler dev"
+
+[tasks.mwg]
+description = "Web の作り方の指針（modern-web-guidance）を引く。例: mise run mwg -- search \"<検索の語>\""
+# 固定した版を、利用統計を送らずに、読むだけのサブコマンドで使う（scripts/mwg.sh・AGENTS.md の「スキル」）。
+run = "scripts/mwg.sh"
