@@ -36,6 +36,15 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 
 - commit の前に lefthook が整形と静的解析を実行する。フックを飛ばさない（`--no-verify` を使わない）。
 - PR を作る前に `mise run lint` と `mise run audit` を実行する。
+- push の前に、push するコミットに次の 2 つを行う。見つかった問題は直してから push する。
+  1. 不具合を探すコードレビュー。Claude Code では `/code-review high` を使う。
+  2. セキュリティのレビュー。`security-audit` スキルの guidance mode（範囲を差分に絞ったレビュー）で行う。
+     スキルの full audit mode（6 つの段階・多数のサブエージェント・報告のファイル）は重いので、push のたびには行わない。利用者に求められたときだけ行う。
+  - レビューする範囲は、ブランチの最初の push ではベースブランチとの差分、2 回目からは前の push からの差分にする。
+    `pr-finalize-loop` が反復ごとに push するときも同じで、PR の差分の全体をレビューし直さない（反復のたびに費用が増え、変えていないコードへの指摘で収束しなくなるため）。
+  - アプリの文書（`README.md`・`docs/` など）だけの変更では、2 を省いてよい。
+    エージェントへの指示になるファイル（`AGENTS.md`・`CLAUDE.md`・`.claude/` の下）の変更は、`.md` でも省かない。悪意のある指示が入ると、エージェントが自律して push などをするため。
+  - 直さないと決めた指摘は、理由を PR のトップレベルのコメントに書く（PR の本文には書かない）。最初の push で PR がまだ無ければ、PR を作った直後に書く。
 
 ## SQL
 
@@ -81,6 +90,13 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 - 利用者に求められたときだけ、push せずに再レビューする。PR からラベル `claude-review` を外してから付け直す
   （付けたときにだけ動くので、`gh pr edit <番号> --remove-label claude-review` の後に `--add-label claude-review`）。
   `gh workflow run` で動かす方法は、インラインのコメントを書けないので使わない（Issue #18）。
+
+[cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill) から、次のスキルを入れている（commit を固定する）。
+
+- `security-audit`: セキュリティのレビュー。push の前の確認（「確認」）に使う。
+  入れ方は `gh skill install cloudflare/security-audit-skill security-audit --agent claude-code --scope project --pin <commit>`。
+  スキルは、ビルドやテストなど対象のコードを動かすのを、外部のネットワークを切った OS のサンドボックスの中だけに限る。その用意が無ければ、コードを動かさずに読むだけで確かめる。
+  上げるときは、中身を読んでから入れ直す。7 日の待ち（「依存の追加と更新」）は、commit の日付ではなく、その commit が default ブランチに入った時刻（PR の `merged_at`、PR が無ければリポジトリの push の時刻など）で確かめる。commit の日付は作った人が自由に決められるため。
 
 スキルなしでどこまでできるかも見るため、必要かどうか迷うスキルは入れない。
 `replace-strategy` とその姉妹スキルは、リライトを始めるときに入れる。
