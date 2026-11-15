@@ -90,11 +90,13 @@ if (!ID_PATTERN.test(workspaceId)) {
 }
 
 // 表示やエラーの文から、デモの ID を伏せる。
-// UUID の形の値（D1 のデータベースの ID など）も、公開の Actions のログに出さないよう伏せる。
+// アカウントの ID（16 進数 32 文字）や D1 のデータベースの ID（UUID の形）も、公開の Actions のログに出さないよう伏せる。
+// 16 進数 32 文字の値はすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
 function redact(text) {
   return String(text)
     .replaceAll(workspaceId, "***")
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***");
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
+    .replace(/[0-9a-f]{32}/gi, "***");
 }
 
 function sleep(ms) {
@@ -213,7 +215,7 @@ async function api(method, path, body) {
     });
     if (response.status === 429 && attempt < MAX_RETRIES) {
       await response.body?.cancel();
-      console.log(`書き込みの回数の制限に当たったので、${RATE_LIMIT_WAIT_MS / 1000} 秒待つ`);
+      console.error(`書き込みの回数の制限に当たったので、${RATE_LIMIT_WAIT_MS / 1000} 秒待つ`);
       await sleep(RATE_LIMIT_WAIT_MS);
       continue;
     }
@@ -241,6 +243,19 @@ async function wrangler(...wranglerArgs) {
   }
 }
 
+// wrangler の失敗の文から、理由の 1 行を選ぶ。wrangler は理由を JSON の "text" か「[ERROR]」の行に書き、
+// 最後の行はログのファイルの場所なので、それらの行を優先し、無ければコマンドとログの場所以外の最初の行にする。
+function shortReason(message) {
+  const lines = message
+    // 色の制御文字を取り除く。
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("Command failed:") && !line.includes("Logs were written"));
+  const line = lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]")) ?? lines[0] ?? "";
+  return line.slice(0, 200);
+}
+
 // wrangler を動かし、失敗したら待ち時間を延ばしながら RETRY_ATTEMPTS 回まで試す。最後の失敗は投げる。
 // what は「写真の行の読み取り」のような、何をするかを表す名詞の句にする。
 async function wranglerWithRetry(what, ...wranglerArgs) {
@@ -251,9 +266,8 @@ async function wranglerWithRetry(what, ...wranglerArgs) {
       if (attempt >= RETRY_ATTEMPTS) {
         throw error;
       }
-      // 理由は、最後の 1 行を短くして出す（全文は、やり直しても失敗したときに呼ぶ側が出す）。
-      const reason = redact(error.message.trim().split("\n").at(-1)).slice(0, 200);
-      console.error(`${what}に失敗したので、やり直す（${attempt} 回目）: ${reason}`);
+      // 理由は短くして出す（全文は、やり直しても失敗したときに呼ぶ側が出す）。error.message は wrangler() が伏せている。
+      console.error(`${what}に失敗したので、やり直す（${attempt} 回目）: ${shortReason(error.message)}`);
       await sleep(RETRY_WAIT_MS * attempt);
     }
   }
@@ -262,7 +276,11 @@ async function wranglerWithRetry(what, ...wranglerArgs) {
 // R2 の操作を、wrangler が失敗したら待ってやり直す。やり直しても失敗したら、投げずに false を返す。
 async function r2(action, photo, ...extra) {
   const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
-  const what = `写真 ${photo.file} の R2 への${action === "put" ? "書き込み" : "削除"}`;
+  const names = { put: "R2 への書き込み", delete: "R2 からの削除" };
+  if (!(action in names)) {
+    throw new Error(`R2 の操作 ${action} は使わない`);
+  }
+  const what = `写真 ${photo.file} の${names[action]}`;
   try {
     await wranglerWithRetry(what, "r2", "object", action, key, ...extra);
     return true;
