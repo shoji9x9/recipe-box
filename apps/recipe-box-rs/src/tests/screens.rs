@@ -157,31 +157,55 @@ async fn demo_is_shown_without_cookie_and_its_id_is_hidden() {
 }
 
 #[tokio::test]
-async fn demo_visitor_can_use_id_from_another_device() {
+async fn demo_viewers_can_use_id_from_another_device() {
     let backend = FakeBackend {
         demo: Some(DEMO.to_owned()),
-        ..FakeBackend::default()
+        ..backend_with_workspaces()
     };
     backend.add_workspace(DEMO, NOW);
-    backend.add_workspace(WORKSPACE_A, NOW);
 
-    // 自分のワークスペースが無くても、「ワークスペース」の画面で ID を入れられる。
-    let response = screen_get(&backend, "/workspace", None).await;
-    assert!(response.body.contains(r#"action="/workspace/switch""#));
+    // 「共有のデモ」（Cookie なし）と「共有のデモ（一時的）」の両方から、ほかの端末の ID に切り替えられる。
+    let visiting = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A));
+    for (state, cookies, notice) in [
+        ("shared", None, "共有のデモを表示しています"),
+        ("visiting", Some(visiting.as_str()), "自分のレシピ帳に戻る"),
+    ] {
+        let response = screen_get(&backend, "/workspace", cookies).await;
+        assert_eq!(response.status, StatusCode::OK, "{state}");
+        assert!(response.body.contains(notice), "{state}: {}", response.body);
+        assert!(
+            response.body.contains(r#"action="/workspace/switch""#),
+            "{state}"
+        );
 
-    let response = screen_post(
-        &backend,
-        "/workspace/switch",
-        None,
-        &format!("id={WORKSPACE_A}"),
-    )
-    .await;
-    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    assert!(
-        set_cookie_named(&response, "__Host-workspace")
-            .unwrap()
-            .starts_with(&cookie(WORKSPACE_A))
-    );
+        let response = screen_post(
+            &backend,
+            "/workspace/switch",
+            cookies,
+            &format!("id={WORKSPACE_B}"),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER, "{state}");
+        assert_eq!(response.location, "/", "{state}");
+        assert!(
+            set_cookie_named(&response, "__Host-workspace")
+                .unwrap()
+                .starts_with(&cookie(WORKSPACE_B)),
+            "{state}"
+        );
+        // 一時的にデモを見ていた印も消す。
+        assert!(
+            set_cookie_named(&response, "__Host-demo-view")
+                .unwrap()
+                .contains("Max-Age=0"),
+            "{state}"
+        );
+
+        // 切り替えた後は、デモの帯を出さない。
+        let response = screen_get(&backend, "/", Some(&cookie(WORKSPACE_B))).await;
+        assert_eq!(response.status, StatusCode::OK, "{state}");
+        assert!(!response.body.contains("demo-banner"), "{state}");
+    }
 }
 
 #[tokio::test]
