@@ -1,7 +1,7 @@
 // scripts/seed-lib.mjs の単体テスト（mise run test で実行する）。
 // 伏せ字は、公開の Actions のログにデモの ID などを出さないための要なので、形ごとに確かめる。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -132,6 +132,7 @@ describe("lstatWithoutLinks", () => {
     assert.match(linkErrorMessage({ reason: "link" }, "x"), /シンボリックリンク/);
     assert.match(linkErrorMessage({ reason: "outside" }, "x"), /リポジトリの下に無い/);
     assert.match(linkErrorMessage({ code: "EACCES" }, "x"), /読めない（EACCES）/);
+    assert.throws(() => linkErrorMessage(new TypeError("bug"), "x"), TypeError);
   });
 });
 
@@ -234,6 +235,8 @@ describe("validateRecipes", () => {
     rejects([recipe({ photos: ["missing.jpg"] })], /読めない（ENOENT）/);
     mkdirSync(join(dir, "dir.jpg"));
     rejects([recipe({ photos: ["dir.jpg"] })], /ふつうのファイルでない/);
+    linkSync(join(dir, file), join(dir, "hard.jpg"));
+    rejects([recipe({ photos: ["hard.jpg"] })], /ハードリンク/);
   });
 
   test("写真は 1 バイトから上限のバイト数まで", () => {

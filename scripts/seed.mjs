@@ -117,10 +117,15 @@ function sleep(ms) {
 function loadRecipes() {
   const path = join(seedDir, "recipes.json");
   // 写真と同じく、リンクを通ってリポジトリの外のファイルを読まない。
+  let stat;
   try {
-    lstatWithoutLinks(path, root);
+    stat = lstatWithoutLinks(path, root);
   } catch (error) {
     fail(linkErrorMessage(error, "seed/recipes.json"));
+  }
+  // FIFO などを読むと止まるので、ふつうのファイルだけを読む。
+  if (!stat.isFile()) {
+    fail("seed/recipes.json がふつうのファイルでない");
   }
   let recipes;
   try {

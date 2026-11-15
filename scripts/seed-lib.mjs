@@ -119,7 +119,11 @@ export function linkErrorMessage(error, shown) {
   if (error.reason === "outside") {
     return `${shown} がリポジトリの下に無い`;
   }
-  return `${shown} を読めない（${error.code ?? error.message}）`;
+  if (error.code === undefined) {
+    // fs の失敗でない（プログラムの誤りなど）なら、データの問題に見せず、そのまま投げる。
+    throw error;
+  }
+  return `${shown} を読めない（${error.code}）`;
 }
 
 // seed/recipes.json の中身（JSON を読んだ値）を、API と同じ決まりで確かめる。写真は photoDir の下から探す。
@@ -169,6 +173,10 @@ export function validateRecipes(recipes, photoDir, base) {
       // ディレクトリなどは、先頭を読むときに理由の分からない失敗になるので、先に断る。
       if (!stat.isFile()) {
         throw new Error(`${where}: 写真 seed/photos/${file} がふつうのファイルでない`);
+      }
+      // ハードリンクは、リポジトリの外のファイルと中身を共有しうるので断る（git はハードリンクを記録しない）。
+      if (stat.nlink > 1) {
+        throw new Error(`${where}: 写真 seed/photos/${file} がハードリンクになっている`);
       }
       const { size } = stat;
       if (size === 0 || size > MAX_PHOTO_BYTES) {
