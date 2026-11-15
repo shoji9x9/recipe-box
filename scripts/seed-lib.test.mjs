@@ -14,7 +14,8 @@ import {
   MAX_SERVINGS,
   MAX_STEPS,
   MAX_WORKSPACE_PHOTO_BYTES,
-  isInsideWithoutLinks,
+  linkErrorMessage,
+  lstatWithoutLinks,
   pathPattern,
   redact,
   shortReason,
@@ -83,7 +84,7 @@ describe("shortReason", () => {
   });
 });
 
-describe("isInsideWithoutLinks", () => {
+describe("lstatWithoutLinks", () => {
   let base;
   before(() => {
     base = mkdtempSync(join(tmpdir(), "seed-lib-link-"));
@@ -93,22 +94,44 @@ describe("isInsideWithoutLinks", () => {
     symlinkSync(join(base, "seed", "photos", "a.jpg"), join(base, "seed", "photos", "file-link.jpg"));
     symlinkSync(join(base, "seed", "photos"), join(base, "seed", "photos-link"));
     symlinkSync(join(base, "seed"), join(base, "seed-link"));
+    symlinkSync(join(base, "nowhere.jpg"), join(base, "seed", "photos", "dangling.jpg"));
   });
   after(() => {
     rmSync(base, { recursive: true, force: true });
   });
 
+  const reason = (path) => {
+    try {
+      lstatWithoutLinks(path, base);
+      return "ok";
+    } catch (error) {
+      return error.reason ?? error.code;
+    }
+  };
+
   test("リンクを通らないファイルだけを受け付ける", () => {
-    assert.equal(isInsideWithoutLinks(join(base, "seed", "photos", "a.jpg"), base), true);
-    assert.equal(isInsideWithoutLinks(join(base, "seed", "recipes.json"), base), true);
-    assert.equal(isInsideWithoutLinks(join(base, "seed", "photos", "file-link.jpg"), base), false);
-    assert.equal(isInsideWithoutLinks(join(base, "seed", "photos-link", "a.jpg"), base), false);
-    assert.equal(isInsideWithoutLinks(join(base, "seed-link", "recipes.json"), base), false);
+    assert.equal(reason(join(base, "seed", "photos", "a.jpg")), "ok");
+    assert.equal(reason(join(base, "seed", "recipes.json")), "ok");
+    assert.equal(reason(join(base, "seed", "photos", "file-link.jpg")), "link");
+    assert.equal(reason(join(base, "seed", "photos-link", "a.jpg")), "link");
+    assert.equal(reason(join(base, "seed-link", "recipes.json")), "link");
   });
 
-  test("base の外と base そのものは断る", () => {
-    assert.equal(isInsideWithoutLinks(tmpdir(), base), false);
-    assert.equal(isInsideWithoutLinks(base, base), false);
+  test("行き先の無いリンクも、無いファイルではなくリンクとして断る", () => {
+    assert.equal(reason(join(base, "seed", "photos", "dangling.jpg")), "link");
+    assert.equal(reason(join(base, "seed", "photos", "missing.jpg")), "ENOENT");
+  });
+
+  test("base の外と base そのものは断り、.. で始まる名前は中として扱う", () => {
+    assert.equal(reason(tmpdir()), "outside");
+    assert.equal(reason(base), "outside");
+    assert.equal(reason(join(base, "..data", "x")), "ENOENT");
+  });
+
+  test("理由ごとの文", () => {
+    assert.match(linkErrorMessage({ reason: "link" }, "x"), /シンボリックリンク/);
+    assert.match(linkErrorMessage({ reason: "outside" }, "x"), /リポジトリの下に無い/);
+    assert.match(linkErrorMessage({ code: "EACCES" }, "x"), /読めない（EACCES）/);
   });
 });
 

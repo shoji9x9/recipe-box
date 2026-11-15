@@ -27,7 +27,14 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
-import { isInsideWithoutLinks, pathPattern, redact as redactWith, shortReason, validateRecipes } from "./seed-lib.mjs";
+import {
+  linkErrorMessage,
+  lstatWithoutLinks,
+  pathPattern,
+  redact as redactWith,
+  shortReason,
+  validateRecipes,
+} from "./seed-lib.mjs";
 
 const run = promisify(execFile);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -109,12 +116,14 @@ function sleep(ms) {
 // seed/recipes.json を読み、API と同じ決まりで確かめる（seed-lib.mjs の validateRecipes）。
 function loadRecipes() {
   const path = join(seedDir, "recipes.json");
+  // 写真と同じく、リンクを通ってリポジトリの外のファイルを読まない。
+  try {
+    lstatWithoutLinks(path, root);
+  } catch (error) {
+    fail(linkErrorMessage(error, "seed/recipes.json"));
+  }
   let recipes;
   try {
-    // 写真と同じく、リンクを通ってリポジトリの外のファイルを読まない。
-    if (!isInsideWithoutLinks(path, root)) {
-      fail("seed/recipes.json か、その上のディレクトリがシンボリックリンクになっている");
-    }
     recipes = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     fail(`seed/recipes.json を読めない: ${error.message}`);

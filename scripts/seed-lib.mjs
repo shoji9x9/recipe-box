@@ -1,6 +1,6 @@
 // scripts/seed.mjs の、外部（API・wrangler・標準入力）に触れない部分。単体テスト（seed-lib.test.mjs）で確かめる。
-import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { closeSync, lstatSync, openSync, readSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 // API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
 // 値はアプリ（apps/recipe-box-rs/src/recipe.rs・photo.rs）と同じにする。アプリの値を変えたら、ここも直す。
@@ -91,16 +91,35 @@ function length(text) {
   return [...text].length;
 }
 
-// path が、base の下にシンボリックリンクを通らずにあるかを確かめる（リポジトリの外のファイルを読まないため）。
-// path の実際の場所（realpath）が、base の実際の場所に、base からの相対パスを足したものと同じならよい。
-// base より下のどこかの階層（ファイル自身・seed/photos/・seed/ など）がリンクなら、食い違う。
-// base の外（相対パスが .. で始まる）は、リンクが無くても断る。
-export function isInsideWithoutLinks(path, base) {
+// path を、base（リポジトリのルート）から 1 階層ずつ lstat でたどり、どこにもシンボリックリンクが無ければ、
+// path の lstat の結果を返す（リポジトリの外のファイルを読まないため）。lstat はリンクを辿らないので、外には触れない。
+// base の外なら "outside"、リンクがあれば "link" を reason に持つ Error を投げる。lstat の失敗（ENOENT など）はそのまま投げる。
+export function lstatWithoutLinks(path, base) {
   const rel = relative(base, path);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-    return false;
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw Object.assign(new Error(`${path} が ${base} の下に無い`), { reason: "outside" });
   }
-  return realpathSync(path) === join(realpathSync(base), rel);
+  let current = base;
+  let stat;
+  for (const part of rel.split(sep)) {
+    current = join(current, part);
+    stat = lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw Object.assign(new Error(`${current} がシンボリックリンク`), { reason: "link" });
+    }
+  }
+  return stat;
+}
+
+// lstatWithoutLinks の失敗を、shown（表示する名前）を使った文にする。
+export function linkErrorMessage(error, shown) {
+  if (error.reason === "link") {
+    return `${shown} か、その上のディレクトリがシンボリックリンクになっている`;
+  }
+  if (error.reason === "outside") {
+    return `${shown} がリポジトリの下に無い`;
+  }
+  return `${shown} を読めない（${error.code ?? error.message}）`;
 }
 
 // seed/recipes.json の中身（JSON を読んだ値）を、API と同じ決まりで確かめる。写真は photoDir の下から探す。
@@ -141,18 +160,11 @@ export function validateRecipes(recipes, photoDir, base) {
       }
       used.add(file);
       const path = join(photoDir, file);
-      // リンクを辿って外のファイルに触れる前に、リンクが無いかを確かめる。
       let stat;
       try {
-        if (!isInsideWithoutLinks(path, base)) {
-          throw new Error(`${where}: 写真 seed/photos/${file} か、その上のディレクトリがシンボリックリンクになっている`);
-        }
-        stat = statSync(path);
+        stat = lstatWithoutLinks(path, base);
       } catch (error) {
-        if (error.code === undefined) {
-          throw error;
-        }
-        throw new Error(`${where}: 写真 seed/photos/${file} を読めない（${error.code}）`);
+        throw new Error(`${where}: ${linkErrorMessage(error, `写真 seed/photos/${file}`)}`);
       }
       // ディレクトリなどは、先頭を読むときに理由の分からない失敗になるので、先に断る。
       if (!stat.isFile()) {
