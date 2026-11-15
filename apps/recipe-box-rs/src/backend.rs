@@ -51,6 +51,13 @@ pub struct PhotoLimits {
     pub since: i64,
 }
 
+/// 写真を指す、レシピの ID と写真の ID の組（R2 のキーを作るのに使う）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct PhotoKey {
+    pub recipe_id: String,
+    pub id: String,
+}
+
 /// 写真の行を保存した結果。保存しなかったときは、その理由。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhotoInsert {
@@ -103,7 +110,8 @@ pub trait Backend: Clone + Send + Sync + 'static {
     fn allow_write(&self, client_key: &str) -> impl Future<Output = BackendResult<bool>> + Send;
 
     /// ワークスペースを保存する。`limits` のどれかに達していれば保存せずに `false` を返す。
-    /// 数えることと保存することを 1 つの SQL で行い、同時に作られても上限を超えないようにする。
+    /// 数えることと保存することを 1 つのトランザクションで行い、同時に作られても上限を超えないようにする。
+    /// 1 日に作った数は、ワークスペースを消しても残る作った記録で数え、保存したら記録も足す。
     fn insert_workspace(
         &self,
         id: &WorkspaceId,
@@ -171,6 +179,21 @@ pub trait Backend: Clone + Send + Sync + 'static {
         workspace: &WorkspaceId,
         id: &RecipeId,
     ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send;
+
+    /// ワークスペースのすべての写真を返す。
+    fn list_workspace_photos(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send;
+
+    /// ワークスペースと、そのレシピ・写真の行を消し、消した写真を返す。ワークスペースが無ければ `None` を返す。
+    /// R2 のデータは消さない（呼び出し側が、返した写真で消す）。
+    ///
+    /// 写真を読むことと消すことを 1 つのトランザクションで行う（[`Backend::delete_recipe`] と同じ理由）。
+    fn delete_workspace(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send;
 
     /// 写真の行と、追加の記録を保存する。`limits` のどれかに当たれば保存せず、その理由を返す。
     /// 上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えないようにする。

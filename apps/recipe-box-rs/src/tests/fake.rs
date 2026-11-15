@@ -14,7 +14,8 @@ use std::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, PhotoInsert, PhotoLimits, RecipePage, WorkspaceLimits,
+        Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
+        WorkspaceLimits,
     },
     photo::{Photo, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -35,8 +36,8 @@ type Objects = HashMap<String, (Vec<u8>, String)>;
 pub struct FakeBackend {
     /// ワークスペースの ID と最終利用日時。
     pub workspaces: Arc<Mutex<HashMap<String, i64>>>,
-    /// ワークスペースの ID と作った日時。
-    pub workspace_created_at: Arc<Mutex<HashMap<String, i64>>>,
+    /// ワークスペースを作った記録（作った日時）。ワークスペースを消しても残す。
+    pub workspace_creations: Arc<Mutex<Vec<i64>>>,
     /// レシピ。
     pub recipes: Arc<Mutex<HashMap<RecipeKey, Recipe>>>,
     /// 次に返す乱数の 1 バイト目。呼ぶたびに 1 増やし、毎回ちがう ID になるようにする。
@@ -72,6 +73,8 @@ pub struct FakeBackend {
     /// `true` なら、最初の R2 の削除の直後に、別のリクエストが同じレシピに写真を 1 枚追加し（D1 の行と R2 のデータ）、
     /// 消したばかりのキーにも書き込んだことにする。レシピの削除と写真の追加が同時に起きた場合を確かめる。
     pub photo_added_after_first_delete: bool,
+    /// `true` なら、ワークスペースを消す直前に、別のリクエストが同じワークスペースを消したことにする。
+    pub workspace_vanishes_on_delete: bool,
     /// `photo_added_after_first_delete` の写真を、もう追加したか。
     pub injected_photo: Arc<AtomicBool>,
 }
@@ -80,7 +83,7 @@ impl Default for FakeBackend {
     fn default() -> Self {
         Self {
             workspaces: Arc::default(),
-            workspace_created_at: Arc::default(),
+            workspace_creations: Arc::default(),
             recipes: Arc::default(),
             next_random: Arc::default(),
             now: Arc::new(AtomicI64::new(NOW)),
@@ -98,6 +101,7 @@ impl Default for FakeBackend {
             photo_rows_vanish_on_put: false,
             broken_r2_delete: false,
             photo_added_after_first_delete: false,
+            workspace_vanishes_on_delete: false,
             injected_photo: Arc::default(),
         }
     }
@@ -106,10 +110,7 @@ impl Default for FakeBackend {
 impl FakeBackend {
     /// 最終利用日時が `last_used_at` のワークスペースを足し、その ID を返す。作った日時も `last_used_at` にする。
     pub fn add_workspace(&self, id: &str, last_used_at: i64) -> String {
-        self.workspace_created_at
-            .lock()
-            .unwrap()
-            .insert(id.to_owned(), last_used_at);
+        self.workspace_creations.lock().unwrap().push(last_used_at);
         self.workspaces
             .lock()
             .unwrap()
@@ -129,6 +130,20 @@ impl FakeBackend {
                 created_at: self.now_millis(),
             },
         ));
+    }
+
+    /// ワークスペースのすべての写真の、レシピの ID と写真の ID。
+    fn workspace_photo_keys(&self, workspace: &WorkspaceId) -> Vec<PhotoKey> {
+        self.photos
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(w, _, _)| w == workspace.as_str())
+            .map(|(_, r, p)| PhotoKey {
+                recipe_id: r.clone(),
+                id: p.id.clone(),
+            })
+            .collect()
     }
 
     /// 「今」の時刻を `millis` だけ進める。
@@ -204,15 +219,17 @@ impl Backend for FakeBackend {
     ) -> impl Future<Output = BackendResult<bool>> + Send {
         ready(self.check().map(|()| {
             // 本物の SQL と同じく、全体の数と since 以後に作った数を数えてから保存する。
-            let mut created_at = self.workspace_created_at.lock().unwrap();
-            let total = i64::try_from(created_at.len()).unwrap();
+            // 1 日に作った数は、消しても残る作った記録で数える。
+            let mut workspaces = self.workspaces.lock().unwrap();
+            let mut creations = self.workspace_creations.lock().unwrap();
+            let total = i64::try_from(workspaces.len()).unwrap();
             let recent =
-                i64::try_from(created_at.values().filter(|&&t| t >= limits.since).count()).unwrap();
+                i64::try_from(creations.iter().filter(|&&t| t >= limits.since).count()).unwrap();
             if total >= limits.max_total || recent >= limits.max_created_since {
                 return false;
             }
-            created_at.insert(id.to_string(), now);
-            self.workspaces.lock().unwrap().insert(id.to_string(), now);
+            creations.push(now);
+            workspaces.insert(id.to_string(), now);
             true
         }))
     }
@@ -342,6 +359,37 @@ impl Backend for FakeBackend {
                 .map(|(_, _, p)| p.id.clone())
                 .collect();
             photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
+            Some(removed)
+        }))
+    }
+
+    fn list_workspace_photos(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send {
+        ready(self.check().map(|()| self.workspace_photo_keys(workspace)))
+    }
+
+    fn delete_workspace(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
+        ready(self.check().map(|()| {
+            self.workspaces.lock().unwrap().remove(workspace.as_str())?;
+            // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
+            let removed = self.workspace_photo_keys(workspace);
+            self.recipes
+                .lock()
+                .unwrap()
+                .retain(|(w, _), _| w != workspace.as_str());
+            self.photos
+                .lock()
+                .unwrap()
+                .retain(|(w, _, _)| w != workspace.as_str());
+            // 別のリクエストが先に（同じように）消していたなら、この削除では何も消えていない。
+            if self.workspace_vanishes_on_delete {
+                return None;
+            }
             Some(removed)
         }))
     }

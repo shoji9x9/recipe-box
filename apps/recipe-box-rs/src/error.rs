@@ -49,6 +49,8 @@ pub enum ApiError {
     UnsupportedPhotoType,
     /// 共有のデモでは、写真を追加・削除できない。
     DemoPhotosDisabled,
+    /// 共有のデモのワークスペースは削除できない。
+    DemoWorkspaceProtected,
     /// 短い間に呼ばれすぎた。
     TooManyRequests,
     /// アプリ全体の量が上限に達していて、新しく作れない（費用を守るための上限）。
@@ -146,6 +148,11 @@ impl ApiError {
                 StatusCode::FORBIDDEN,
                 "demo_photos_disabled",
                 "共有のデモでは、写真を追加・削除できません",
+            ),
+            Self::DemoWorkspaceProtected => (
+                StatusCode::FORBIDDEN,
+                "demo_workspace_protected",
+                "共有のデモのワークスペースは削除できません",
             ),
             Self::CapacityReached => (
                 StatusCode::SERVICE_UNAVAILABLE,

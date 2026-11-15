@@ -10,10 +10,12 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    backend::{Backend, WorkspaceLimits},
+    backend::{Backend, PhotoKey, WorkspaceLimits},
     error::ApiError,
     id,
     limits::client_key,
+    photo::{self, object_key},
+    recipe::RecipeId,
 };
 
 /// API がワークスペースの ID を受け取るヘッダー。
@@ -158,4 +160,49 @@ pub async fn create_new<B: Backend>(
         return Err(ApiError::CapacityReached);
     }
     Ok(id)
+}
+
+/// `DELETE /api/workspaces`: `X-Workspace-Id` のワークスペースを、レシピと写真ごと消し、`204` を返す。
+pub async fn delete<B: Backend>(
+    State(backend): State<B>,
+    workspace: Workspace,
+) -> Result<StatusCode, ApiError> {
+    remove(&backend, &workspace.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// ワークスペースと、そのレシピ・写真を消す。API と画面の両方から使う。共有のデモは消さない。
+///
+/// レシピを消すとき（[`crate::recipe::remove`]）と同じ順に消す。
+/// 1. 今ある写真のデータを R2 から消す。ここで失敗しても、D1 の行が残るので、もう一度消せる。
+/// 2. D1 でワークスペース・レシピ・写真の行を 1 つのトランザクションで消し、消した写真を受け取る。
+/// 3. 2 で消した写真のデータを、もう一度すべて R2 から消す。1 の後に追加された写真のデータを残さないため。
+pub async fn remove<B: Backend>(backend: &B, workspace: &WorkspaceId) -> Result<(), ApiError> {
+    if backend.demo_workspace_id().as_ref() == Some(workspace) {
+        return Err(ApiError::DemoWorkspaceProtected);
+    }
+    let before = backend.list_workspace_photos(workspace).await?;
+    remove_photo_objects(backend, workspace, &before).await?;
+    let deleted = backend
+        .delete_workspace(workspace)
+        .await?
+        .ok_or(ApiError::WorkspaceNotFound)?;
+    remove_photo_objects(backend, workspace, &deleted).await
+}
+
+/// ワークスペースの写真のデータを R2 から消す。
+async fn remove_photo_objects<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    photos: &[PhotoKey],
+) -> Result<(), ApiError> {
+    let keys = photos
+        .iter()
+        .map(|photo| {
+            // D1 の行はアプリが作った ID だけを持つが、R2 のキーの形を型で保つため、ここでも確かめる。
+            let recipe = RecipeId::parse(&photo.recipe_id).ok_or(ApiError::Internal)?;
+            Ok(object_key(workspace, &recipe, &photo.id))
+        })
+        .collect::<Result<_, ApiError>>()?;
+    photo::delete_objects(backend, keys).await
 }

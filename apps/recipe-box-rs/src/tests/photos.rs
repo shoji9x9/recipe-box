@@ -427,3 +427,151 @@ async fn photo_writes_use_the_write_limit() {
     let response = call(&backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn deleting_a_workspace_deletes_its_recipes_and_photos() {
+    let (backend, recipe) = setup().await;
+    let other = create_recipe(&backend, WORKSPACE_A).await;
+    let kept = create_recipe(&backend, WORKSPACE_B).await;
+    upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    upload(&backend, WORKSPACE_A, &other, jpeg(10)).await;
+    upload(&backend, WORKSPACE_B, &kept, jpeg(10)).await;
+
+    let response = call(
+        &backend,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT, "{}", response.body);
+    // ワークスペース A のレシピと写真だけが、D1 と R2 から消える。
+    assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    assert!(
+        backend
+            .recipes
+            .lock()
+            .unwrap()
+            .keys()
+            .all(|(workspace, _)| workspace != WORKSPACE_A)
+    );
+    {
+        let objects = backend.objects.lock().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert!(objects.keys().all(|key| key.contains(&kept)));
+    }
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+    // 消したワークスペースの ID は、もう使えない。
+    let response = call(
+        &backend,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert_eq!(error_code(&response), "workspace_not_found");
+}
+
+#[tokio::test]
+async fn demo_workspace_cannot_be_deleted() {
+    let (backend, _) = setup().await;
+    let response = call(
+        &backend,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(DEMO),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert_eq!(error_code(&response), "demo_workspace_protected");
+    assert!(backend.workspaces.lock().unwrap().contains_key(DEMO));
+}
+
+#[tokio::test]
+async fn photo_added_while_deleting_its_workspace_is_removed_from_r2() {
+    let (backend, recipe) = setup().await;
+    upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    // 最初の R2 の削除の後、D1 でワークスペースを消す前に、別のリクエストが写真を追加した。
+    let backend = FakeBackend {
+        photo_added_after_first_delete: true,
+        ..backend
+    };
+    let response = call(
+        &backend,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+    assert!(backend.injected_photo.load(Ordering::Relaxed));
+    assert!(backend.objects.lock().unwrap().is_empty());
+    assert!(backend.photos.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn failed_first_r2_delete_keeps_the_workspace_so_it_can_be_retried() {
+    let (backend, recipe) = setup().await;
+    upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    let broken = FakeBackend {
+        broken_r2_delete: true,
+        ..backend.clone()
+    };
+    let response = call(
+        &broken,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+    assert_eq!(backend.objects.lock().unwrap().len(), 1);
+
+    // R2 が直れば、やり直して消せる。
+    let response = call(
+        &backend,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+    assert!(backend.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn deleting_a_workspace_uses_the_write_limit() {
+    let (backend, _) = setup().await;
+    let backend = FakeBackend {
+        write_limited: true,
+        ..backend
+    };
+    let response = call(
+        &backend,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    // 作るほうは、専用のレート制限だけを使う。
+    let response = send(
+        router(backend.clone()),
+        Request::post("/api/workspaces")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::CREATED);
+}

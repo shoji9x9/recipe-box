@@ -16,7 +16,8 @@ use worker::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, PhotoInsert, PhotoLimits, RecipePage, WorkspaceLimits,
+        Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
+        WorkspaceLimits,
     },
     photo::{Photo, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -33,6 +34,9 @@ const DEMO_WORKSPACE_SECRET: &str = "DEMO_WORKSPACE_ID";
 const WORKSPACE_CREATION_LIMITER: &str = "WORKSPACE_CREATION_LIMITER";
 /// `wrangler.toml` のレート制限の binding の名前（書き込む API の回数）。
 const WRITE_LIMITER: &str = "WRITE_LIMITER";
+
+/// ワークスペースのすべての写真を読む SQL（[`PhotoKey`] の形）。
+const WORKSPACE_PHOTOS_SQL: &str = "SELECT recipe_id, id FROM photos WHERE workspace_id = ?";
 
 /// レシピを読むときの列。`Recipe` の項目と同じ名前・順番にする。
 const RECIPE_COLUMNS: &str = "id, name, servings, ingredients, steps, created_at, updated_at";
@@ -205,17 +209,33 @@ impl Backend for CloudflareBackend {
             // 上限の判定と保存を 1 つの文にして、同時に作られても上限を超えないようにする。
             // FROM の (VALUES (0)) は、1 行だけの表として使う（標準の SQL の書き方）。
             // 全体を数えるので、workspace_id では絞り込まない（AGENTS.md のワークスペースを作るクエリ）。
-            let result = run(
-                &db,
-                "INSERT INTO workspaces (id, created_at, last_used_at) \
-                 SELECT ?, ?, ? FROM (VALUES (0)) AS one \
-                 WHERE (SELECT COUNT(*) FROM workspaces) < ? \
-                 AND (SELECT COUNT(*) FROM workspaces WHERE created_at >= ?) < ?",
-                &values.0,
-                action,
-            )
-            .await?;
-            Ok(changed_rows(&result, action)? > 0)
+            // 1 日に作った数は、消しても残る workspace_creations で数える（作ると消すを繰り返して超えさせない）。
+            let insert = db
+                .prepare(
+                    "INSERT INTO workspaces (id, created_at, last_used_at) \
+                     SELECT ?, ?, ? FROM (VALUES (0)) AS one \
+                     WHERE (SELECT COUNT(*) FROM workspaces) < ? \
+                     AND (SELECT COUNT(*) FROM workspace_creations WHERE created_at >= ?) < ?",
+                )
+                .bind(&values.0)
+                .map_err(|e| backend_error(action, &e))?;
+            // 作れたときだけ、作った記録を入れる（上の文で行が入ったかを、同じ ID の行が在るかで見る）。
+            let record = db
+                .prepare(
+                    "INSERT INTO workspace_creations (created_at) \
+                     SELECT created_at FROM workspaces WHERE id = ?",
+                )
+                .bind(&[values.0[0].clone()])
+                .map_err(|e| backend_error(action, &e))?;
+            // batch は 1 つのトランザクションとして、順に実行される。
+            let results = db
+                .batch(vec![insert, record])
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            let Some(inserted) = results.first() else {
+                return Err(BackendError(format!("{action}: batch の結果が無い")));
+            };
+            Ok(changed_rows(inserted, action)? > 0)
         })
     }
 
@@ -452,6 +472,62 @@ impl Backend for CloudflareBackend {
                 .map(|row| row.id)
                 .collect();
             Ok(Some(ids))
+        })
+    }
+
+    fn list_workspace_photos(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send {
+        let env = self.env.clone();
+        let workspace = workspace.to_string();
+        SendFuture::new(async move {
+            let action = "ワークスペースの写真を読めない";
+            let db = database(&env)?;
+            db.prepare(WORKSPACE_PHOTOS_SQL)
+                .bind(&[workspace.into()])
+                .map_err(|e| backend_error(action, &e))?
+                .all()
+                .await
+                .map_err(|e| backend_error(action, &e))?
+                .results::<PhotoKey>()
+                .map_err(|e| backend_error(action, &e))
+        })
+    }
+
+    fn delete_workspace(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
+        let env = self.env.clone();
+        let workspace = workspace.to_string();
+        SendFuture::new(async move {
+            let action = "ワークスペースを消せない";
+            let db = database(&env)?;
+            let photos = db
+                .prepare(WORKSPACE_PHOTOS_SQL)
+                .bind(&[workspace.as_str().into()])
+                .map_err(|e| backend_error(action, &e))?;
+            // レシピと写真の行は ON DELETE CASCADE で一緒に消える。
+            let deleted = db
+                .prepare("DELETE FROM workspaces WHERE id = ?")
+                .bind(&[workspace.as_str().into()])
+                .map_err(|e| backend_error(action, &e))?;
+            // batch は 1 つのトランザクションなので、読んだ写真と、消した写真の行が一致する。
+            let results = db
+                .batch(vec![photos, deleted])
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            let [photos, deleted] = results.as_slice() else {
+                return Err(BackendError(format!("{action}: batch の結果の数が違う")));
+            };
+            if changed_rows(deleted, action)? == 0 {
+                return Ok(None);
+            }
+            photos
+                .results::<PhotoKey>()
+                .map(Some)
+                .map_err(|e| backend_error(action, &e))
         })
     }
 
