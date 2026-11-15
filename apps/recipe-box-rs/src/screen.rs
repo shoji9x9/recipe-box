@@ -415,8 +415,12 @@ pub async fn identify<B: Backend>(
     let headers = request.headers();
     let flash = cookie_value(headers, FLASH_COOKIE).and_then(Flash::parse);
     let viewing_demo = cookie_value(headers, DEMO_VIEW_COOKIE) == Some("1");
+    // Cookie の ID が共有のデモの ID なら（Cookie を手で書き換えたなど）、自分のワークスペースとして扱わず、Cookie を消す。
+    // デモでは写真を追加・削除させないなど、デモかどうかで扱いが変わるので、どの画面でも同じに決めるため。
+    let demo = backend.demo_workspace_id();
     let cookie_id = cookie_workspace(headers);
     let (own, stale) = match cookie_id {
+        Some(id) if demo.as_ref() == Some(&id) => (None, true),
         Some(id) => match workspace::touch(&backend, &id).await {
             Ok(true) => (Some(id), false),
             Ok(false) => (None, true),
@@ -446,25 +450,22 @@ pub async fn identify<B: Backend>(
 /// 2. 共有のデモがあれば、それを使う。
 /// 3. デモが無くても、自分のワークスペースがあれば、それを使う（デモを見ている途中でデモが無くなったとき）。
 ///
-/// Cookie の ID がデモの ID と同じなら（Cookie を手で書き換えたなど）、自分のワークスペースとして扱わない。
-/// デモでは写真を追加・削除させないなど、デモかどうかで変わる扱いを、ここだけで決めるため。
+/// `session.own` は、デモの ID でないことを [`identify`] が確かめている。
 async fn resolve<B: Backend>(backend: &B, session: &Session) -> Result<Option<Viewer>, ApiError> {
-    let demo = backend.demo_workspace_id();
-    let own = session.own.as_ref().filter(|id| demo.as_ref() != Some(*id));
-    if let Some(id) = own
+    if let Some(id) = &session.own
         && !session.viewing_demo
     {
         return Ok(Some(Viewer::Own(id.clone())));
     }
-    if let Some(id) = demo
+    if let Some(id) = backend.demo_workspace_id()
         && workspace::touch(backend, &id).await?
     {
         return Ok(Some(Viewer::Demo {
             id,
-            own_available: own.is_some(),
+            own_available: session.own.is_some(),
         }));
     }
-    Ok(own.cloned().map(Viewer::Own))
+    Ok(session.own.clone().map(Viewer::Own))
 }
 
 /// ワークスペースが要る画面で、使うワークスペースを決める。無ければ「はじめる」画面へ移す。
@@ -802,7 +803,7 @@ async fn detail_page<B: Backend>(
             layout,
             recipe,
             photos,
-            // 共有のデモでは追加・削除できない（デモの ID の Cookie も、resolve がデモとして扱う）。
+            // 共有のデモでは追加・削除できない（デモの ID の Cookie は、identify が自分のワークスペースから外す）。
             photos_editable: matches!(viewer, Viewer::Own(_)),
             can_add_photo: count < photo::MAX_PHOTOS_PER_RECIPE,
             max_photos: photo::MAX_PHOTOS_PER_RECIPE,
@@ -1088,11 +1089,11 @@ pub async fn switch_workspace<B: Backend>(
     } else {
         match WorkspaceId::parse(id) {
             // 共有のデモの ID は、自分のワークスペースとして使わせない（デモかどうかで扱いが変わるため）。
-            // デモの ID だと分からないよう、無い ID と同じ説明にする。
-            Some(id) if backend.demo_workspace_id().as_ref() == Some(&id) => {
-                "その ID のワークスペースは見つかりません。ID が正しいか、14 日使わずに消えていないかを確かめてください"
-            }
-            Some(id) if workspace::touch(&backend, &id).await? => {
+            // デモの ID だと分からないよう、無い ID と同じ説明にし、D1 も同じように読む（応答の時間をそろえる）。
+            Some(id)
+                if workspace::touch(&backend, &id).await?
+                    && backend.demo_workspace_id().as_ref() != Some(&id) =>
+            {
                 return Ok(use_workspace(&id, Flash::WorkspaceSwitched));
             }
             _ => {
@@ -1148,7 +1149,7 @@ pub async fn guard_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    guard(&backend, request, next, recipe::MAX_BODY_BYTES, false).await
+    guard(&backend, request, next, recipe::MAX_BODY_BYTES).await
 }
 
 /// 写真を送るフォームの [`guard_writes`]。本文の上限だけが違う（[`PHOTO_FORM_MAX_BYTES`]）。
@@ -1157,16 +1158,15 @@ pub async fn guard_photo_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    guard(&backend, request, next, PHOTO_FORM_MAX_BYTES, true).await
+    guard(&backend, request, next, PHOTO_FORM_MAX_BYTES).await
 }
 
-/// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限、`photo_form` は写真を送るフォームか。
+/// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限。
 async fn guard<B: Backend>(
     backend: &B,
     request: Request,
     next: Next,
     max_body_bytes: usize,
-    photo_form: bool,
 ) -> Response {
     let is_post = request.method() == Method::POST;
     let mut response = if is_post && !same_origin(request.headers()) {
@@ -1181,10 +1181,7 @@ async fn guard<B: Backend>(
     } else if let Err(error) =
         check_write(backend, request.method(), request.headers(), max_body_bytes).await
     {
-        let recipe_path = photo_form
-            .then(|| photo_recipe_path(request.uri().path()))
-            .flatten();
-        match (&error, recipe_path) {
+        match (&error, photo_recipe_path(request.uri().path())) {
             // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
             // よく起きるので、一般の説明ではなく写真の上限を出し、レシピに戻れるようにする。
             (ApiError::PayloadTooLarge, Some(recipe_path)) => render(

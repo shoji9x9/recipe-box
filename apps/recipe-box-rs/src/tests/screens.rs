@@ -1227,10 +1227,15 @@ async fn demo_id_is_never_treated_as_own_workspace() {
     assert!(response.body.contains("見つかりません"));
     assert_eq!(set_cookie_named(&response, "__Host-workspace"), None);
 
-    // Cookie を手で書き換えても、デモとして扱う（写真の追加・削除のボタンを出さず、送られても断る）。
+    // Cookie を手で書き換えても、デモとして扱い、Cookie を消す（写真の追加・削除のボタンを出さず、送られても断る）。
     let demo_cookie = cookie(DEMO);
     let response = screen_get(&backend, &path, Some(&demo_cookie)).await;
     assert_eq!(response.status, StatusCode::OK);
+    assert!(
+        set_cookie_named(&response, "__Host-workspace")
+            .unwrap()
+            .contains("Max-Age=0")
+    );
     assert!(
         response.body.contains("共有のデモです"),
         "{}",
@@ -1247,6 +1252,15 @@ async fn demo_id_is_never_treated_as_own_workspace() {
     .await;
     assert_eq!(response.status, StatusCode::FORBIDDEN);
     assert_eq!(backend.photos.lock().unwrap().len(), 1);
+    // ワークスペースの画面にも、デモの ID を自分の ID として出さない。デモへの一時的な切り替えもさせない。
+    let response = screen_get(&backend, "/workspace", Some(&demo_cookie)).await;
+    assert!(!response.body.contains(DEMO), "{}", response.body);
+    assert!(!response.body.contains("自分のレシピ帳に戻る"));
+    let response = screen_post(&backend, "/workspace/demo", Some(&demo_cookie), "").await;
+    assert!(
+        !set_cookie_named(&response, "__Host-demo-view")
+            .is_some_and(|cookie| cookie.starts_with("__Host-demo-view=1"))
+    );
 }
 
 #[test]
@@ -1264,7 +1278,13 @@ fn photo_limit_message_matches_max_photo_bytes() {
         crate::screen::PHOTO_TOO_LARGE.contains(&format!("{grouped} バイト")),
         "{grouped}"
     );
+    assert_eq!(
+        crate::photo::MAX_PHOTO_BYTES % 1_000_000,
+        0,
+        "MB の書き方も直す"
+    );
     let megabytes = crate::photo::MAX_PHOTO_BYTES / 1_000_000;
+    assert!(crate::screen::PHOTO_TOO_LARGE.contains(&format!("約 {megabytes} MB")));
     let detail = include_str!("../../templates/detail.html");
     assert!(detail.contains(&format!("1 枚 {megabytes} MB まで")));
 }
