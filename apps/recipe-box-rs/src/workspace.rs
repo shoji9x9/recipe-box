@@ -244,7 +244,7 @@ impl CleanupSummary {
 ///
 /// 1 つのワークスペースで失敗しても、ほかのワークスペースは消す。
 /// ワークスペースの削除とは別に、1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、前の日までのものを消す。
-/// 失敗の理由はログに出す。ワークスペースの ID は持ち主の証なので、ログにも出さない。
+/// 失敗の理由はログに出す。ワークスペースの ID は持ち主の証なので、ログに出す前に伏せる（[`crate::id::redact`]）。
 pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
     let now = backend.now_millis();
     let before = now - UNUSED_DELETE_AFTER_MILLIS;
@@ -261,9 +261,10 @@ pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
     for id in ids {
         // 形の正しくない ID の行（アプリは作らない）は消せないので、失敗に数えて知らせ、ほかは消す。
         let Some(id) = WorkspaceId::parse(&id) else {
-            log_error(&BackendError(
-                "使われていないワークスペースの ID の形が正しくない".to_owned(),
-            ));
+            // 行を探す手がかりに、値を添える（ID の形の部分は log_error が伏せる）。
+            log_error(&BackendError(format!(
+                "使われていないワークスペースの ID の形が正しくない: {id:?}"
+            )));
             summary.failed += 1;
             continue;
         };

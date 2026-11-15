@@ -63,9 +63,12 @@ impl CloudflareBackend {
 }
 
 /// workers-rs のエラーを [`BackendError`] にする。どの操作で失敗したかを添える。
-/// エラーの文に入りうる ID（R2 のキーなど）は、ログに出すときに伏せる（[`crate::error::log_error`]）。
+/// エラーの文に入りうる ID（R2 のキーなど）は、ここで伏せる。ログに出すときにも、もう一度伏せる（[`crate::error::log_error`]）。
 fn backend_error(action: &str, error: &worker::Error) -> BackendError {
-    BackendError(format!("{action}: {error}"))
+    BackendError(format!(
+        "{action}: {}",
+        crate::id::redact(&error.to_string())
+    ))
 }
 
 /// 整数（時刻や人数）を JavaScript の数値にする。
