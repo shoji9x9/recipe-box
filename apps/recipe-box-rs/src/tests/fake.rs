@@ -36,8 +36,6 @@ type Objects = HashMap<String, (Vec<u8>, String)>;
 pub struct FakeBackend {
     /// ワークスペースの ID と最終利用日時。
     pub workspaces: Arc<Mutex<HashMap<String, i64>>>,
-    /// ワークスペースの ID と作った日時。
-    pub workspace_created_at: Arc<Mutex<HashMap<String, i64>>>,
     /// ワークスペースを作った記録（作った日時）。ワークスペースを消しても残す。
     pub workspace_creations: Arc<Mutex<Vec<i64>>>,
     /// レシピ。
@@ -83,7 +81,6 @@ impl Default for FakeBackend {
     fn default() -> Self {
         Self {
             workspaces: Arc::default(),
-            workspace_created_at: Arc::default(),
             workspace_creations: Arc::default(),
             recipes: Arc::default(),
             next_random: Arc::default(),
@@ -110,10 +107,6 @@ impl Default for FakeBackend {
 impl FakeBackend {
     /// 最終利用日時が `last_used_at` のワークスペースを足し、その ID を返す。作った日時も `last_used_at` にする。
     pub fn add_workspace(&self, id: &str, last_used_at: i64) -> String {
-        self.workspace_created_at
-            .lock()
-            .unwrap()
-            .insert(id.to_owned(), last_used_at);
         self.workspace_creations.lock().unwrap().push(last_used_at);
         self.workspaces
             .lock()
@@ -224,17 +217,16 @@ impl Backend for FakeBackend {
         ready(self.check().map(|()| {
             // 本物の SQL と同じく、全体の数と since 以後に作った数を数えてから保存する。
             // 1 日に作った数は、消しても残る作った記録で数える。
-            let mut created_at = self.workspace_created_at.lock().unwrap();
+            let mut workspaces = self.workspaces.lock().unwrap();
             let mut creations = self.workspace_creations.lock().unwrap();
-            let total = i64::try_from(created_at.len()).unwrap();
+            let total = i64::try_from(workspaces.len()).unwrap();
             let recent =
                 i64::try_from(creations.iter().filter(|&&t| t >= limits.since).count()).unwrap();
             if total >= limits.max_total || recent >= limits.max_created_since {
                 return false;
             }
-            created_at.insert(id.to_string(), now);
             creations.push(now);
-            self.workspaces.lock().unwrap().insert(id.to_string(), now);
+            workspaces.insert(id.to_string(), now);
             true
         }))
     }
@@ -381,10 +373,6 @@ impl Backend for FakeBackend {
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
         ready(self.check().map(|()| {
             self.workspaces.lock().unwrap().remove(workspace.as_str())?;
-            self.workspace_created_at
-                .lock()
-                .unwrap()
-                .remove(workspace.as_str());
             // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
             let removed = self.workspace_photo_keys(workspace);
             self.recipes

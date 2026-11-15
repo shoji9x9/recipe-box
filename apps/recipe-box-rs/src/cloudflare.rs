@@ -222,8 +222,8 @@ impl Backend for CloudflareBackend {
             // 作れたときだけ、作った記録を入れる（上の文で行が入ったかを、同じ ID の行が在るかで見る）。
             let record = db
                 .prepare(
-                    "INSERT INTO workspace_creations (id, created_at) \
-                     SELECT id, created_at FROM workspaces WHERE id = ?",
+                    "INSERT INTO workspace_creations (created_at) \
+                     SELECT created_at FROM workspaces WHERE id = ?",
                 )
                 .bind(&[values.0[0].clone()])
                 .map_err(|e| backend_error(action, &e))?;

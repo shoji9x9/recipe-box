@@ -110,7 +110,8 @@ pub trait Backend: Clone + Send + Sync + 'static {
     fn allow_write(&self, client_key: &str) -> impl Future<Output = BackendResult<bool>> + Send;
 
     /// ワークスペースを保存する。`limits` のどれかに達していれば保存せずに `false` を返す。
-    /// 数えることと保存することを 1 つの SQL で行い、同時に作られても上限を超えないようにする。
+    /// 数えることと保存することを 1 つのトランザクションで行い、同時に作られても上限を超えないようにする。
+    /// 1 日に作った数は、ワークスペースを消しても残る作った記録で数え、保存したら記録も足す。
     fn insert_workspace(
         &self,
         id: &WorkspaceId,

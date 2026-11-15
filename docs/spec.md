@@ -143,7 +143,7 @@ stateDiagram-v2
 | `workspaces` | ワークスペース。最終利用日時と、自動削除の対象から外す印を持つ。消すと、レシピの行も消える（`ON DELETE CASCADE`） |
 | `recipes` | レシピ。`workspace_id`、`name`（料理名・必須）、`search_name`（検索用。料理名の ASCII の英字だけを小文字にしたもので、アプリが作る）、`servings`（何人分・1〜100 の整数）、`ingredients`（材料・複数行）、`steps`（手順・複数行）、作った日時と最後に変えた日時 |
 | `photos` | 写真の情報。`workspace_id`・`recipe_id`・`id`・`content_type`（形式）・`size`（バイト）・`created_at`。写真のデータは R2 のキー `photos/<workspace_id>/<recipe_id>/<id>` に置く。レシピを消すと行も消える（`ON DELETE CASCADE`） |
-| `workspace_creations` | ワークスペースを作った記録（`id`・`created_at`）。アプリ全体の 1 日に作る数を数える。ワークスペースを消しても残す |
+| `workspace_creations` | ワークスペースを作った記録（`created_at` だけ。ワークスペースの ID は持たない）。アプリ全体の 1 日に作る数を数える。ワークスペースを消しても残す |
 | `photo_uploads` | 写真を追加した記録（`id`・`created_at`）。アプリ全体の 1 日の追加の回数を数える。写真を消しても残す |
 
 ## API
