@@ -16,6 +16,7 @@ import {
   MAX_WORKSPACE_PHOTO_BYTES,
   lstatWithoutLinks,
   regularFileWithoutLinks,
+  SeedDataError,
   pathPattern,
   redact,
   shortReason,
@@ -135,10 +136,13 @@ describe("lstatWithoutLinks", () => {
     assert.throws(() => check(tmpdir()), /x がリポジトリの下に無い/);
     assert.throws(() => check(join(base, "seed", "missing.json")), /x を読めない（ENOENT）/);
     assert.throws(() => check(join(base, "seed")), /x がふつうのファイルでない/);
-    linkSync(join(base, "seed", "recipes.json"), join(base, "seed", "hard.json"));
-    assert.throws(() => check(join(base, "seed", "recipes.json")), /x がハードリンク/);
+    // ほかのテストが使う recipes.json と別のファイルで確かめる。
+    writeFileSync(join(base, "seed", "linked.json"), "[]");
+    linkSync(join(base, "seed", "linked.json"), join(base, "seed", "hard.json"));
+    assert.throws(() => check(join(base, "seed", "linked.json")), /x がハードリンク/);
     // プログラムの誤り（fs のシステムの失敗でないもの）は、データの問題に見せない。
     assert.throws(() => regularFileWithoutLinks(undefined, base, "x"), TypeError);
+    assert.throws(() => check(join(base, "seed", "missing.json")), SeedDataError);
   });
 });
 

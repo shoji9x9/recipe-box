@@ -30,6 +30,7 @@ import { promisify, stripVTControlCharacters } from "node:util";
 import {
   pathPattern,
   regularFileWithoutLinks,
+  SeedDataError,
   redact as redactWith,
   shortReason,
   validateRecipes,
@@ -113,24 +114,19 @@ function sleep(ms) {
 }
 
 // seed/recipes.json を読み、API と同じ決まりで確かめる（seed-lib.mjs の validateRecipes）。
+// データの誤り（SeedDataError）は文だけを、それ以外（プログラムの誤りなど）は原因を探せるよう stack も出す。
 function loadRecipes() {
-  const path = join(seedDir, "recipes.json");
-  // 写真と同じく、リンクを通ってリポジトリの外のファイルを読まない。
   try {
-    regularFileWithoutLinks(path, root, "seed/recipes.json");
-  } catch (error) {
-    fail(error.message);
-  }
-  let recipes;
-  try {
-    recipes = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    fail(`seed/recipes.json を読めない: ${error.message}`);
-  }
-  try {
+    regularFileWithoutLinks(join(seedDir, "recipes.json"), root, "seed/recipes.json");
+    let recipes;
+    try {
+      recipes = JSON.parse(readFileSync(join(seedDir, "recipes.json"), "utf8"));
+    } catch (error) {
+      throw new SeedDataError(`seed/recipes.json を読めない: ${error.message}`);
+    }
     return validateRecipes(recipes, photoDir, root);
   } catch (error) {
-    fail(error.message);
+    fail(error instanceof SeedDataError ? error.message : (error.stack ?? String(error)));
   }
 }
 

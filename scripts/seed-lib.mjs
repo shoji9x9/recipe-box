@@ -91,6 +91,10 @@ function length(text) {
   return [...text].length;
 }
 
+// seed のデータ（recipes.json と写真）が決まりに合わないときの例外。呼ぶ側は、これだけを利用者向けの文として表示し、
+// ほかの例外（プログラムの誤りなど）は stack を残すため、そのまま投げる。
+export class SeedDataError extends Error {}
+
 // path を、base（リポジトリのルート）から 1 階層ずつ lstat でたどり、どこにもシンボリックリンクが無ければ、
 // path の lstat の結果を返す（リポジトリの外のファイルを読まないため）。lstat はリンクを辿らないので、外には触れない。
 // base の外なら "outside"、リンクがあれば "link" を reason に持つ Error を投げる。lstat の失敗（ENOENT など）はそのまま投げる。
@@ -121,22 +125,22 @@ export function regularFileWithoutLinks(path, base, shown) {
     stat = lstatWithoutLinks(path, base);
   } catch (error) {
     if (error.reason === "link") {
-      throw new Error(`${shown} か、その上のディレクトリがシンボリックリンクになっている`);
+      throw new SeedDataError(`${shown} か、その上のディレクトリがシンボリックリンクになっている`);
     }
     if (error.reason === "outside") {
-      throw new Error(`${shown} がリポジトリの下に無い`);
+      throw new SeedDataError(`${shown} がリポジトリの下に無い`);
     }
     // fs のシステムの失敗（ENOENT・EACCES など）は syscall を持つ。
     if (error.syscall === undefined) {
       throw error;
     }
-    throw new Error(`${shown} を読めない（${error.code}）`);
+    throw new SeedDataError(`${shown} を読めない（${error.code}）`);
   }
   if (!stat.isFile()) {
-    throw new Error(`${shown} がふつうのファイルでない`);
+    throw new SeedDataError(`${shown} がふつうのファイルでない`);
   }
   if (stat.nlink > 1) {
-    throw new Error(`${shown} がハードリンクになっている`);
+    throw new SeedDataError(`${shown} がハードリンクになっている`);
   }
   return stat;
 }
@@ -146,36 +150,36 @@ export function regularFileWithoutLinks(path, base, shown) {
 // 決まりに合わなければ、理由を書いた Error を投げる。
 export function validateRecipes(recipes, photoDir, base) {
   if (!Array.isArray(recipes) || recipes.length === 0 || recipes.length > MAX_RECIPES) {
-    throw new Error(`seed/recipes.json は 1 件から ${MAX_RECIPES} 件までの配列にする`);
+    throw new SeedDataError(`seed/recipes.json は 1 件から ${MAX_RECIPES} 件までの配列にする`);
   }
   const used = new Set();
   const parsed = recipes.map((recipe, index) => {
     const where = `seed/recipes.json の ${index + 1} 件目`;
     const { name, servings, ingredients = "", steps = "", photos = [] } = recipe ?? {};
     if (typeof name !== "string" || name.trim() === "" || length(name) > MAX_NAME) {
-      throw new Error(`${where}: name は空でない ${MAX_NAME} 文字までの文字列にする`);
+      throw new SeedDataError(`${where}: name は空でない ${MAX_NAME} 文字までの文字列にする`);
     }
     if (!Number.isInteger(servings) || servings < 1 || servings > MAX_SERVINGS) {
-      throw new Error(`${where}: servings は 1 から ${MAX_SERVINGS} までの整数にする`);
+      throw new SeedDataError(`${where}: servings は 1 から ${MAX_SERVINGS} までの整数にする`);
     }
     if (typeof ingredients !== "string" || length(ingredients) > MAX_INGREDIENTS) {
-      throw new Error(`${where}: ingredients は ${MAX_INGREDIENTS} 文字までの文字列にする`);
+      throw new SeedDataError(`${where}: ingredients は ${MAX_INGREDIENTS} 文字までの文字列にする`);
     }
     if (typeof steps !== "string" || length(steps) > MAX_STEPS) {
-      throw new Error(`${where}: steps は ${MAX_STEPS} 文字までの文字列にする`);
+      throw new SeedDataError(`${where}: steps は ${MAX_STEPS} 文字までの文字列にする`);
     }
     if (!Array.isArray(photos) || photos.length > MAX_PHOTOS_PER_RECIPE) {
-      throw new Error(`${where}: photos は ${MAX_PHOTOS_PER_RECIPE} 枚までの配列にする`);
+      throw new SeedDataError(`${where}: photos は ${MAX_PHOTOS_PER_RECIPE} 枚までの配列にする`);
     }
     const files = photos.map((file) => {
       // ファイル名の形を決め、seed/photos/ の外を読ませない。
       if (typeof file !== "string" || !PHOTO_FILE_PATTERN.test(file)) {
-        throw new Error(
+        throw new SeedDataError(
           `${where}: 写真のファイル名 ${JSON.stringify(file)} の形が正しくない（英小文字・数字・ハイフンと拡張子）`,
         );
       }
       if (used.has(file)) {
-        throw new Error(`${where}: 写真 ${file} を 2 回使っている`);
+        throw new SeedDataError(`${where}: 写真 ${file} を 2 回使っている`);
       }
       used.add(file);
       const path = join(photoDir, file);
@@ -183,16 +187,18 @@ export function validateRecipes(recipes, photoDir, base) {
       try {
         stat = regularFileWithoutLinks(path, base, `写真 seed/photos/${file}`);
       } catch (error) {
-        // プログラムの誤りなど、ここで作った文でない例外にも、どのレシピかを添える（stack は cause に残す）。
-        throw new Error(`${where}: ${error.message}`, { cause: error });
+        if (!(error instanceof SeedDataError)) {
+          throw error;
+        }
+        throw new SeedDataError(`${where}: ${error.message}`);
       }
       const { size } = stat;
       if (size === 0 || size > MAX_PHOTO_BYTES) {
-        throw new Error(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
+        throw new SeedDataError(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
       }
       const contentType = photoContentType(readHead(path));
       if (contentType === null) {
-        throw new Error(`${where}: 写真 ${file} が JPEG・PNG・WebP のどれでもない`);
+        throw new SeedDataError(`${where}: 写真 ${file} が JPEG・PNG・WebP のどれでもない`);
       }
       return { file, path, size, contentType };
     });
@@ -200,7 +206,7 @@ export function validateRecipes(recipes, photoDir, base) {
   });
   const total = parsed.flatMap((recipe) => recipe.files).reduce((sum, file) => sum + file.size, 0);
   if (total > MAX_WORKSPACE_PHOTO_BYTES) {
-    throw new Error(
+    throw new SeedDataError(
       `写真の合計が ${total} バイトで、ワークスペースの上限（${MAX_WORKSPACE_PHOTO_BYTES} バイト）を超える`,
     );
   }
