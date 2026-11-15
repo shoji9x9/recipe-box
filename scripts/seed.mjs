@@ -35,15 +35,15 @@ const appDir = join(root, "apps", "recipe-box-rs");
 // 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
 const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
 // ログで . と ~ に置き換える、リポジトリとホームのディレクトリのパス（端末の利用者名が入る）。
-// パスの後ろが区切り（/・空白・引用符・括弧・文の終わりなど）のときだけ置き換え、/home/u で /home/u2 を崩さない。
-// 空か / なら置き換えない（ほかの文字まで置き換えてしまうため）。
+// 前後がファイル名の文字（英数字・_・-・.）でないときだけ置き換え、/home/u で /home/u2 や /mnt/home/u を崩さない。
+// 絶対パスでないか / だけなら置き換えない（ほかの文字まで置き換えてしまうため）。
 function pathPattern(path) {
   const trimmed = path.replace(/\/+$/, "");
-  if (trimmed === "") {
+  if (!trimmed.startsWith("/")) {
     return null;
   }
   const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(String.raw`${escaped}(?=$|[/\s'"${"`"}),:;\]])`, "g");
+  return new RegExp(String.raw`(?<![\w.-])${escaped}(?![\w-])`, "g");
 }
 const PATHS = [
   [pathPattern(root), "."],
@@ -84,9 +84,14 @@ const RETRY_WAIT_MS = 5_000;
 const ID_PATTERN = /^[0-9a-f]{32}$/;
 const PHOTO_FILE_PATTERN = /^[a-z0-9][a-z0-9-]*\.(jpg|png|webp)$/;
 
+// 表示する文は、ここで必ず伏せる（redact）。呼ぶ側で伏せ忘れても、ID とパスを出さないためである。
 function fail(message) {
-  console.error(`seed: ${message}`);
+  console.error(`seed: ${redact(message)}`);
   process.exit(1);
+}
+
+function warn(message) {
+  console.error(redact(message));
 }
 
 function usage() {
@@ -113,8 +118,12 @@ if (!ID_PATTERN.test(workspaceId)) {
 // 16 進数 32 文字以上の並びはすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
 // リポジトリとホームのディレクトリのパスも、. と ~ に置き換える（PATHS）。
 function redact(text) {
-  return PATHS.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), String(text))
-    .replaceAll(workspaceId, "***")
+  let result = PATHS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), String(text));
+  // ID の形を確かめる前（空のときなど）に呼ばれたら、デモの ID の置き換えを飛ばす（空の文字列で置き換えると文が崩れる）。
+  if (ID_PATTERN.test(workspaceId)) {
+    result = result.replaceAll(workspaceId, "***");
+  }
+  return result
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
     .replace(/[0-9a-f]{32,}/gi, "***");
 }
@@ -262,7 +271,7 @@ async function wrangler(...wranglerArgs) {
     return stdout;
   } catch (error) {
     // 理由は stderr か stdout（--json のとき）にある。Node のエラーの文は、コマンドの全体（ホームのディレクトリのパスと SQL）を
-    // 含むので、ふつうは使わず、終了コードかシグナル（起動できなければ ENOENT などのコード）だけを添える。
+    // 含むので使わず、終了コードかシグナル（起動できなければ ENOENT などのコード）だけを添える。
     // 制御文字（色など）は、伏せる前に取り除く（制御文字に挟まれた値も伏せるため）。
     // ログのファイルの場所の行は、理由にならないので除く。
     const output = redact(
@@ -275,10 +284,8 @@ async function wrangler(...wranglerArgs) {
           .join("\n"),
       ),
     );
-    // 終了コードもシグナルも無ければ（起動の前の失敗など）、伏せたエラーの文の最初の行を添える。
-    const detail =
-      [error.code, error.signal].filter((value) => value != null).join("・") ||
-      redact(stripVTControlCharacters(String(error.message)).split("\n")[0]).slice(0, REASON_LENGTH);
+    // 終了コードもシグナルも無ければ（execFile ではふつう起きない）、エラーの名前を添える。
+    const detail = [error.code, error.signal].filter((value) => value != null).join("・") || error.name;
     // 伏せた後で切り詰める。長いときは、頭（stderr の [ERROR]）と終わり（stdout の JSON のエラー）の両方を残す。
     const text = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
     throw new Error(`wrangler が失敗した（${detail}）\n${text}`);
@@ -311,7 +318,7 @@ async function wranglerWithRetry(what, ...wranglerArgs) {
         throw error;
       }
       // 理由は短くして出す（全文は、やり直しても失敗したときに呼ぶ側が出す）。error.message は wrangler() が伏せている。
-      console.error(`${what}に失敗したので、やり直す（${attempt} 回目）: ${shortReason(error.message)}`);
+      warn(`${what}に失敗したので、やり直す（${attempt} 回目）: ${shortReason(error.message)}`);
       await sleep(RETRY_WAIT_MS * attempt);
     }
   }
@@ -328,7 +335,7 @@ async function r2(action, photo, ...extra) {
     await wranglerWithRetry(what, "r2", "object", action, key, ...extra);
     return true;
   } catch (error) {
-    console.error(`${what}に失敗した: ${error.message}`);
+    warn(`${what}に失敗した: ${error.message}`);
     return false;
   }
 }
@@ -386,7 +393,7 @@ async function tryDeletePhotoRows(photos) {
     await deletePhotoRows(photos);
     return true;
   } catch (error) {
-    console.error(redact(`写真の行を消せなかった（R2 のデータが無い行が残る。もう一度 seed を実行すれば消える）: ${error.message}`));
+    warn(`写真の行を消せなかった（R2 のデータが無い行が残る。もう一度 seed を実行すれば消える）: ${error.message}`);
     return false;
   }
 }
@@ -407,10 +414,11 @@ async function removePhotos(photos) {
     try {
       rows = await existingPhotoIds([...notDeleted]);
     } catch (error) {
-      console.error(redact(`写真の行を読めなかったので、R2 から消せなかったデータのキーをすべて表示する: ${error.message}`));
+      warn(`写真の行を読めなかったので、R2 から消せなかったデータのキーをすべて表示する: ${error.message}`);
     }
     for (const photo of notDeleted) {
       if (!rows.has(photo.id)) {
+        // キーはレシピと写真の ID を見せる必要があるので、redact を通さない（デモの ID は shownKey が伏せている）。
         console.error(`どの行からもたどれないデータが R2 に残った。手で消す: ${shownKey(photo)}`);
       }
     }
@@ -529,7 +537,7 @@ async function main() {
       lost += photos.length - inserted.length;
     } catch (error) {
       // R2 にはまだ書いていないので、行だけを消す。
-      console.error(redact(error.message));
+      warn(error.message);
       fail(
         (await tryDeletePhotoRows(photos))
           ? "写真の行を入れられなかったので、入れた行を消した。もう一度実行する"
@@ -552,7 +560,7 @@ async function main() {
     try {
       after = await existingPhotoIds(inserted);
     } catch (error) {
-      console.error(redact(error.message));
+      warn(error.message);
       fail(
         (await removePhotos(inserted))
           ? "写真を書いた後に行を読めなかったので、入れた写真を消した。もう一度実行する"
@@ -589,4 +597,4 @@ async function main() {
   console.log("公開 API で、レシピの数と写真の中身を確かめた");
 }
 
-main().catch((error) => fail(redact(error.message)));
+main().catch((error) => fail(error.message));
