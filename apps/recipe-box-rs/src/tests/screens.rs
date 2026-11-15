@@ -700,9 +700,9 @@ async fn all_field_errors_are_shown_on_the_form() {
         ("steps", "手順は 5,000 文字までです"),
     ] {
         assert!(
-            response.body.contains(&format!(
-                r##"href="#{field}" hx-preserve="true">{message}</a>"##
-            )),
+            response
+                .body
+                .contains(&format!(r##"<a href="#{field}">{message}</a>"##)),
             "{field}"
         );
         assert!(
@@ -878,7 +878,7 @@ async fn fields_are_checked_on_submit_then_on_blur() {
     for field in ["name", "servings", "ingredients", "steps"] {
         assert!(
             response.body.contains(&format!(
-                r##"hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}""##
+                r##"hx-post="/recipes/check" hx-trigger="blur delay:300ms" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}""##
             )),
             "{field}"
         );
@@ -943,46 +943,4 @@ async fn check_route_does_not_use_the_write_limit() {
         .unwrap();
     let response = send(router(backend.clone()), request).await;
     assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
-}
-
-/// 誤りの一覧のリンクの ID（`id="..."` の中身）。
-fn summary_link_ids(body: &str) -> Vec<String> {
-    body.split(r#"<a id=""#)
-        .skip(1)
-        .map(|rest| rest.split('"').next().unwrap().to_owned())
-        .filter(|id| id.starts_with("error-link-"))
-        .collect()
-}
-
-#[tokio::test]
-async fn summary_links_keep_their_ids_while_revalidating() {
-    let backend = backend_with_workspaces();
-    // 送信したときと、欄から離れて確かめ直したときで、同じ誤りなら同じ ID にする。
-    // htmx の hx-preserve が、押している途中のリンクを入れ替えずに残すため。
-    let submitted = screen_post(
-        &backend,
-        "/recipes",
-        Some(&cookie(WORKSPACE_A)),
-        "name=&servings=",
-    )
-    .await;
-    let ids = summary_link_ids(&submitted.body);
-    assert_eq!(ids.len(), 2, "{}", submitted.body);
-    assert!(submitted.body.contains(r#"hx-preserve="true""#));
-    let checked = screen_post(&backend, "/recipes/check", None, "name=&servings=").await;
-    assert_eq!(summary_link_ids(&checked.body), ids);
-
-    // 文が変われば ID も変わり、新しい文のリンクに入れ替わる。
-    let long_name = "a".repeat(101);
-    let checked = screen_post(
-        &backend,
-        "/recipes/check",
-        None,
-        &format!("name={long_name}&servings="),
-    )
-    .await;
-    let changed = summary_link_ids(&checked.body);
-    assert_eq!(changed.len(), 2);
-    assert_ne!(changed[0], ids[0]);
-    assert_eq!(changed[1], ids[1]);
 }

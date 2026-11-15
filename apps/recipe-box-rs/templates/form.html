@@ -12,8 +12,7 @@
     <h2>入力に誤りがあります（{{ errors.len() }} 件）</h2>
     <ul>
       {%- for error in errors %}
-      {#- hx-preserve: 欄から離れたときの入れ替えで、押している途中のリンクを作り直さない（summary_link_id）。 #}
-      <li><a id="{{ crate::screen::summary_link_id(error) }}" href="#{{ error.field }}" hx-preserve="true">{{ error.message }}</a></li>
+      <li><a href="#{{ error.field }}">{{ error.message }}</a></li>
       {%- endfor %}
     </ul>
   </div>

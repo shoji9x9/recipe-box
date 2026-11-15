@@ -288,19 +288,6 @@ struct FormPage {
     focus_summary: bool,
 }
 
-/// 誤りの一覧のリンクの ID。項目と文から決まる。
-///
-/// 欄から離れたときの確かめ直しは、誤りの一覧を入れ替える。押している途中のリンクが入れ替わると、
-/// ブラウザーはクリックとみなさない（押した要素と離した要素が違うため）。そこでリンクに `hx-preserve` を付け、
-/// 同じ項目の同じ文なら、入れ替えの前と同じ要素を残す。文が変われば ID も変わるので、新しい文のリンクになる。
-pub fn summary_link_id(error: &FieldError) -> String {
-    // 文から短い値を作る（FNV-1a、32 ビット）。暗号の用途ではなく、同じ文から同じ ID を作れればよい。
-    let hash = error.message.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
-        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
-    });
-    format!("error-link-{}-{hash:08x}", error.field)
-}
-
 /// フォームを確かめた段階。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Validation {
