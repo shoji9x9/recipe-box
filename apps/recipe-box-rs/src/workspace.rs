@@ -23,7 +23,7 @@ pub const WORKSPACE_ID_HEADER: &str = "x-workspace-id";
 ///
 /// 費用を守るための上限で、攻撃者が IP アドレスを変えても超えられない（D1 の行を数えて判定する）。
 /// レシピの数の上限（[`crate::recipe::MAX_RECIPES_PER_WORKSPACE`]）と掛け合わせた量が、
-/// D1 の保存量の上限に余裕を持って収まるようにする（README の「費用の対策」）。
+/// D1 の保存量の上限に余裕を持って収まるようにする（docs/security.md の「費用の対策」）。
 pub const MAX_WORKSPACES: i64 = 200;
 /// アプリ全体で 1 日（UTC の日付）に作れるワークスペースの数。
 ///

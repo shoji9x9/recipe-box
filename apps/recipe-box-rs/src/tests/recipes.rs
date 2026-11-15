@@ -189,7 +189,7 @@ async fn create_rejects_unreadable_body() {
             true,
         ),
         ("name が数値", r#"{"name":1,"servings":2}"#, true),
-        // f64 で表せない数と、対になっていないサロゲートは、JSON として読めないものとして扱う（README）。
+        // f64 で表せない数と、対になっていないサロゲートは、JSON として読めないものとして扱う（docs/spec.md）。
         (
             "servings が 1e400",
             r#"{"name":"カレー","servings":1e400}"#,
@@ -726,7 +726,7 @@ async fn non_utf8_recipe_id_is_not_found() {
 
 #[tokio::test]
 async fn update_checks_body_before_existence() {
-    // 無い ID に、読めない本文を送ると、本文の失敗（invalid_body）を先に返す（README の順）。
+    // 無い ID に、読めない本文を送ると、本文の失敗（invalid_body）を先に返す（docs/spec.md の順）。
     let backend = backend_with_workspaces();
     let request = Request::put("/api/recipes/ffffffffffffffffffffffffffffffff")
         .header("x-workspace-id", WORKSPACE_A)
