@@ -39,6 +39,16 @@ pub enum ApiError {
     RecipeNotFound,
     /// ワークスペースのレシピの数が上限に達している。
     RecipeLimitReached,
+    /// そのレシピに、その ID の写真が無い。
+    PhotoNotFound,
+    /// レシピの写真の数が上限に達している。
+    PhotoLimitReached,
+    /// ワークスペースの写真の大きさの合計が上限に達する。
+    PhotoStorageLimitReached,
+    /// 写真の形式が JPEG・PNG・WebP のどれでもない（中身の先頭のバイトで決める）。
+    UnsupportedPhotoType,
+    /// 共有のデモでは、写真を追加・削除できない。
+    DemoPhotosDisabled,
     /// 短い間に呼ばれすぎた。
     TooManyRequests,
     /// アプリ全体の量が上限に達していて、新しく作れない（費用を守るための上限）。
@@ -103,6 +113,31 @@ impl ApiError {
                 "recipe_limit_reached",
                 "レシピの数が上限に達しています。いらないレシピを消してから登録してください",
             ),
+            Self::PhotoNotFound => (
+                StatusCode::NOT_FOUND,
+                "photo_not_found",
+                "写真が見つかりません",
+            ),
+            Self::PhotoLimitReached => (
+                StatusCode::CONFLICT,
+                "photo_limit_reached",
+                "1 つのレシピに付けられる写真は 5 枚までです。いらない写真を消してから追加してください",
+            ),
+            Self::PhotoStorageLimitReached => (
+                StatusCode::CONFLICT,
+                "photo_storage_limit_reached",
+                "このワークスペースの写真の合計が上限（100 MB）に達します。いらない写真を消してから追加してください",
+            ),
+            Self::UnsupportedPhotoType => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_photo_type",
+                "写真は JPEG・PNG・WebP のどれかにしてください",
+            ),
+            Self::DemoPhotosDisabled => (
+                StatusCode::FORBIDDEN,
+                "demo_photos_disabled",
+                "共有のデモでは、写真を追加・削除できません",
+            ),
             Self::CapacityReached => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "capacity_reached",
@@ -150,7 +185,7 @@ impl From<BackendError> for ApiError {
 }
 
 /// エラーをログに出す。Workers では `console.error` に、テストでは標準エラー出力に出す。
-fn log_error(error: &BackendError) {
+pub(crate) fn log_error(error: &BackendError) {
     #[cfg(target_arch = "wasm32")]
     worker::console_error!("{error}");
     #[cfg(not(target_arch = "wasm32"))]

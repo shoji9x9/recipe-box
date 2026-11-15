@@ -1,6 +1,6 @@
 //! メモリの中で動く、テスト用の [`Backend`]。
 //!
-//! D1 の代わりに `HashMap` にデータを持つ。レシピはワークスペースの ID とレシピの ID の組で持ち、
+//! D1 と R2 の代わりに `HashMap` などにデータを持つ。レシピはワークスペースの ID とレシピの ID の組で持ち、
 //! 本物の SQL と同じく、指定したワークスペースのレシピだけを読み書きする。
 
 use std::{
@@ -8,12 +8,15 @@ use std::{
     future::{Future, ready},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering},
     },
 };
 
 use crate::{
-    backend::{Backend, BackendError, BackendResult, RecipePage, WorkspaceLimits},
+    backend::{
+        Backend, BackendError, BackendResult, PhotoInsert, PhotoLimits, RecipePage, WorkspaceLimits,
+    },
+    photo::{Photo, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -23,7 +26,11 @@ pub const NOW: i64 = 1_800_000_000_000;
 
 /// ワークスペースの ID とレシピの ID の組。
 type RecipeKey = (String, String);
+/// R2 のオブジェクトのキーと、データ・形式。
+type Objects = HashMap<String, (Vec<u8>, String)>;
 
+// 失敗させるかどうかの切り替えを、テストごとに `bool` で持つ。
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct FakeBackend {
     /// ワークスペースの ID と最終利用日時。
@@ -50,6 +57,23 @@ pub struct FakeBackend {
     pub write_limit_keys: Arc<Mutex<Vec<String>>>,
     /// 最終利用日時を書き換えた回数。
     pub last_used_writes: Arc<AtomicUsize>,
+    /// 写真の行。ワークスペースの ID・レシピの ID・写真の情報。
+    pub photos: Arc<Mutex<Vec<(String, String, Photo)>>>,
+    /// 写真を追加した記録（追加した日時）。
+    pub photo_uploads: Arc<Mutex<Vec<i64>>>,
+    /// R2 のオブジェクト。キーと、データ・形式。
+    pub objects: Arc<Mutex<Objects>>,
+    /// `true` なら、R2 への書き込みが失敗したことにする。
+    pub broken_r2_put: bool,
+    /// `true` なら、R2 に書き込んでいる間に、別のリクエストがすべての写真の行を消したことにする。
+    pub photo_rows_vanish_on_put: bool,
+    /// `true` なら、R2 の削除が失敗したことにする。
+    pub broken_r2_delete: bool,
+    /// `true` なら、最初の R2 の削除の直後に、別のリクエストが同じレシピに写真を 1 枚追加し（D1 の行と R2 のデータ）、
+    /// 消したばかりのキーにも書き込んだことにする。レシピの削除と写真の追加が同時に起きた場合を確かめる。
+    pub photo_added_after_first_delete: bool,
+    /// `photo_added_after_first_delete` の写真を、もう追加したか。
+    pub injected_photo: Arc<AtomicBool>,
 }
 
 impl Default for FakeBackend {
@@ -67,6 +91,14 @@ impl Default for FakeBackend {
             rate_limit_keys: Arc::default(),
             write_limit_keys: Arc::default(),
             last_used_writes: Arc::default(),
+            photos: Arc::default(),
+            photo_uploads: Arc::default(),
+            objects: Arc::default(),
+            broken_r2_put: false,
+            photo_rows_vanish_on_put: false,
+            broken_r2_delete: false,
+            photo_added_after_first_delete: false,
+            injected_photo: Arc::default(),
         }
     }
 }
@@ -85,6 +117,20 @@ impl FakeBackend {
         id.to_owned()
     }
 
+    /// 写真の行だけを足す（R2 のデータは入れない）。上限の境界を、大きなデータを作らずに確かめるために使う。
+    pub fn add_photo_row(&self, workspace: &str, recipe: &str, id: &str, size: i64) {
+        self.photos.lock().unwrap().push((
+            workspace.to_owned(),
+            recipe.to_owned(),
+            Photo {
+                id: id.to_owned(),
+                content_type: "image/jpeg".to_owned(),
+                size,
+                created_at: self.now_millis(),
+            },
+        ));
+    }
+
     /// 「今」の時刻を `millis` だけ進める。
     pub fn advance(&self, millis: i64) {
         self.now.fetch_add(millis, Ordering::Relaxed);
@@ -101,6 +147,17 @@ impl FakeBackend {
 
     fn key(workspace: &WorkspaceId, id: &str) -> RecipeKey {
         (workspace.to_string(), id.to_owned())
+    }
+}
+
+/// R2 のキーから、ワークスペースとレシピの ID を取り出す。キーが [`object_key`] の形でなければ panic する。
+fn workspace_and_recipe_of(key: &str) -> (WorkspaceId, RecipeId) {
+    let mut parts = key.split('/').skip(1);
+    let workspace = parts.next().and_then(WorkspaceId::parse);
+    let recipe = parts.next().and_then(RecipeId::parse);
+    match (workspace, recipe) {
+        (Some(workspace), Some(recipe)) => (workspace, recipe),
+        _ => panic!("R2 のキーの形が photo::object_key と違う: {key}"),
     }
 }
 
@@ -271,13 +328,178 @@ impl Backend for FakeBackend {
         &self,
         workspace: &WorkspaceId,
         id: &RecipeId,
-    ) -> impl Future<Output = BackendResult<bool>> + Send {
+    ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send {
         ready(self.check().map(|()| {
             self.recipes
                 .lock()
                 .unwrap()
-                .remove(&Self::key(workspace, id.as_str()))
-                .is_some()
+                .remove(&Self::key(workspace, id.as_str()))?;
+            // D1 の ON DELETE CASCADE と同じく、レシピの写真の行も消す。
+            let mut photos = self.photos.lock().unwrap();
+            let removed = photos
+                .iter()
+                .filter(|(w, r, _)| w == workspace.as_str() && r == id.as_str())
+                .map(|(_, _, p)| p.id.clone())
+                .collect();
+            photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
+            Some(removed)
         }))
+    }
+
+    fn insert_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        photo: &Photo,
+        limits: &PhotoLimits,
+    ) -> impl Future<Output = BackendResult<PhotoInsert>> + Send {
+        ready(self.check().map(|()| {
+            if !self
+                .recipes
+                .lock()
+                .unwrap()
+                .contains_key(&Self::key(workspace, recipe.as_str()))
+            {
+                return PhotoInsert::RecipeNotFound;
+            }
+            let mut photos = self.photos.lock().unwrap();
+            let mut uploads = self.photo_uploads.lock().unwrap();
+            let in_recipe = photos
+                .iter()
+                .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
+                .count();
+            let workspace_bytes: i64 = photos
+                .iter()
+                .filter(|(w, _, _)| w == workspace.as_str())
+                .map(|(_, _, p)| p.size)
+                .sum();
+            let total_bytes: i64 = photos.iter().map(|(_, _, p)| p.size).sum();
+            let uploads_since = uploads.iter().filter(|&&at| at >= limits.since).count();
+            if i64::try_from(in_recipe).unwrap() >= limits.max_per_recipe {
+                return PhotoInsert::RecipeFull;
+            }
+            if workspace_bytes + photo.size > limits.max_bytes_per_workspace {
+                return PhotoInsert::WorkspaceFull;
+            }
+            if total_bytes + photo.size > limits.max_bytes_total
+                || i64::try_from(uploads_since).unwrap() >= limits.max_uploads_since
+            {
+                return PhotoInsert::CapacityReached;
+            }
+            photos.push((workspace.to_string(), recipe.to_string(), photo.clone()));
+            uploads.push(photo.created_at);
+            PhotoInsert::Inserted
+        }))
+    }
+
+    fn list_photos(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Vec<Photo>>> + Send {
+        ready(self.check().map(|()| {
+            let mut photos: Vec<Photo> = self
+                .photos
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
+                .map(|(_, _, p)| p.clone())
+                .collect();
+            photos.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+            photos
+        }))
+    }
+
+    fn get_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+    ) -> impl Future<Output = BackendResult<Option<Photo>>> + Send {
+        ready(self.check().map(|()| {
+            self.photos
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(w, r, p)| {
+                    w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
+                })
+                .map(|(_, _, p)| p.clone())
+        }))
+    }
+
+    fn delete_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
+        ready(self.check().map(|()| {
+            let mut photos = self.photos.lock().unwrap();
+            let before = photos.len();
+            photos.retain(|(w, r, p)| {
+                !(w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str())
+            });
+            photos.len() < before
+        }))
+    }
+
+    fn put_object(
+        &self,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.photo_rows_vanish_on_put {
+            self.photos.lock().unwrap().clear();
+        }
+        ready(if self.broken_r2_put {
+            Err(BackendError("壊れた R2".into()))
+        } else {
+            self.objects
+                .lock()
+                .unwrap()
+                .insert(key.to_owned(), (bytes, content_type.to_owned()));
+            Ok(())
+        })
+    }
+
+    fn get_object(&self, key: &str) -> impl Future<Output = BackendResult<Option<Vec<u8>>>> + Send {
+        ready(Ok(self
+            .objects
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|(bytes, _)| bytes.clone())))
+    }
+
+    fn delete_objects(&self, keys: Vec<String>) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.broken_r2_delete {
+            return ready(Err(BackendError("壊れた R2".into())));
+        }
+        {
+            let mut objects = self.objects.lock().unwrap();
+            for key in &keys {
+                objects.remove(key);
+            }
+        }
+        if self.photo_added_after_first_delete
+            && !keys.is_empty()
+            && !self.injected_photo.swap(true, Ordering::Relaxed)
+        {
+            // 消したキーと同じレシピに、別の写真を足す（キーの形は photo::object_key）。
+            let (workspace, recipe) = workspace_and_recipe_of(&keys[0]);
+            let id = "99999999999999999999999999999999";
+            self.add_photo_row(workspace.as_str(), recipe.as_str(), id, 1);
+            let mut objects = self.objects.lock().unwrap();
+            objects.insert(
+                object_key(&workspace, &recipe, id),
+                (vec![0xff], "image/jpeg".to_owned()),
+            );
+            // 一覧に載っていた写真のデータが、消した後に書き込まれた場合（追加の途中の写真）。
+            objects.insert(keys[0].clone(), (vec![0xff], "image/jpeg".to_owned()));
+        }
+        ready(Ok(()))
     }
 }

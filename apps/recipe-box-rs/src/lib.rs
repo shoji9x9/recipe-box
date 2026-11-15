@@ -7,6 +7,7 @@ mod cloudflare;
 mod error;
 mod id;
 mod limits;
+mod photo;
 mod recipe;
 mod screen;
 mod workspace;
@@ -42,6 +43,8 @@ pub fn router<B: Backend>(backend: B) -> Router {
         .merge(recipe_routes(backend.clone()))
         // 本文の大きさの上限。超えると、本文を読む前に 413 になる。
         .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
+        // 写真の API は本文の上限が違うので、上の上限の外に置く。
+        .merge(photo_routes(backend.clone()))
         .method_not_allowed_fallback(api_method_not_allowed);
     Router::new()
         .merge(screen_routes(backend.clone()))
@@ -68,6 +71,24 @@ fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
             backend,
             limits::limit_writes::<B>,
         ))
+}
+
+/// 写真の API。書き込む API の前に、回数と本文の大きさ（1 枚の写真の上限）を確かめる（[`limits::limit_photo_writes`]）。
+fn photo_routes<B: Backend>(backend: B) -> Router<B> {
+    Router::new()
+        .route(
+            "/recipes/{id}/photos",
+            get(photo::list::<B>).post(photo::create::<B>),
+        )
+        .route(
+            "/recipes/{id}/photos/{photo_id}",
+            get(photo::get::<B>).delete(photo::delete::<B>),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            backend,
+            limits::limit_photo_writes::<B>,
+        ))
+        .layer(DefaultBodyLimit::max(photo::MAX_PHOTO_BYTES))
 }
 
 /// 画面。次の順に middleware を通る（[`screen`]）。
