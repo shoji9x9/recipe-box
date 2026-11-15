@@ -589,11 +589,23 @@ async fn workspace_page_shows_own_id_and_switches() {
     let response = screen_get(&backend, "/workspace", Some(&cookie(WORKSPACE_A))).await;
     assert!(response.body.contains(r#"action="/workspace/delete""#));
 
+    // 画面を開いた後に、別のタブで B に切り替えていた。A の画面から送っても、B を消さない。
+    let response = screen_post(
+        &backend,
+        "/workspace/delete",
+        Some(&cookie(WORKSPACE_B)),
+        &format!("id={WORKSPACE_A}"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    assert!(response.body.contains("使うワークスペースが変わりました"));
+    assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_B));
+
     let response = screen_post(
         &backend,
         "/workspace/delete",
         Some(&cookie(WORKSPACE_A)),
-        "",
+        &format!("id={WORKSPACE_A}"),
     )
     .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
@@ -609,7 +621,13 @@ async fn workspace_page_shows_own_id_and_switches() {
     assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
 
     // 自分のワークスペースが無ければ、何も消さずにワークスペースの画面へ戻す。
-    let response = screen_post(&backend, "/workspace/delete", None, "").await;
+    let response = screen_post(
+        &backend,
+        "/workspace/delete",
+        None,
+        &format!("id={WORKSPACE_B}"),
+    )
+    .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_B));
 }

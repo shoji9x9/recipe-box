@@ -35,6 +35,9 @@ const WORKSPACE_CREATION_LIMITER: &str = "WORKSPACE_CREATION_LIMITER";
 /// `wrangler.toml` のレート制限の binding の名前（書き込む API の回数）。
 const WRITE_LIMITER: &str = "WRITE_LIMITER";
 
+/// ワークスペースのすべての写真を読む SQL（[`PhotoKey`] の形）。
+const WORKSPACE_PHOTOS_SQL: &str = "SELECT recipe_id, id FROM photos WHERE workspace_id = ?";
+
 /// レシピを読むときの列。`Recipe` の項目と同じ名前・順番にする。
 const RECIPE_COLUMNS: &str = "id, name, servings, ingredients, steps, created_at, updated_at";
 
@@ -465,7 +468,7 @@ impl Backend for CloudflareBackend {
         SendFuture::new(async move {
             let action = "ワークスペースの写真を読めない";
             let db = database(&env)?;
-            db.prepare("SELECT recipe_id, id FROM photos WHERE workspace_id = ?")
+            db.prepare(WORKSPACE_PHOTOS_SQL)
                 .bind(&[workspace.into()])
                 .map_err(|e| backend_error(action, &e))?
                 .all()
@@ -486,7 +489,7 @@ impl Backend for CloudflareBackend {
             let action = "ワークスペースを消せない";
             let db = database(&env)?;
             let photos = db
-                .prepare("SELECT recipe_id, id FROM photos WHERE workspace_id = ?")
+                .prepare(WORKSPACE_PHOTOS_SQL)
                 .bind(&[workspace.as_str().into()])
                 .map_err(|e| backend_error(action, &e))?;
             // レシピと写真の行は ON DELETE CASCADE で一緒に消える。

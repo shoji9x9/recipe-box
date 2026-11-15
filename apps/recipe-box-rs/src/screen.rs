@@ -1136,16 +1136,34 @@ pub async fn switch_workspace<B: Backend>(
     Ok(render(status, &page))
 }
 
+/// 削除のフォームの値。画面に出していたワークスペースの ID。
+#[derive(Debug, Deserialize)]
+pub struct DeleteWorkspaceForm {
+    #[serde(default)]
+    id: String,
+}
+
 /// `POST /workspace/delete`: 自分のワークスペースを、レシピと写真ごと消す。このブラウザの Cookie も消す。
 ///
 /// 一時的にデモを見ている間も、消すのは自分のワークスペースである（画面に出している ID のもの）。
+/// 画面を開いた後に別のタブで切り替えていると、Cookie の ID が画面の ID と違うので、消さずに理由を出す。
+/// 元に戻せない操作なので、見ていなかったワークスペースを消さないようにする。
 pub async fn delete_workspace<B: Backend>(
     State(backend): State<B>,
     Extension(session): Extension<Session>,
+    form: Result<Form<DeleteWorkspaceForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
+    let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     let Some(id) = &session.own else {
         return Ok(see_other("/workspace"));
     };
+    if form.id != id.as_str() {
+        let mut page = workspace_view(&backend, &session, None).await?;
+        page.layout = page.layout.with_alert(
+            "画面を開いた後に、使うワークスペースが変わりました。ID を確かめてから、もう一度削除してください",
+        );
+        return Ok(render(StatusCode::CONFLICT, &page));
+    }
     match workspace::remove(&backend, id).await {
         // 同時に別のタブなどで消されていたときも、消えたことに変わりはないので、同じに扱う。
         Ok(()) | Err(ApiError::WorkspaceNotFound) => {}

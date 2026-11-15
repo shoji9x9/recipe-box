@@ -127,7 +127,7 @@ pub struct Photo {
 /// R2 のキー。ワークスペース・レシピ・写真の ID から決まる。
 ///
 /// D1 の行をワークスペースで絞り込んで見つけてから使うので、ほかのワークスペースの写真のキーにはならない。
-pub fn object_key(workspace: &WorkspaceId, recipe: impl std::fmt::Display, photo: &str) -> String {
+pub fn object_key(workspace: &WorkspaceId, recipe: &RecipeId, photo: &str) -> String {
     format!("photos/{workspace}/{recipe}/{photo}")
 }
 
@@ -354,13 +354,27 @@ pub async fn remove_objects<B: Backend>(
     recipe: &RecipeId,
     photos: &[String],
 ) -> Result<(), ApiError> {
-    if photos.is_empty() {
-        return Ok(());
-    }
     let keys = photos
         .iter()
         .map(|photo| object_key(workspace, recipe, photo))
         .collect();
+    delete_objects(backend, keys).await
+}
+
+/// R2 の 1 回の削除で消せるキーの数。
+const MAX_KEYS_PER_DELETE: i64 = 1_000;
+// 1 つのワークスペースの写真を、1 回の削除で消せるようにする（上限を上げたら、ここで気付く）。
+const _: () = assert!(
+    crate::recipe::MAX_RECIPES_PER_WORKSPACE * MAX_PHOTOS_PER_RECIPE <= MAX_KEYS_PER_DELETE
+);
+
+/// 写真のデータを、キーで R2 から消す。キーが無ければ R2 を呼ばない。
+///
+/// キーは、1 つのワークスペースの写真のものだけを渡す（1 回で消せる数に収まるように）。
+pub async fn delete_objects<B: Backend>(backend: &B, keys: Vec<String>) -> Result<(), ApiError> {
+    if keys.is_empty() {
+        return Ok(());
+    }
     backend.delete_objects(keys).await?;
     Ok(())
 }

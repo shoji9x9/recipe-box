@@ -27,6 +27,7 @@
       <div class="actions">
         <button type="button" commandfor="delete-workspace" command="close">やめる</button>
         <form method="post" action="/workspace/delete">
+          <input type="hidden" name="id" value="{{ id }}">
           <button type="submit" class="primary danger-fill">削除する</button>
         </form>
       </div>

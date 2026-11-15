@@ -14,7 +14,8 @@ use crate::{
     error::ApiError,
     id,
     limits::client_key,
-    photo::object_key,
+    photo::{self, object_key},
+    recipe::RecipeId,
 };
 
 /// API がワークスペースの ID を受け取るヘッダー。
@@ -190,21 +191,18 @@ pub async fn remove<B: Backend>(backend: &B, workspace: &WorkspaceId) -> Result<
 }
 
 /// ワークスペースの写真のデータを R2 から消す。
-///
-/// R2 の 1 回の削除は 1,000 個までだが、1 つのワークスペースの写真は
-/// レシピの上限 × 1 レシピの写真の上限（80 × 5 = 400 枚）までなので、1 回で足りる。
 async fn remove_photo_objects<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
     photos: &[PhotoKey],
 ) -> Result<(), ApiError> {
-    if photos.is_empty() {
-        return Ok(());
-    }
     let keys = photos
         .iter()
-        .map(|photo| object_key(workspace, &photo.recipe_id, &photo.id))
-        .collect();
-    backend.delete_objects(keys).await?;
-    Ok(())
+        .map(|photo| {
+            // D1 の行はアプリが作った ID だけを持つが、R2 のキーの形を型で保つため、ここでも確かめる。
+            let recipe = RecipeId::parse(&photo.recipe_id).ok_or(ApiError::Internal)?;
+            Ok(object_key(workspace, &recipe, &photo.id))
+        })
+        .collect::<Result<_, ApiError>>()?;
+    photo::delete_objects(backend, keys).await
 }
