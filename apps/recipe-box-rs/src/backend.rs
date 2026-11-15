@@ -161,12 +161,16 @@ pub trait Backend: Clone + Send + Sync + 'static {
         now: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
 
-    /// レシピを消す。レシピが無ければ `false` を返す。レシピの写真の行も消える（R2 のデータは消えない）。
+    /// レシピと、その写真の行を消し、消した写真の ID を返す。レシピが無ければ `None` を返す。
+    /// R2 のデータは消さない（呼び出し側が、返した ID で消す）。
+    ///
+    /// 写真の ID を読むことと消すことを 1 つのトランザクションで行う。間に写真が追加されて、
+    /// 消した後の R2 に、どの行からもたどれないデータが残るのを防ぐため。
     fn delete_recipe(
         &self,
         workspace: &WorkspaceId,
         id: &RecipeId,
-    ) -> impl Future<Output = BackendResult<bool>> + Send;
+    ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send;
 
     /// 写真の行と、追加の記録を保存する。`limits` のどれかに当たれば保存せず、その理由を返す。
     /// 上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えないようにする。

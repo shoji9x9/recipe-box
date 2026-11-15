@@ -347,6 +347,19 @@ async fn failed_r2_write_leaves_no_photo_row() {
 }
 
 #[tokio::test]
+async fn photo_written_while_its_recipe_is_deleted_is_removed_from_r2() {
+    let (backend, recipe) = setup().await;
+    let backend = FakeBackend {
+        photo_rows_vanish_on_put: true,
+        ..backend
+    };
+    let response = upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    // 行がたどれないデータを R2 に残さない（アプリ全体の合計に数えられない量を作らせない）。
+    assert!(backend.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn photo_writes_use_the_write_limit() {
     let (backend, recipe) = setup().await;
     let backend = FakeBackend {

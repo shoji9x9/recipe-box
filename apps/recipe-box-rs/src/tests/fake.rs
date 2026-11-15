@@ -65,6 +65,8 @@ pub struct FakeBackend {
     pub objects: Arc<Mutex<Objects>>,
     /// `true` なら、R2 への書き込みが失敗したことにする。
     pub broken_r2_put: bool,
+    /// `true` なら、R2 に書き込んでいる間に、別のリクエストがすべての写真の行を消したことにする。
+    pub photo_rows_vanish_on_put: bool,
 }
 
 impl Default for FakeBackend {
@@ -86,6 +88,7 @@ impl Default for FakeBackend {
             photo_uploads: Arc::default(),
             objects: Arc::default(),
             broken_r2_put: false,
+            photo_rows_vanish_on_put: false,
         }
     }
 }
@@ -304,20 +307,21 @@ impl Backend for FakeBackend {
         &self,
         workspace: &WorkspaceId,
         id: &RecipeId,
-    ) -> impl Future<Output = BackendResult<bool>> + Send {
+    ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send {
         ready(self.check().map(|()| {
-            let removed = self
-                .recipes
+            self.recipes
                 .lock()
                 .unwrap()
-                .remove(&Self::key(workspace, id.as_str()))
-                .is_some();
+                .remove(&Self::key(workspace, id.as_str()))?;
             // D1 の ON DELETE CASCADE と同じく、レシピの写真の行も消す。
-            self.photos
-                .lock()
-                .unwrap()
-                .retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
-            removed
+            let mut photos = self.photos.lock().unwrap();
+            let removed = photos
+                .iter()
+                .filter(|(w, r, _)| w == workspace.as_str() && r == id.as_str())
+                .map(|(_, _, p)| p.id.clone())
+                .collect();
+            photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
+            Some(removed)
         }))
     }
 
@@ -426,6 +430,9 @@ impl Backend for FakeBackend {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.photo_rows_vanish_on_put {
+            self.photos.lock().unwrap().clear();
+        }
         ready(if self.broken_r2_put {
             Err(BackendError("壊れた R2".into()))
         } else {

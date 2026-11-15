@@ -49,9 +49,13 @@ const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
 
 /// 写真を配るときの `Cache-Control`。
 ///
-/// 写真の ID は使い回さず、中身も変わらないので、ブラウザーには長く残させて、R2 の読み取りを減らす。
+/// 写真の ID は使い回さず、中身も変わらないので、ブラウザーに 1 日残させて、R2 の読み取りを減らす。
+/// 消した写真がブラウザーに残り続けないよう、長くはしない。
 /// ワークスペースのデータなので、共有のキャッシュには残させない（`private`）。
-const PHOTO_CACHE_CONTROL: &str = "private, max-age=31536000, immutable";
+const PHOTO_CACHE_CONTROL: &str = "private, max-age=86400";
+/// 写真を配るときの `Vary`。ワークスペースは API ではヘッダーで、画面では Cookie で決まるので、
+/// 同じ URL でもワークスペースが違えば、ブラウザーのキャッシュを使わせない。
+const PHOTO_VARY: &str = "X-Workspace-Id, Cookie";
 /// 写真を配るときの CSP。写真を直接開いたときに、何も読み込ませない。
 const PHOTO_CSP: &str = "default-src 'none'; sandbox";
 
@@ -198,7 +202,8 @@ pub async fn create<B: Backend>(
             ApiError::InvalidBody
         }
     })?;
-    let photo = add(&backend, &workspace.id, &recipe, body.to_vec()).await?;
+    // Bytes がほかに持ち主の無い 1 つの塊なら、コピーせずに Vec にする。
+    let photo = add(&backend, &workspace.id, &recipe, Vec::from(body)).await?;
     Ok((StatusCode::CREATED, Json(photo)))
 }
 
@@ -207,6 +212,7 @@ pub async fn create<B: Backend>(
 /// 1. デモでないか、大きさ、形式を確かめる（D1 も R2 も使わない）。
 /// 2. D1 に行と追加の記録を入れる。上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えない。
 /// 3. R2 に書き込む。失敗したら、D1 の行を消す（追加の記録は残し、回数に数える）。
+/// 4. 行がまだ在るかを確かめる。書いている間にレシピが消されていれば、R2 のデータを消す。
 pub async fn add<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -245,11 +251,24 @@ pub async fn add<B: Backend>(
         PhotoInsert::CapacityReached => return Err(ApiError::CapacityReached),
     }
     let key = object_key(workspace, recipe, &photo.id);
+    let id = PhotoId(photo.id.clone());
     if let Err(error) = backend.put_object(&key, bytes, &photo.content_type).await {
+        // 元の失敗を先にログに出す（後始末も失敗したときに、元の原因を失わないため）。
+        let error = ApiError::from(error);
         // 行だけが残ると、合計の大きさに数えられたまま、読めない写真になる。
-        let id = PhotoId(photo.id.clone());
-        backend.delete_photo(workspace, recipe, &id).await?;
-        return Err(error.into());
+        if let Err(cleanup) = backend.delete_photo(workspace, recipe, &id).await {
+            let _ = ApiError::from(cleanup);
+        }
+        return Err(error);
+    }
+    // 書いている間にレシピか写真が消されていれば、行はもう無い。データだけが R2 に残らないよう消す。
+    if backend.get_photo(workspace, recipe, &id).await?.is_none() {
+        backend.delete_objects(vec![key]).await?;
+        return Err(if backend.get_recipe(workspace, recipe).await?.is_some() {
+            ApiError::PhotoNotFound
+        } else {
+            ApiError::RecipeNotFound
+        });
     }
     Ok(photo)
 }
@@ -287,6 +306,7 @@ pub async fn photo_response<B: Backend>(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static(PHOTO_CACHE_CONTROL),
             ),
+            (header::VARY, HeaderValue::from_static(PHOTO_VARY)),
             (
                 header::X_CONTENT_TYPE_OPTIONS,
                 HeaderValue::from_static("nosniff"),
@@ -332,21 +352,21 @@ pub async fn remove<B: Backend>(
     Ok(())
 }
 
-/// レシピの写真を R2 から消す。レシピを消す前に呼ぶ（D1 の行は、レシピを消すと一緒に消える）。
-pub async fn remove_objects_of_recipe<B: Backend>(
+/// レシピの写真のデータを R2 から消す。
+pub async fn remove_objects<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
     recipe: &RecipeId,
+    photos: &[String],
 ) -> Result<(), ApiError> {
-    let keys: Vec<String> = backend
-        .list_photos(workspace, recipe)
-        .await?
-        .iter()
-        .map(|photo| object_key(workspace, recipe, &photo.id))
-        .collect();
-    if !keys.is_empty() {
-        backend.delete_objects(keys).await?;
+    if photos.is_empty() {
+        return Ok(());
     }
+    let keys = photos
+        .iter()
+        .map(|photo| object_key(workspace, recipe, photo))
+        .collect();
+    backend.delete_objects(keys).await?;
     Ok(())
 }
 

@@ -111,6 +111,12 @@ fn bucket(env: &Env) -> BackendResult<Bucket> {
         .map_err(|e| backend_error("R2 の binding を取れない", &e))
 }
 
+/// `SELECT id FROM photos` の行。
+#[derive(serde::Deserialize)]
+struct PhotoIdRow {
+    id: String,
+}
+
 /// 写真を保存できなかったときに、どの上限に当たったかを調べるための行。
 #[derive(serde::Deserialize)]
 struct PhotoUsage {
@@ -411,21 +417,41 @@ impl Backend for CloudflareBackend {
         &self,
         workspace: &WorkspaceId,
         id: &RecipeId,
-    ) -> impl Future<Output = BackendResult<bool>> + Send {
+    ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send {
         let env = self.env.clone();
         let workspace = workspace.to_string();
         let id = id.to_string();
         SendFuture::new(async move {
             let action = "レシピを消せない";
             let db = database(&env)?;
-            let result = run(
-                &db,
-                "DELETE FROM recipes WHERE workspace_id = ? AND id = ?",
-                &[workspace.into(), id.into()],
-                action,
-            )
-            .await?;
-            Ok(changed_rows(&result, action)? > 0)
+            let values = [JsValue::from(workspace.as_str()), id.as_str().into()];
+            let photos = db
+                .prepare("SELECT id FROM photos WHERE workspace_id = ? AND recipe_id = ?")
+                .bind(&values)
+                .map_err(|e| backend_error(action, &e))?;
+            // 写真の行は ON DELETE CASCADE で一緒に消える。
+            let recipe = db
+                .prepare("DELETE FROM recipes WHERE workspace_id = ? AND id = ?")
+                .bind(&values)
+                .map_err(|e| backend_error(action, &e))?;
+            // batch は 1 つのトランザクションなので、読んだ写真の ID と、消した写真の行が一致する。
+            let results = db
+                .batch(vec![photos, recipe])
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            let [photos, recipe] = results.as_slice() else {
+                return Err(BackendError(format!("{action}: batch の結果の数が違う")));
+            };
+            if changed_rows(recipe, action)? == 0 {
+                return Ok(None);
+            }
+            let ids = photos
+                .results::<PhotoIdRow>()
+                .map_err(|e| backend_error(action, &e))?
+                .into_iter()
+                .map(|row| row.id)
+                .collect();
+            Ok(Some(ids))
         })
     }
 
@@ -449,15 +475,17 @@ impl Backend for CloudflareBackend {
             let size = || int_to_js(photo.size);
             // 上限の判定と保存を 1 つの文にして、同時に追加されても上限を超えないようにする。
             // アプリ全体の合計と 1 日の回数は、全体を数えるので workspace_id では絞り込まない（AGENTS.md の全体の上限のクエリ）。
+            // 読む行の少ない条件から並べる。AND は前の条件が偽なら後ろを読まないので、
+            // 断る試行で photos の全体を読む（アプリ全体の合計を求める）回数を減らせる。
             let insert = db
                 .prepare(
                     "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at) \
                      SELECT ?, ?, ?, ?, ?, ? FROM (VALUES (0)) AS one \
                      WHERE EXISTS (SELECT 1 FROM recipes WHERE workspace_id = ? AND id = ?) \
                      AND (SELECT COUNT(*) FROM photos WHERE workspace_id = ? AND recipe_id = ?) < ? \
+                     AND (SELECT COUNT(*) FROM photo_uploads WHERE created_at >= ?) < ? \
                      AND (SELECT COALESCE(SUM(size), 0) FROM photos WHERE workspace_id = ?) + ? <= ? \
-                     AND (SELECT COALESCE(SUM(size), 0) FROM photos) + ? <= ? \
-                     AND (SELECT COUNT(*) FROM photo_uploads WHERE created_at >= ?) < ?",
+                     AND (SELECT COALESCE(SUM(size), 0) FROM photos) + ? <= ?",
                 )
                 .bind(&[
                     w(),
@@ -471,13 +499,13 @@ impl Backend for CloudflareBackend {
                     w(),
                     r(),
                     int_to_js(limits.max_per_recipe),
+                    int_to_js(limits.since),
+                    int_to_js(limits.max_uploads_since),
                     w(),
                     size(),
                     int_to_js(limits.max_bytes_per_workspace),
                     size(),
                     int_to_js(limits.max_bytes_total),
-                    int_to_js(limits.since),
-                    int_to_js(limits.max_uploads_since),
                 ])
                 .map_err(|e| backend_error(action, &e))?;
             // 写真の行が入ったときだけ、追加の記録を入れる。

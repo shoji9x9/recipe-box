@@ -238,10 +238,11 @@ stateDiagram-v2
 | `DELETE /api/recipes/:id/photos/:photo_id` | `204`（本文なし） |
 
 - 形式は、本文の先頭のバイト（マジックナンバー）で決める。`Content-Type` ヘッダーは見ない。宣言と中身が違うファイルを、別の形式として配らないためである。
-- 写真のデータを返すときは、`Cache-Control: private, max-age=31536000, immutable`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; sandbox` を付ける。写真の ID は使い回さず、中身も変わらないので、ブラウザーに長く残させる。
+- 写真のデータを返すときは、`Cache-Control: private, max-age=86400`・`Vary: X-Workspace-Id, Cookie`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; sandbox` を付ける。
+  写真の ID は使い回さず、中身も変わらないので、ブラウザーに 1 日残させて R2 の読み取りを減らす。消した写真が残り続けないよう、それより長くはしない。
 - 失敗の理由が 2 つ以上あるときは、次の順に確かめる。
   書き込みの回数（`too_many_requests`）→ `Content-Length`（`payload_too_large`）→ ワークスペース → パスの ID の形（`recipe_not_found`・`photo_not_found`）→ 本文の読み取り（`payload_too_large`）→ デモか（`demo_photos_disabled`）→ 大きさ（`payload_too_large`）→ 形式（`unsupported_photo_type`）→ レシピが在るか（`recipe_not_found`）→ レシピの枚数（`photo_limit_reached`）→ ワークスペースの合計（`photo_storage_limit_reached`）→ アプリ全体の上限（`capacity_reached`）。
-- レシピを消すと、その写真も消える。
+- レシピを消すと、その写真も消える。共有のデモでも同じである（デモのレシピは誰でも消せるので、その写真も消える。毎日のリセットで戻る）。
 
 ## ワークスペースによるデータの分離
 
@@ -265,7 +266,10 @@ stateDiagram-v2
 - リライト前は写真を R2 に、リライト後は DB に保管する。保管先が変わっても、API の仕様は変えない。
 - 写真のデータを R2 に書き込む前に、D1 に行と追加の記録を入れて上限を判定する（1 つのトランザクションで、同時に追加されても上限を超えない）。
   R2 への書き込みが失敗したら、行を消す。追加の記録は残し、1 日の回数に数える。
-- 写真を消すときと、レシピを消すときは、R2 のデータを先に消してから D1 の行を消す。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためである。
+- 写真を 1 枚消すときは、R2 のデータを先に消してから D1 の行を消す。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためである。
+- レシピを消すときは、今ある写真の R2 のデータを消し、D1 でレシピと写真の行を 1 つのトランザクションで消して（消した写真の ID を同時に読む）、その間に追加された写真の R2 のデータも消す。
+  写真の追加の側は、R2 に書いた後で行がまだ在るかを確かめ、無ければ R2 のデータを消す。追加と削除が同時に起きても、どの行からもたどれない（合計に数えられない）データを R2 に残さないためである。
+- ワークスペースを自動で消すとき（Issue #7）も、D1 の行より先に R2 のデータを消す。
 - 共有のデモでは、写真を追加・削除できない（API でも `403`）。デモの ID が漏れても、R2 に書き込ませないためである。
 
 ## デモ用のデータ

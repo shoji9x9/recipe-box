@@ -30,17 +30,7 @@ pub async fn limit_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    match check_write(
-        &backend,
-        request.method(),
-        request.headers(),
-        MAX_BODY_BYTES,
-    )
-    .await
-    {
-        Ok(()) => next.run(request).await,
-        Err(error) => error.into_response(),
-    }
+    run_checked(&backend, request, next, MAX_BODY_BYTES).await
 }
 
 /// 写真の API の [`limit_writes`]。本文の上限だけが違い、1 枚の写真の大きさの上限（[`MAX_PHOTO_BYTES`]）にする。
@@ -49,14 +39,17 @@ pub async fn limit_photo_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    match check_write(
-        &backend,
-        request.method(),
-        request.headers(),
-        MAX_PHOTO_BYTES,
-    )
-    .await
-    {
+    run_checked(&backend, request, next, MAX_PHOTO_BYTES).await
+}
+
+/// [`check_write`] を通れば次へ進め、通らなければその失敗を返す。
+async fn run_checked<B: Backend>(
+    backend: &B,
+    request: Request,
+    next: Next,
+    max_body_bytes: usize,
+) -> Response {
+    match check_write(backend, request.method(), request.headers(), max_body_bytes).await {
         Ok(()) => next.run(request).await,
         Err(error) => error.into_response(),
     }

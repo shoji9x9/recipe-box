@@ -13,8 +13,7 @@ set -euo pipefail
 base_url="${1:-http://localhost:8787}"
 body_file="$(mktemp)"
 photo_file="$(mktemp)"
-big_photo_file="$(mktemp)"
-trap 'rm -f "$body_file" "$photo_file" "$big_photo_file"' EXIT
+trap 'rm -f "$body_file" "$photo_file"' EXIT
 
 fail() {
   echo "::error::$*" >&2
@@ -232,10 +231,11 @@ expect 200 "GET /api/recipes/{id}/photos/{photo_id}"
 cmp -s "$body_file" "$photo_file" || fail "R2 から読んだ写真が、送ったものと違う"
 request GET "/api/recipes/$recipe_id/photos/$photo_id" "$workspace_b"
 expect 404 "GET /api/recipes/{id}/photos/{photo_id}（B から）"
-# 4,000,000 バイトを 1 バイト超える写真は、Content-Length で断る。
-head -c 4000001 /dev/zero >"$big_photo_file"
-request POST "/api/recipes/$recipe_id/photos" "$workspace_a" "@$big_photo_file"
-expect 413 "4,000,001 バイトの写真"
+# 4,000,000 バイトを 1 バイト超える写真は、本文を読む前に Content-Length で断る。
+# 本当に 4 MB を送ると、サーバーが途中で断って接続を閉じ、curl が送信の失敗で止まるので、宣言だけを大きくする。
+status="$(curl -sS -o "$body_file" -w '%{http_code}' -X POST -H "X-Workspace-Id: $workspace_a" \
+  -H 'Content-Length: 4000001' --data-binary x "$base_url/api/recipes/$recipe_id/photos")"
+expect 413 "Content-Length が 4,000,001 バイトの写真"
 
 echo "削除"
 request DELETE "/api/recipes/$recipe_id" "$workspace_a"
