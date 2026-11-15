@@ -90,8 +90,11 @@ if (!ID_PATTERN.test(workspaceId)) {
 }
 
 // 表示やエラーの文から、デモの ID を伏せる。
+// UUID の形の値（D1 のデータベースの ID など）も、公開の Actions のログに出さないよう伏せる。
 function redact(text) {
-  return String(text).replaceAll(workspaceId, "***");
+  return String(text)
+    .replaceAll(workspaceId, "***")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***");
 }
 
 function sleep(ms) {
@@ -248,7 +251,9 @@ async function wranglerWithRetry(what, ...wranglerArgs) {
       if (attempt >= RETRY_ATTEMPTS) {
         throw error;
       }
-      console.log(`${what}に失敗したので、やり直す（${attempt} 回目）: ${error.message}`);
+      // 理由は、最後の 1 行を短くして出す（全文は、やり直しても失敗したときに呼ぶ側が出す）。
+      const reason = redact(error.message.trim().split("\n").at(-1)).slice(0, 200);
+      console.error(`${what}に失敗したので、やり直す（${attempt} 回目）: ${reason}`);
       await sleep(RETRY_WAIT_MS * attempt);
     }
   }
@@ -257,7 +262,7 @@ async function wranglerWithRetry(what, ...wranglerArgs) {
 // R2 の操作を、wrangler が失敗したら待ってやり直す。やり直しても失敗したら、投げずに false を返す。
 async function r2(action, photo, ...extra) {
   const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
-  const what = `写真 ${photo.file} の R2 の ${action}`;
+  const what = `写真 ${photo.file} の R2 への${action === "put" ? "書き込み" : "削除"}`;
   try {
     await wranglerWithRetry(what, "r2", "object", action, key, ...extra);
     return true;
