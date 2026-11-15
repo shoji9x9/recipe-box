@@ -475,8 +475,8 @@ impl Backend for CloudflareBackend {
             let size = || int_to_js(photo.size);
             // 上限の判定と保存を 1 つの文にして、同時に追加されても上限を超えないようにする。
             // アプリ全体の合計と 1 日の回数は、全体を数えるので workspace_id では絞り込まない（AGENTS.md の全体の上限のクエリ）。
-            // 読む行の少ない条件から並べる。AND は前の条件が偽なら後ろを読まないので、
-            // 断る試行で photos の全体を読む（アプリ全体の合計を求める）回数を減らせる。
+            // 読む行の少ない条件から並べる。SQL は評価の順を保証しないが、SQLite は AND を左から評価し、
+            // 偽になれば後ろを評価しないので、断る試行で photos の全体を読む（アプリ全体の合計を求める）回数を減らせる。
             let insert = db
                 .prepare(
                     "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at) \

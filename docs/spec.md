@@ -242,6 +242,7 @@ stateDiagram-v2
   写真の ID は使い回さず、中身も変わらないので、ブラウザーに 1 日残させて R2 の読み取りを減らす。消した写真が残り続けないよう、それより長くはしない。
 - 失敗の理由が 2 つ以上あるときは、次の順に確かめる。
   書き込みの回数（`too_many_requests`）→ `Content-Length`（`payload_too_large`）→ ワークスペース → パスの ID の形（`recipe_not_found`・`photo_not_found`）→ 本文の読み取り（`payload_too_large`）→ デモか（`demo_photos_disabled`）→ 大きさ（`payload_too_large`）→ 形式（`unsupported_photo_type`）→ レシピが在るか（`recipe_not_found`）→ レシピの枚数（`photo_limit_reached`）→ ワークスペースの合計（`photo_storage_limit_reached`）→ アプリ全体の上限（`capacity_reached`）。
+  R2 に書いている間にレシピか写真が消されたときは、R2 のデータを消して、`404`（レシピが無ければ `recipe_not_found`、在れば `photo_not_found`）を返す。
 - レシピを消すと、その写真も消える。共有のデモでも同じである（デモのレシピは誰でも消せるので、その写真も消える。毎日のリセットで戻る）。
 
 ## ワークスペースによるデータの分離

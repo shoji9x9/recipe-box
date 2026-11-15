@@ -445,7 +445,8 @@ pub async fn delete<B: Backend>(
 ///
 /// 1. 今ある写真のデータを R2 から消す。ここで失敗しても、D1 の行が残るので、もう一度消せる。
 /// 2. D1 でレシピと写真の行を 1 つのトランザクションで消し、消した写真の ID を受け取る。
-/// 3. 1 の後に追加された写真があれば、そのデータも R2 から消す。
+/// 3. 2 で消した写真のデータを、もう一度すべて R2 から消す。1 の後に追加された写真や、
+///    1 の後に R2 に書かれた写真のデータを残さないため（R2 の削除は無料で、無いキーは無視される）。
 ///
 /// R2 を D1 より後にだけ消すと、R2 の削除が失敗したときに、どの行からもたどれないデータが残る。
 /// D1 より先にだけ消すと、その間に追加された写真のデータが残る（追加の側も、R2 に書いた後に行が在るかを確かめる。[`photo::add`]）。
@@ -465,11 +466,7 @@ pub async fn remove<B: Backend>(
         .delete_recipe(workspace, id)
         .await?
         .ok_or(ApiError::RecipeNotFound)?;
-    let added: Vec<String> = deleted
-        .into_iter()
-        .filter(|photo| !before.contains(photo))
-        .collect();
-    photo::remove_objects(backend, workspace, id, &added).await
+    photo::remove_objects(backend, workspace, id, &deleted).await
 }
 
 #[cfg(test)]

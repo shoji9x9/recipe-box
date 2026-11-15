@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     backend::{Backend, PhotoInsert, PhotoLimits},
-    error::ApiError,
+    error::{ApiError, log_error},
     id,
     recipe::RecipeId,
     workspace::{Workspace, WorkspaceId},
@@ -254,12 +254,12 @@ pub async fn add<B: Backend>(
     let id = PhotoId(photo.id.clone());
     if let Err(error) = backend.put_object(&key, bytes, &photo.content_type).await {
         // 元の失敗を先にログに出す（後始末も失敗したときに、元の原因を失わないため）。
-        let error = ApiError::from(error);
+        log_error(&error);
         // 行だけが残ると、合計の大きさに数えられたまま、読めない写真になる。
         if let Err(cleanup) = backend.delete_photo(workspace, recipe, &id).await {
-            let _ = ApiError::from(cleanup);
+            log_error(&cleanup);
         }
-        return Err(error);
+        return Err(ApiError::Internal);
     }
     // 書いている間にレシピか写真が消されていれば、行はもう無い。データだけが R2 に残らないよう消す。
     if backend.get_photo(workspace, recipe, &id).await?.is_none() {

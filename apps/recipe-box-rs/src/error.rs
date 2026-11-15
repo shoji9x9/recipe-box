@@ -185,7 +185,7 @@ impl From<BackendError> for ApiError {
 }
 
 /// エラーをログに出す。Workers では `console.error` に、テストでは標準エラー出力に出す。
-fn log_error(error: &BackendError) {
+pub(crate) fn log_error(error: &BackendError) {
     #[cfg(target_arch = "wasm32")]
     worker::console_error!("{error}");
     #[cfg(not(target_arch = "wasm32"))]

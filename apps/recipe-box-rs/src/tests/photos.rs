@@ -347,14 +347,16 @@ async fn failed_r2_write_leaves_no_photo_row() {
 }
 
 #[tokio::test]
-async fn photo_written_while_its_recipe_is_deleted_is_removed_from_r2() {
+async fn photo_whose_row_vanishes_while_writing_is_removed_from_r2() {
     let (backend, recipe) = setup().await;
     let backend = FakeBackend {
         photo_rows_vanish_on_put: true,
         ..backend
     };
+    // R2 に書いている間に、別のリクエストが写真の行を消した（レシピは残っている）。
     let response = upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
     assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert_eq!(error_code(&response), "photo_not_found");
     // 行がたどれないデータを R2 に残さない（アプリ全体の合計に数えられない量を作らせない）。
     assert!(backend.objects.lock().unwrap().is_empty());
 }

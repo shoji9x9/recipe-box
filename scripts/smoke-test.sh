@@ -22,6 +22,9 @@ fail() {
   exit 1
 }
 
+# request に足す curl の引数（ヘッダーを足すときなど）。
+extra_curl_args=()
+
 # 書き込む API が回数の制限（60 秒に 30 回）で 429 になったら、待ってからやり直すか。
 # 制限そのものを確かめるときだけ false にする。
 retry_on_write_limit=true
@@ -31,7 +34,7 @@ retry_on_write_limit=true
 # 応答の本文を $body_file に書き、状態コードを $status に入れる。
 request() {
   local method="$1" path="$2" workspace="${3:-}" body="${4:-}"
-  local args=(-sS -o "$body_file" -w '%{http_code}' -X "$method")
+  local args=(-sS --max-time 30 -o "$body_file" -w '%{http_code}' -X "$method" "${extra_curl_args[@]}")
   if [ -n "$workspace" ]; then
     args+=(-H "X-Workspace-Id: $workspace")
   fi
@@ -233,8 +236,9 @@ request GET "/api/recipes/$recipe_id/photos/$photo_id" "$workspace_b"
 expect 404 "GET /api/recipes/{id}/photos/{photo_id}（B から）"
 # 4,000,000 バイトを 1 バイト超える写真は、本文を読む前に Content-Length で断る。
 # 本当に 4 MB を送ると、サーバーが途中で断って接続を閉じ、curl が送信の失敗で止まるので、宣言だけを大きくする。
-status="$(curl -sS -o "$body_file" -w '%{http_code}' -X POST -H "X-Workspace-Id: $workspace_a" \
-  -H 'Content-Length: 4000001' --data-binary x "$base_url/api/recipes/$recipe_id/photos")"
+extra_curl_args=(-H 'Content-Length: 4000001')
+request POST "/api/recipes/$recipe_id/photos" "$workspace_a" x
+extra_curl_args=()
 expect 413 "Content-Length が 4,000,001 バイトの写真"
 
 echo "削除"
