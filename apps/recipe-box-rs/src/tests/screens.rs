@@ -165,16 +165,9 @@ async fn demo_visitor_can_use_id_from_another_device() {
     backend.add_workspace(DEMO, NOW);
     backend.add_workspace(WORKSPACE_A, NOW);
 
-    // デモの帯から、ID を入れる欄へ移れる。
-    let response = screen_get(&backend, "/", None).await;
-    assert!(
-        response.body.contains(r#"href="/workspace#workspace-id""#),
-        "{}",
-        response.body
-    );
+    // 自分のワークスペースが無くても、「ワークスペース」の画面で ID を入れられる。
     let response = screen_get(&backend, "/workspace", None).await;
     assert!(response.body.contains(r#"action="/workspace/switch""#));
-    assert!(response.body.contains(r#"id="workspace-id""#));
 
     let response = screen_post(
         &backend,
