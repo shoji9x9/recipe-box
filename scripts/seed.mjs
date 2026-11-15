@@ -18,6 +18,7 @@
 //      R2 の操作と、D1 の写真の行の読み取り・削除は、wrangler が失敗したら待ってやり直す。
 //      どの行からもたどれないデータを R2 に残さないためである。R2 から消せず、行も無いデータは、手で消せるようキーを表示する。
 //   5. 公開 API で、レシピの数と、写真をすべて読めて中身が同じことを確かめる。
+// 公開 API は、書き込みの回数の制限（429）なら待ってやり直し、接続の失敗と 5xx なら GET と DELETE だけをやり直す。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -232,8 +233,10 @@ function loadRecipes() {
 }
 
 // 公開 API を呼ぶ。書き込みが回数の制限で 429 になったら、待ってやり直す。
-// 接続の失敗と 5xx も、一時的な失敗として、待ち時間を延ばしながらやり直す。
+// 接続の失敗と 5xx も、一時的な失敗として、待ち時間を延ばしながらやり直す。ただし GET と DELETE だけにする。
+// POST は、登録できた後で応答だけが失われることがあり、やり直すと同じレシピが 2 件できるためである。
 async function api(method, path, body) {
+  const retryable = method === "GET" || method === "DELETE";
   for (let attempt = 0; ; attempt += 1) {
     let response;
     try {
@@ -247,14 +250,16 @@ async function api(method, path, body) {
         signal: AbortSignal.timeout(30_000),
       });
     } catch (error) {
-      if (attempt >= MAX_RETRIES) {
-        throw error;
+      // fetch の error.message は「fetch failed」だけなので、原因（ECONNRESET など）を添える。
+      const reason = `${error.message}${error.cause ? `（${error.cause.code ?? error.cause.message}）` : ""}`;
+      if (!retryable || attempt >= MAX_RETRIES) {
+        throw new Error(`${method} ${path.split("?")[0]} に失敗した: ${reason}`);
       }
-      warn(`${method} ${path.split("?")[0]} に失敗したので、やり直す（${attempt + 1} 回目）: ${error.message}`);
+      warn(`${method} ${path.split("?")[0]} に失敗したので、やり直す（${attempt + 1} 回目）: ${reason}`);
       await sleep(RETRY_WAIT_MS * (attempt + 1));
       continue;
     }
-    if (response.status >= 500 && attempt < MAX_RETRIES) {
+    if (response.status >= 500 && retryable && attempt < MAX_RETRIES) {
       await response.body?.cancel();
       warn(`${method} ${path.split("?")[0]} が ${response.status} を返したので、やり直す（${attempt + 1} 回目）`);
       await sleep(RETRY_WAIT_MS * (attempt + 1));
@@ -500,18 +505,17 @@ async function main() {
   }
 
   // 2. 今のレシピを全部消す。消すと一覧が詰まるので、1 ページ目を読み直しながら消す。
-  // 消したはずのレシピが一覧に出続ける（食い違いがある）ときに終わらなくならないよう、繰り返しの回数に上限を付ける。
+  // 消したはずのレシピが一覧に出続ける（食い違いがある）ときに終わらなくならないよう、
+  // 1 回り分の削除がすべて 404（何も消せなかった）なら止める。
   let deleted = 0;
-  for (let round = 0; ; round += 1) {
-    if (round > MAX_RECIPES) {
-      fail("レシピを消しても一覧から無くならない");
-    }
+  for (;;) {
     const response = await api("GET", "/api/recipes?page=1");
     await expectStatus(response, 200, "レシピの一覧の取得");
     const { recipes: page } = await response.json();
     if (page.length === 0) {
       break;
     }
+    let progressed = false;
     for (const recipe of page) {
       if (!ID_PATTERN.test(recipe.id)) {
         fail("一覧の ID の形が正しくない");
@@ -522,8 +526,12 @@ async function main() {
         await response.body?.cancel();
       } else {
         await expectStatus(response, 204, "レシピの削除");
+        deleted += 1;
+        progressed = true;
       }
-      deleted += 1;
+    }
+    if (!progressed) {
+      fail("レシピを消しても一覧から無くならない");
     }
   }
   console.log(`今のレシピ ${deleted} 件を消した`);

@@ -335,6 +335,7 @@ stateDiagram-v2
      写真の上限（1 日の追加の回数など）を判定する API を通らないので、追加の記録（`photo_uploads`）は残さない。リライトの後は、写真を入れる部分を書き直す。
   5. 公開 API で、レシピの数と、写真をすべて読めて中身が同じことを確かめる。
 - 書き込む API の回数の制限（60 秒に 30 回）に当たったら、61 秒待ってやり直す。そのため本番では数分かかる。
+  接続の失敗と 5xx では、待ち時間を延ばしながら、GET と DELETE だけをやり直す（POST は、登録できた後で応答だけが失われると、やり直しで同じレシピが 2 件できるため、やり直さない）。
 - 途中で失敗したら、もう一度実行すれば入れ直せる。
 - サンプルは `seed/recipes.json` と `seed/photos/` に置く。写真は自作かパブリックドメイン（CC0 を含む）のものだけを使い、出典と許諾を `seed/photos/SOURCES.md` に書く。
 - デモ用のワークスペースの ID は公開しない。Worker の secret の `DEMO_WORKSPACE_ID` と、GitHub の Environment「production」の secret の `DEMO_WORKSPACE_ID` に置く。
