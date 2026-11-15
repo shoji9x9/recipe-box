@@ -195,13 +195,15 @@ async fn api_method_not_allowed() -> ApiError {
 async fn fetch(
     req: worker::Request,
     env: Env,
-    _ctx: Context,
+    ctx: Context,
 ) -> worker::Result<axum::http::Response<axum::body::Body>> {
     // panic したときに、原因をログに出す。
     console_error_panic_hook::set_once();
     // 写真のバイト列をそのまま送るリクエストは、本文を読みためずに R2 へ流す（[`stream`]）。
     let req = stream::split_photo_body(req)?;
-    Ok(router(CloudflareBackend::new(env)).call(req).await?)
+    Ok(router(CloudflareBackend::with_context(env, ctx))
+        .call(req)
+        .await?)
 }
 
 /// 定期実行（wrangler.toml の Cron Trigger）の入口。使われていないワークスペースを消す（[`workspace::delete_unused`]）。

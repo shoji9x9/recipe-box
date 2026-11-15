@@ -1080,6 +1080,16 @@ async fn photo_bytes_can_be_sent_without_multipart() {
     let response = post_raw_photo(&backend, &path, &a, "image/jpeg", Vec::new()).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(response.body.contains("追加する写真を選んでください"));
+    // 画面の本文の上限（multipart の区切りの分だけ大きい）より小さくても、写真の上限を超えれば断る。
+    let response = post_raw_photo(
+        &backend,
+        &path,
+        &a,
+        "image/jpeg",
+        jpeg(crate::photo::MAX_PHOTO_BYTES + 1),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(backend.objects.lock().unwrap().len(), 1);
 }
 

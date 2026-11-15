@@ -94,16 +94,24 @@ pub fn split_photo_body(req: worker::Request) -> worker::Result<HttpRequest> {
     };
     // 本文の無い同じリクエストを作って axum に渡す。workers-rs は本文を読む準備をした時点でストリームを
     // 取り込んでしまう（ほかからは読めなくなる）ので、本文を渡さない。
-    let init = web_sys::RequestInit::new();
-    init.set_method(Method::POST.as_str());
-    init.set_headers(&req.inner().headers());
-    let bare = web_sys::Request::new_with_str_and_init(&req.inner().url(), &init)?;
-    let mut http = HttpRequest::try_from(worker::Request::from(bare))?;
+    // 作れなければ、今までどおり本文ごと axum に渡す（本文を読んでから確かめる）。
+    let Ok(mut http) = bare_request(&req) else {
+        return HttpRequest::try_from(req);
+    };
     http.extensions_mut().insert(RawPhotoBody {
         stream: SendWrapper::new(stream),
         length,
     });
     Ok(http)
+}
+
+/// `req` と同じメソッド・URL・ヘッダーで、本文の無いリクエストを作る。
+fn bare_request(req: &worker::Request) -> worker::Result<HttpRequest> {
+    let init = web_sys::RequestInit::new();
+    init.set_method(Method::POST.as_str());
+    init.set_headers(&req.inner().headers());
+    let bare = web_sys::Request::new_with_str_and_init(&req.inner().url(), &init)?;
+    HttpRequest::try_from(worker::Request::from(bare))
 }
 
 /// ストリームのまま扱えるリクエストなら、本文の大きさを返す。
@@ -112,10 +120,7 @@ fn streamable_length(req: &worker::Request) -> worker::Result<Option<usize>> {
         return Ok(None);
     }
     let headers = req.headers();
-    if headers
-        .get(header::CONTENT_TYPE.as_str())?
-        .is_some_and(|value| value.to_ascii_lowercase().starts_with("multipart/"))
-    {
+    if photo::is_multipart(headers.get(header::CONTENT_TYPE.as_str())?.as_deref()) {
         return Ok(None);
     }
     let length = headers
@@ -125,14 +130,8 @@ fn streamable_length(req: &worker::Request) -> worker::Result<Option<usize>> {
 }
 
 /// 写真を追加するパス（`/api/recipes/{id}/photos` か `/recipes/{id}/photos`）か。
-/// ID の形はハンドラーが確かめるので、ここではパスの形だけを見る。
 fn is_photo_upload_path(path: &str) -> bool {
-    let path = path.strip_prefix("/api").unwrap_or(path);
-    let mut segments = path.split('/');
-    matches!(
-        (segments.next(), segments.next(), segments.next(), segments.next(), segments.next()),
-        (Some(""), Some("recipes"), Some(id), Some("photos"), None) if !id.is_empty()
-    )
+    photo::photo_recipe_path(path.strip_prefix("/api").unwrap_or(path)).is_some()
 }
 
 /// 本文の先頭だけを読み、残りを R2 に流せる形にする。
@@ -165,12 +164,16 @@ mod tests {
 
     #[test]
     fn photo_upload_paths() {
-        assert!(is_photo_upload_path("/api/recipes/abc/photos"));
-        assert!(is_photo_upload_path("/recipes/abc/photos"));
-        assert!(!is_photo_upload_path("/recipes/abc/photos/def"));
+        let id = "0123456789abcdef0123456789abcdef";
+        assert!(is_photo_upload_path(&format!("/api/recipes/{id}/photos")));
+        assert!(is_photo_upload_path(&format!("/recipes/{id}/photos")));
+        assert!(!is_photo_upload_path(&format!("/recipes/{id}/photos/{id}")));
+        assert!(!is_photo_upload_path("/recipes/abc/photos"));
         assert!(!is_photo_upload_path("/recipes//photos"));
-        assert!(!is_photo_upload_path("/api/recipes/abc"));
-        assert!(!is_photo_upload_path("/recipes/abc/photos/"));
-        assert!(!is_photo_upload_path("/other/recipes/abc/photos"));
+        assert!(!is_photo_upload_path(&format!("/api/recipes/{id}")));
+        assert!(!is_photo_upload_path(&format!("/recipes/{id}/photos/")));
+        assert!(!is_photo_upload_path(&format!(
+            "/other/recipes/{id}/photos"
+        )));
     }
 }

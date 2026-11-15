@@ -568,6 +568,14 @@ impl Backend for FakeBackend {
         }))
     }
 
+    // 偽物には接続が無いので、そのまま待つ。
+    async fn run_to_completion<T: Send + 'static>(
+        &self,
+        task: impl Future<Output = T> + Send + 'static,
+    ) -> Option<T> {
+        Some(task.await)
+    }
+
     fn put_object(
         &self,
         key: &str,

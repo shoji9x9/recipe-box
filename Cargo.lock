@@ -568,6 +568,7 @@ dependencies = [
  "askama",
  "axum",
  "console_error_panic_hook",
+ "futures-channel",
  "http-body-util",
  "serde",
  "serde_json",

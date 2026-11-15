@@ -12,7 +12,6 @@ use std::fmt::Write as _;
 use askama::Template;
 use axum::{
     Extension, Form,
-    body::Bytes,
     extract::{
         FromRequest, Multipart, Path, Query, Request, State,
         multipart::MultipartRejection,
@@ -30,7 +29,7 @@ use crate::{
     limits::{check_body_size, check_write},
     photo::{self, Photo, PhotoBody, PhotoId},
     recipe::{self, FieldError, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput},
-    stream::{self, RawPhotoBody},
+    stream::RawPhotoBody,
     workspace::{self, WorkspaceId},
 };
 
@@ -926,23 +925,17 @@ async fn read_photo_body(
     raw: Option<Extension<RawPhotoBody>>,
     request: Request,
 ) -> Result<Option<PhotoBody>, ApiError> {
-    if let Some(Extension(raw)) = raw {
-        return Ok(Some(PhotoBody::Stream(stream::open(raw).await?)));
-    }
-    let is_multipart = request
+    let content_type = request
         .headers()
         .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.to_ascii_lowercase().starts_with("multipart/"));
-    if is_multipart {
+        .and_then(|value| value.to_str().ok());
+    if raw.is_none() && photo::is_multipart(content_type) {
         let multipart = Multipart::from_request(request, &()).await;
         return Ok(read_photo_field(multipart).await?.map(PhotoBody::Bytes));
     }
-    // バイト列そのもの（本番では `Content-Length` の無いものだけがここに来る）。
-    let bytes = Bytes::from_request(request, &())
-        .await
-        .map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
-    Ok((!bytes.is_empty()).then(|| PhotoBody::Bytes(Vec::from(bytes))))
+    // 写真のバイト列そのもの。空の本文は、ファイルを選ばずに送ったときと同じに扱う。
+    let body = photo::read_bytes_body(raw, request).await?;
+    Ok((body.len() > 0).then_some(body))
 }
 
 /// フォームの `photo` の欄のデータを読む。ファイルが選ばれていなければ `None`。
@@ -1269,7 +1262,7 @@ async fn guard<B: Backend>(
     } else if let Err(error) =
         check_write(backend, request.method(), request.headers(), max_body_bytes).await
     {
-        match (&error, photo_recipe_path(request.uri().path())) {
+        match (&error, photo::photo_recipe_path(request.uri().path())) {
             // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
             // よく起きるので、一般の説明ではなく写真の上限を出し、レシピに戻れるようにする。
             (ApiError::PayloadTooLarge, Some(recipe_path)) => render(
@@ -1292,13 +1285,6 @@ async fn guard<B: Backend>(
             .insert(HX_PUSH_URL, HeaderValue::from_static("false"));
     }
     response
-}
-
-/// 写真を送るフォームのパス（`/recipes/<id>/photos`）なら、レシピの詳細のパスを返す。
-fn photo_recipe_path(path: &str) -> Option<&str> {
-    let recipe_path = path.strip_suffix("/photos")?;
-    let id = recipe_path.strip_prefix("/recipes/")?;
-    RecipeId::parse(id).map(|_| recipe_path)
 }
 
 /// 確かめるだけのルート（[`check_form`]）の前に確かめる middleware。送り元と本文の大きさだけを確かめる。

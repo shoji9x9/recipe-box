@@ -9,10 +9,7 @@
 use axum::{
     Extension, Json,
     body::Bytes,
-    extract::{
-        Path, State,
-        rejection::{BytesRejection, PathRejection},
-    },
+    extract::{FromRequest, Path, Request, State, rejection::PathRejection},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -22,6 +19,7 @@ use crate::{
     backend::{Backend, PhotoInsert, PhotoLimits},
     error::{ApiError, log_error},
     id,
+    limits::check_body_size,
     recipe::RecipeId,
     stream::{self, PhotoStream, RawPhotoBody},
     workspace::{Workspace, WorkspaceId},
@@ -149,6 +147,38 @@ impl PhotoBody {
     }
 }
 
+/// `Content-Type` が multipart か。
+pub fn is_multipart(content_type: Option<&str>) -> bool {
+    content_type.is_some_and(|value| value.to_ascii_lowercase().starts_with("multipart/"))
+}
+
+/// 画面の写真を追加するパス（`/recipes/<id>/photos`）なら、レシピの詳細のパスを返す。
+pub fn photo_recipe_path(path: &str) -> Option<&str> {
+    let recipe_path = path.strip_suffix("/photos")?;
+    let id = recipe_path.strip_prefix("/recipes/")?;
+    RecipeId::parse(id).map(|_| recipe_path)
+}
+
+/// 写真のバイト列そのものの本文を読む（API と画面で共通）。
+///
+/// 本番で、本文が axum に渡らず extension に入っているとき（[`crate::stream`]）は、ストリームのまま扱う。
+/// そうでなければ本文を読む。`Content-Length` が写真の上限を超えていれば、読む前に断る
+/// （画面の本文の上限は multipart の区切りの分だけ大きいので、middleware では止まらない）。
+pub async fn read_bytes_body(
+    raw: Option<Extension<RawPhotoBody>>,
+    request: Request,
+) -> Result<PhotoBody, ApiError> {
+    if let Some(Extension(raw)) = raw {
+        return Ok(PhotoBody::Stream(stream::open(raw).await?));
+    }
+    check_body_size(request.headers(), MAX_PHOTO_BYTES)?;
+    let bytes = Bytes::from_request(request, &())
+        .await
+        .map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
+    // Bytes がほかに持ち主の無い 1 つの塊なら、コピーせずに Vec にする。
+    Ok(PhotoBody::Bytes(Vec::from(bytes)))
+}
+
 /// R2 のキー。ワークスペース・レシピ・写真の ID から決まる。
 ///
 /// D1 の行をワークスペースで絞り込んで見つけてから使うので、ほかのワークスペースの写真のキーにはならない。
@@ -218,18 +248,11 @@ pub async fn create<B: Backend>(
     workspace: Workspace,
     recipe: Result<Path<String>, PathRejection>,
     raw: Option<Extension<RawPhotoBody>>,
-    body: Result<Bytes, BytesRejection>,
+    request: Request,
 ) -> Result<(StatusCode, Json<Photo>), ApiError> {
     let Path(recipe) = recipe.map_err(|_| ApiError::RecipeNotFound)?;
     let recipe = parse_recipe_id(&recipe)?;
-    // 本番で、写真のバイト列をそのまま送ったときは、本文が axum に渡らず extension に入っている（[`crate::stream`]）。
-    let body = if let Some(Extension(raw)) = raw {
-        PhotoBody::Stream(stream::open(raw).await?)
-    } else {
-        let body = body.map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
-        // Bytes がほかに持ち主の無い 1 つの塊なら、コピーせずに Vec にする。
-        PhotoBody::Bytes(Vec::from(body))
-    };
+    let body = read_bytes_body(raw, request).await?;
     let photo = add(&backend, &workspace.id, &recipe, body).await?;
     Ok((StatusCode::CREATED, Json(photo)))
 }
@@ -240,6 +263,8 @@ pub async fn create<B: Backend>(
 /// 2. D1 に行と追加の記録を入れる。上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えない。
 /// 3. R2 に書き込む。失敗したら、D1 の行を消す（追加の記録は残し、回数に数える）。
 /// 4. 行がまだ在るかを確かめる。書いている間にレシピが消されていれば、R2 のデータを消す。
+///
+/// 3 と 4 は、送り手との接続が切れても最後まで動かす（[`Backend::run_to_completion`]）。
 pub async fn add<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -277,27 +302,54 @@ pub async fn add<B: Backend>(
         PhotoInsert::WorkspaceFull => return Err(ApiError::PhotoStorageLimitReached),
         PhotoInsert::CapacityReached => return Err(ApiError::CapacityReached),
     }
-    let key = object_key(workspace, recipe, &photo.id);
-    let id = PhotoId(photo.id.clone());
-    if let Err(error) = backend.put_object(&key, body, &photo.content_type).await {
+    // R2 に書くところからは、接続が切れても最後まで動かす。ストリームの本文は、D1 に行を入れた後に受け取るので、
+    // 送る途中で切れると、後始末（行を消す）が動かずに、読めない行が上限に数えられたまま残ってしまうため。
+    let task = write_object(
+        backend.clone(),
+        workspace.clone(),
+        recipe.clone(),
+        PhotoId(photo.id.clone()),
+        body,
+        photo.content_type.clone(),
+    );
+    backend
+        .run_to_completion(task)
+        .await
+        .unwrap_or(Err(ApiError::Internal))?;
+    Ok(photo)
+}
+
+/// [`add`] の 3 と 4。R2 に書き込み、失敗したら D1 の行を消す。書いている間に行が消されていれば、R2 のデータを消す。
+async fn write_object<B: Backend>(
+    backend: B,
+    workspace: WorkspaceId,
+    recipe: RecipeId,
+    id: PhotoId,
+    body: PhotoBody,
+    content_type: String,
+) -> Result<(), ApiError> {
+    let key = object_key(&workspace, &recipe, id.as_str());
+    if let Err(error) = backend.put_object(&key, body, &content_type).await {
         // 元の失敗を先にログに出す（後始末も失敗したときに、元の原因を失わないため）。
         log_error(&error);
         // 行だけが残ると、合計の大きさに数えられたまま、読めない写真になる。
-        if let Err(cleanup) = backend.delete_photo(workspace, recipe, &id).await {
+        if let Err(cleanup) = backend.delete_photo(&workspace, &recipe, &id).await {
             log_error(&cleanup);
         }
         return Err(ApiError::Internal);
     }
     // 書いている間にレシピか写真が消されていれば、行はもう無い。データだけが R2 に残らないよう消す。
-    if backend.get_photo(workspace, recipe, &id).await?.is_none() {
+    if backend.get_photo(&workspace, &recipe, &id).await?.is_none() {
         backend.delete_objects(vec![key]).await?;
-        return Err(if backend.get_recipe(workspace, recipe).await?.is_some() {
-            ApiError::PhotoNotFound
-        } else {
-            ApiError::RecipeNotFound
-        });
+        return Err(
+            if backend.get_recipe(&workspace, &recipe).await?.is_some() {
+                ApiError::PhotoNotFound
+            } else {
+                ApiError::RecipeNotFound
+            },
+        );
     }
-    Ok(photo)
+    Ok(())
 }
 
 /// `GET /api/recipes/{id}/photos/{photo_id}`: 写真のデータを返す。

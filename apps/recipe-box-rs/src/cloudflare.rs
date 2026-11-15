@@ -5,11 +5,11 @@
 //!
 //! SQL は標準の範囲で書き、レシピを扱うクエリは必ず `workspace_id` で絞り込む（AGENTS.md）。
 
-use std::future::Future;
+use std::{future::Future, pin::Pin, rc::Rc};
 
 use wasm_bindgen::prelude::wasm_bindgen;
 use worker::{
-    Bucket, D1Database, D1Result, Data, Env, HttpMetadata,
+    Bucket, Context, D1Database, D1Result, Data, Env, HttpMetadata,
     send::{SendFuture, SendWrapper},
     wasm_bindgen::JsValue,
 };
@@ -52,12 +52,24 @@ extern "C" {
 #[derive(Clone)]
 pub struct CloudflareBackend {
     env: SendWrapper<Env>,
+    /// リクエストの context（`waitUntil` に使う）。定期実行には無い。
+    ctx: Option<SendWrapper<Rc<Context>>>,
 }
 
 impl CloudflareBackend {
+    /// 定期実行に使う。リクエストが無いので、[`Backend::run_to_completion`] は `task` をそのまま待つ。
     pub fn new(env: Env) -> Self {
         Self {
             env: SendWrapper::new(env),
+            ctx: None,
+        }
+    }
+
+    /// リクエストを処理するときに使う。
+    pub fn with_context(env: Env, ctx: Context) -> Self {
+        Self {
+            env: SendWrapper::new(env),
+            ctx: Some(SendWrapper::new(Rc::new(ctx))),
         }
     }
 }
@@ -798,6 +810,24 @@ impl Backend for CloudflareBackend {
             .await?;
             Ok(changed_rows(&result, action)? > 0)
         })
+    }
+
+    fn run_to_completion<T: Send + 'static>(
+        &self,
+        task: impl Future<Output = T> + Send + 'static,
+    ) -> impl Future<Output = Option<T>> + Send {
+        let result: Pin<Box<dyn Future<Output = Option<T>> + Send>> = match &self.ctx {
+            Some(ctx) => {
+                let (sender, receiver) = futures_channel::oneshot::channel();
+                ctx.wait_until(async move {
+                    // 待っていた側が先に終わっていれば（接続が切れたとき）、結果は捨てる。
+                    let _ = sender.send(task.await);
+                });
+                Box::pin(async move { receiver.await.ok() })
+            }
+            None => Box::pin(async move { Some(task.await) }),
+        };
+        result
     }
 
     fn put_object(
