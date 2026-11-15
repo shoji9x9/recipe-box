@@ -79,7 +79,7 @@ fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
 /// 本文の大きさは API と同じ上限にする。`Content-Length` の無い本文（chunked）も、ここで止める。
 /// CSS・htmx・アイコンは静的アセット（`public/`）として Worker の外で配るので、ここには無い。
 fn screen_routes<B: Backend>(backend: B) -> Router<B> {
-    let check_routes = screen_check_routes(backend.clone());
+    let check_routes = screen_check_routes();
     Router::new()
         .route("/", get(screen::index::<B>))
         .route("/recipes", post(screen::create::<B>))
@@ -112,14 +112,11 @@ fn screen_routes<B: Backend>(backend: B) -> Router<B> {
 }
 
 /// 画面のフォームを確かめるだけのルート。ワークスペースを読まないので、[`screen::identify`] を通さない。
-/// 送り元・回数・本文の大きさは、ほかの画面の POST と同じく確かめる。
-fn screen_check_routes<B: Backend>(backend: B) -> Router<B> {
+/// 送り元と本文の大きさは確かめるが、書き込みの回数の制限は使わない（[`screen::guard_check`]）。
+fn screen_check_routes<B: Backend>() -> Router<B> {
     Router::new()
         .route("/recipes/check", post(screen::check_form))
-        .route_layer(middleware::from_fn_with_state(
-            backend,
-            screen::guard_writes::<B>,
-        ))
+        .route_layer(middleware::from_fn(screen::guard_check))
         .route_layer(middleware::from_fn(screen::security_headers))
 }
 

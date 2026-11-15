@@ -51,6 +51,11 @@ pub async fn check_write<B: Backend>(
     if !backend.allow_write(&client_key(headers)).await? {
         return Err(ApiError::TooManyRequests);
     }
+    check_body_size(headers)
+}
+
+/// `Content-Length` が本文の上限を超えていれば `PayloadTooLarge`。本文を読む前に断るために使う。
+pub fn check_body_size(headers: &HeaderMap) -> Result<(), ApiError> {
     // usize に収まらないほど大きい値も、上限を超えたものとして扱う。
     if declared_length(headers).is_some_and(|length| {
         usize::try_from(length).map_or(true, |length| length > MAX_BODY_BYTES)

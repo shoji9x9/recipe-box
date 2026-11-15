@@ -25,7 +25,7 @@ use serde::Deserialize;
 use crate::{
     backend::Backend,
     error::ApiError,
-    limits::check_write,
+    limits::{check_body_size, check_write},
     recipe::{self, FieldError, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput},
     workspace::{self, WorkspaceId},
 };
@@ -1001,6 +1001,30 @@ pub async fn guard_writes<B: Backend>(
             .headers_mut()
             .insert(HX_PUSH_URL, HeaderValue::from_static("false"));
     }
+    response
+}
+
+/// 確かめるだけのルート（[`check_form`]）の前に確かめる middleware。送り元と本文の大きさだけを確かめる。
+///
+/// 書き込みの回数の制限は使わない。欄から離れるたびに呼ぶので、使うと保存の POST の枠を食い、
+/// 直している途中で保存が 429 になるため。このルートは保存も D1 の読み取りもしないので、守るものが無い。
+pub async fn guard_check(request: Request, next: Next) -> Response {
+    let mut response = if !same_origin(request.headers()) {
+        render(
+            StatusCode::FORBIDDEN,
+            &ErrorPage {
+                layout: Layout::default()
+                    .with_alert("ほかのサイトから送られたフォームは受け付けません"),
+            },
+        )
+    } else if let Err(error) = check_body_size(request.headers()) {
+        error_page(&error)
+    } else {
+        next.run(request).await
+    };
+    response
+        .headers_mut()
+        .insert(HX_PUSH_URL, HeaderValue::from_static("false"));
     response
 }
 

@@ -866,3 +866,29 @@ async fn check_route_only_validates() {
     let response = send(router(backend.clone()), request).await;
     assert_eq!(response.status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn check_route_does_not_use_the_write_limit() {
+    // 書き込みの回数の制限に当たっていても、確かめるだけのルートは使える。
+    let backend = FakeBackend {
+        write_limited: true,
+        ..backend_with_workspaces()
+    };
+    for _ in 0..40 {
+        let response = screen_post(&backend, "/recipes/check", None, "name=&servings=2").await;
+        assert_eq!(response.status, StatusCode::OK);
+    }
+    // 回数の制限を数えない（保存の POST の枠を食わない）。
+    assert_eq!(backend.write_limit_keys.lock().unwrap().len(), 0);
+    // 本文の大きさの上限は、ほかの画面の POST と同じく受ける。
+    let body = format!("name=x&steps={}", "a".repeat(MAX_BODY_BYTES));
+    let request = Request::post("/recipes/check")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::CONTENT_LENGTH, body.len())
+        .body(Body::from(body))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+}
