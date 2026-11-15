@@ -46,8 +46,11 @@
     return "追加できませんでした";
   }
 
-  // 1 枚を送る。結果は { added, reason, stop, redirected }。
-  // stop は残りを送らないこと、redirected はサーバーがほかの画面に移らせたこと（ワークスペースが無いなど）。
+  // 1 枚を送る。結果の kind は次のどれか。reason は、追加できなかった理由の文。
+  // - "added": 追加できた。
+  // - "skip": その写真だけ追加できなかった。残りは続けて送る。
+  // - "stop": 続けても追加できない。残りを送らない。
+  // - "redirect": サーバーがほかの画面に移らせた（ワークスペースが無いなど）。残りを送らず、ページごと読み直す。
   async function sendOne(form, file) {
     let response;
     try {
@@ -57,16 +60,16 @@
         headers: { "Content-Type": file.type || "application/octet-stream" },
       });
     } catch {
-      return { added: false, reason: "通信できませんでした", stop: true, redirected: false };
+      return { kind: "stop", reason: "通信できませんでした" };
     }
     if (response.status === 204) {
-      return { added: true, reason: null, stop: false, redirected: false };
+      return { kind: "added", reason: null };
     }
     if (response.redirected) {
-      return { added: false, reason: "追加できませんでした", stop: true, redirected: true };
+      return { kind: "redirect", reason: "追加できませんでした" };
     }
     const reason = await failureReason(response);
-    return { added: false, reason, stop: !PER_PHOTO_ERRORS.has(response.status), redirected: false };
+    return { kind: PER_PHOTO_ERRORS.has(response.status) ? "skip" : "stop", reason };
   }
 
   function message(kind, text, items) {
@@ -191,16 +194,16 @@
     for (const [index, file] of sending.entries()) {
       setStatus(form, `写真を送っています（${index + 1} / ${sending.length} 枚目）`);
       const result = await sendOne(form, file);
-      if (result.added) {
+      if (result.kind === "added") {
         added += 1;
         continue;
       }
       failures.push([file.name, result.reason]);
-      if (result.stop) {
+      if (result.kind !== "skip") {
         for (const rest of sending.slice(index + 1)) {
           failures.push([rest.name, "前の写真を追加できなかったため、送りませんでした"]);
         }
-        redirected = result.redirected;
+        redirected = result.kind === "redirect";
         break;
       }
     }
