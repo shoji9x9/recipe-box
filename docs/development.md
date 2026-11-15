@@ -45,6 +45,8 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `scripts/seed.mjs` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
 | `scripts/seed-lib.mjs` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.mjs` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
+| `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.mjs` |
+| `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.mjs` |
 | `scripts/smoke-test.sh` | ローカルの Worker に API を呼んで確かめるスクリプト（CI でも使う） |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
 

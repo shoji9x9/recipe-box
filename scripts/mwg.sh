@@ -6,22 +6,30 @@
 #   パッケージを npx で取ってきて、スキルを書き換えるため。
 set -euo pipefail
 
-# ツールと同じく、オプションを除いた最初の引数をサブコマンドとみなす。--skill-version は値を 1 つ取る。
+# ツール（Node の parseArgs）と同じく、オプションを除いた最初の引数をサブコマンドとみなす。
+# - --skill-version は値を 1 つ取る。
+# - -- の後は、- で始まる語も位置の引数になる。- だけの語も位置の引数である。
 command=""
 skip_value=false
+after_double_dash=false
 for arg in "$@"; do
-  if [[ "$skip_value" == true ]]; then
+  if [[ "$after_double_dash" == true ]]; then
+    command="$arg"
+    break
+  elif [[ "$skip_value" == true ]]; then
     skip_value=false
+  elif [[ "$arg" == "--" ]]; then
+    after_double_dash=true
   elif [[ "$arg" == "--skill-version" ]]; then
     skip_value=true
-  elif [[ "$arg" != -* ]]; then
+  elif [[ "$arg" == "-" || "$arg" != -* ]]; then
     command="$arg"
     break
   fi
 done
 case "$command" in
   search | list | retrieve) ;;
-  # サブコマンドが無ければ、版（-v）か使い方（-h）を出すだけである。
+  # サブコマンドが無ければ、ツールは版（-v）か使い方を出すだけである。
   "") ;;
   *)
     echo "使えるのは search・list・retrieve だけです（scripts/mwg.sh）" >&2

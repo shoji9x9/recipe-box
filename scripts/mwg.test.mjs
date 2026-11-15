@@ -17,7 +17,8 @@ describe("mwg.sh", () => {
   before(() => {
     dir = mkdtempSync(join(tmpdir(), "mwg-test-"));
     const pnpm = join(dir, "pnpm");
-    writeFileSync(pnpm, '#!/usr/bin/env bash\necho "telemetry=${DISABLE_TELEMETRY:-} args=$*"\n');
+    // 引数を 1 行に 1 つずつ出し、空白を含む引数がそのまま渡るかも確かめる。
+    writeFileSync(pnpm, '#!/usr/bin/env bash\necho "telemetry=${DISABLE_TELEMETRY:-}"\nprintf \'%s\\n\' "$@"\n');
     chmodSync(pnpm, 0o755);
     env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
     delete env.DISABLE_TELEMETRY;
@@ -28,17 +29,23 @@ describe("mwg.sh", () => {
 
   for (const args of [
     ["search", "dialog"],
+    ["search", "dialog element"],
     ["list"],
     ["retrieve", "dialog"],
     ["--skill-version", "2026_10_30-58d055df", "search", "dialog"],
     ["--skill-version=2026_10_30-58d055df", "retrieve", "dialog"],
     ["-v"],
     ["-h"],
+    // サブコマンドが無ければ、ツールは使い方を出すだけである。
+    [],
+    ["--choose"],
+    ["--skill-version", "x"],
+    ["--", "search", "dialog"],
   ]) {
-    test(`${args.join(" ")} は、利用統計を止めて固定した版で動かす`, () => {
+    test(`[${args.join(", ")}] は、利用統計を止めて固定した版で動かす`, () => {
       const result = run(...args);
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout.trim(), `telemetry=1 args=exec modern-web-guidance ${args.join(" ")}`);
+      assert.equal(result.stdout, ["telemetry=1", "exec", "modern-web-guidance", ...args].join("\n") + "\n");
     });
   }
 
@@ -51,11 +58,13 @@ describe("mwg.sh", () => {
     // --skill-version の値を読み飛ばした後のサブコマンドで決める。
     ["--skill-version", "search", "install"],
     ["--skill-version=x", "update"],
-    // -- は、オプションとして読み飛ばす（ツールも同じく、最初の位置の引数をサブコマンドにする）。
+    // ツールの parseArgs と同じく、-- の後は - で始まる語も、- だけの語も、位置の引数（サブコマンド）になる。
     ["--", "install"],
+    ["--", "-v", "install"],
+    ["-", "search"],
     ["-v", "install"],
   ]) {
-    test(`${args.join(" ")} は断る`, () => {
+    test(`[${args.join(", ")}] は断る`, () => {
       const result = run(...args);
       assert.equal(result.status, 2);
       assert.equal(result.stdout, "");
@@ -88,14 +97,14 @@ describe("check-mwg-version.sh", () => {
   };
   const skillWith = (version) => `npx -y modern-web-guidance@latest search "<query>" --skill-version ${version}\n`;
 
-  test("版がそろっていれば通る（CRLF の SKILL.md と、改行付きの版のファイルも）", () => {
-    for (const [skill, packageVersion] of [
-      [skillWith("2026_10_30-58d055df"), "2026_10_30-58d055df"],
-      [skillWith("2026_10_30-58d055df").replace("\n", "\r\n"), "2026_10_30-58d055df\n"],
-    ]) {
-      const result = check(skill, packageVersion);
-      assert.equal(result.status, 0, result.stderr);
-    }
+  test("版がそろっていれば通る", () => {
+    const result = check(skillWith("2026_10_30-58d055df"), "2026_10_30-58d055df");
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  test("SKILL.md が CRLF で、版のファイルに改行が付いていても、そろっていれば通る", () => {
+    const result = check(skillWith("2026_10_30-58d055df").replace("\n", "\r\n"), "2026_10_30-58d055df\n");
+    assert.equal(result.status, 0, result.stderr);
   });
 
   test("版が違えば、両方の版を出して失敗する", () => {
