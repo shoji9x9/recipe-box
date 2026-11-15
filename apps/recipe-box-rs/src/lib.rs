@@ -22,7 +22,7 @@ use axum::{
 };
 use serde::Serialize;
 use tower_service::Service;
-use worker::{Context, Env, HttpRequest, event};
+use worker::{Context, Env, HttpRequest, ScheduleContext, ScheduledEvent, event};
 
 use crate::{backend::Backend, cloudflare::CloudflareBackend, error::ApiError};
 
@@ -199,6 +199,19 @@ async fn fetch(
     // panic したときに、原因をログに出す。
     console_error_panic_hook::set_once();
     Ok(router(CloudflareBackend::new(env)).call(req).await?)
+}
+
+/// 定期実行（wrangler.toml の Cron Trigger）の入口。使われていないワークスペースを消す（[`workspace::delete_unused`]）。
+#[event(scheduled)]
+async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
+    console_error_panic_hook::set_once();
+    let summary = workspace::delete_unused(&CloudflareBackend::new(env)).await;
+    // 失敗の理由は、失敗したところでログに出している（error::log_error）。
+    if summary.has_failure() {
+        worker::console_error!("使われていないワークスペースの自動削除: {summary:?}");
+    } else {
+        worker::console_log!("使われていないワークスペースの自動削除: {summary:?}");
+    }
 }
 
 async fn health() -> Json<Health> {

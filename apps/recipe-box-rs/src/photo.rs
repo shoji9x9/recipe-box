@@ -44,8 +44,6 @@ pub const MAX_PHOTO_BYTES_TOTAL: i64 = 5_000_000_000;
 /// 費用を守るための上限。月に 31 × 200 = 6,200 回で、R2 の書き込みの操作の無料枠（100 万回/月）より十分に小さい。
 /// 写真を消しても回数は戻らない（`photo_uploads` の記録を残す）。
 pub const MAX_PHOTO_UPLOADS_PER_DAY: i64 = 200;
-/// 1 日のミリ秒。
-const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
 
 /// 写真を配るときの `Cache-Control`。
 ///
@@ -233,7 +231,7 @@ pub async fn add<B: Backend>(
         max_bytes_total: MAX_PHOTO_BYTES_TOTAL,
         max_uploads_since: MAX_PHOTO_UPLOADS_PER_DAY,
         // UTC の今日の 0 時。
-        since: now - now.rem_euclid(DAY_MILLIS),
+        since: crate::limits::start_of_utc_day(now),
     };
     match backend
         .insert_photo(workspace, recipe, &photo, &limits)

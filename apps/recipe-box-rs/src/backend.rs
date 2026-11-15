@@ -51,6 +51,14 @@ pub struct PhotoLimits {
     pub since: i64,
 }
 
+/// ワークスペースの最終利用日時と印。削除してよいかを決めるのに使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceStatus {
+    pub last_used_at: i64,
+    /// 自動削除と削除から外す印。
+    pub pinned: bool,
+}
+
 /// 写真を指す、レシピの ID と写真の ID の組（R2 のキーを作るのに使う）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PhotoKey {
@@ -125,6 +133,22 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &WorkspaceId,
     ) -> impl Future<Output = BackendResult<Option<i64>>> + Send;
 
+    /// ワークスペースの最終利用日時と、自動削除と削除から外す印（`pinned`）を返す。ワークスペースが無ければ `None` を返す。
+    fn workspace_status(
+        &self,
+        id: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<WorkspaceStatus>>> + Send;
+
+    /// 印が無く、最終利用日時が `before` より前のワークスペースの ID を返す（自動削除の対象）。
+    /// ID の形は確かめない（呼び出し側が確かめ、正しくない行を失敗に数える）。
+    fn list_unused_workspaces(
+        &self,
+        before: i64,
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send;
+
+    /// 1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、`before` より前のものを消す。
+    fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send;
+
     /// ワークスペースの最終利用日時を `now` にする。
     fn set_workspace_last_used_at(
         &self,
@@ -186,13 +210,16 @@ pub trait Backend: Clone + Send + Sync + 'static {
         workspace: &WorkspaceId,
     ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send;
 
-    /// ワークスペースと、そのレシピ・写真の行を消し、消した写真を返す。ワークスペースが無ければ `None` を返す。
-    /// R2 のデータは消さない（呼び出し側が、返した写真で消す）。
+    /// ワークスペースと、そのレシピ・写真の行を消し、消した写真を返す。R2 のデータは消さない（呼び出し側が、返した写真で消す）。
+    ///
+    /// 印（`pinned`）の付いたワークスペースは消さない。`last_used_before` があれば、最終利用日時がそれより前のときだけ消す
+    /// （自動削除の対象を選んだ後に使われたワークスペースを消さないため）。消さなかったとき（無い・印がある・使われた）は `None` を返す。
     ///
     /// 写真を読むことと消すことを 1 つのトランザクションで行う（[`Backend::delete_recipe`] と同じ理由）。
     fn delete_workspace(
         &self,
         workspace: &WorkspaceId,
+        last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send;
 
     /// 写真の行と、追加の記録を保存する。`limits` のどれかに当たれば保存せず、その理由を返す。

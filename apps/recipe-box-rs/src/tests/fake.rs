@@ -4,7 +4,7 @@
 //! 本物の SQL と同じく、指定したワークスペースのレシピだけを読み書きする。
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::{Future, ready},
     sync::{
         Arc, Mutex,
@@ -15,7 +15,7 @@ use std::{
 use crate::{
     backend::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
-        WorkspaceLimits,
+        WorkspaceLimits, WorkspaceStatus,
     },
     photo::{Photo, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -36,6 +36,8 @@ type Objects = HashMap<String, (Vec<u8>, String)>;
 pub struct FakeBackend {
     /// ワークスペースの ID と最終利用日時。
     pub workspaces: Arc<Mutex<HashMap<String, i64>>>,
+    /// 自動削除と削除から外す印（`pinned`）の付いたワークスペースの ID。
+    pub pinned: Arc<Mutex<HashSet<String>>>,
     /// ワークスペースを作った記録（作った日時）。ワークスペースを消しても残す。
     pub workspace_creations: Arc<Mutex<Vec<i64>>>,
     /// レシピ。
@@ -75,6 +77,12 @@ pub struct FakeBackend {
     pub photo_added_after_first_delete: bool,
     /// `true` なら、ワークスペースを消す直前に、別のリクエストが同じワークスペースを消したことにする。
     pub workspace_vanishes_on_delete: bool,
+    /// `true` なら、古い記録の削除だけが失敗したことにする。
+    pub broken_records: bool,
+    /// `true` なら、自動削除の対象を選ぶところだけが失敗したことにする。
+    pub broken_list: bool,
+    /// 自動削除の対象を選んだ直後に、別のリクエストがこのワークスペースを使った（最終利用日時を今にした）ことにする。
+    pub used_after_listing: Option<String>,
     /// `photo_added_after_first_delete` の写真を、もう追加したか。
     pub injected_photo: Arc<AtomicBool>,
 }
@@ -84,6 +92,7 @@ impl Default for FakeBackend {
         Self {
             workspaces: Arc::default(),
             workspace_creations: Arc::default(),
+            pinned: Arc::default(),
             recipes: Arc::default(),
             next_random: Arc::default(),
             now: Arc::new(AtomicI64::new(NOW)),
@@ -102,6 +111,9 @@ impl Default for FakeBackend {
             broken_r2_delete: false,
             photo_added_after_first_delete: false,
             workspace_vanishes_on_delete: false,
+            used_after_listing: None,
+            broken_list: false,
+            broken_records: false,
             injected_photo: Arc::default(),
         }
     }
@@ -231,6 +243,59 @@ impl Backend for FakeBackend {
             creations.push(now);
             workspaces.insert(id.to_string(), now);
             true
+        }))
+    }
+
+    fn workspace_status(
+        &self,
+        id: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<WorkspaceStatus>>> + Send {
+        ready(self.check().map(|()| {
+            let last_used_at = *self.workspaces.lock().unwrap().get(id.as_str())?;
+            Some(WorkspaceStatus {
+                last_used_at,
+                pinned: self.pinned.lock().unwrap().contains(id.as_str()),
+            })
+        }))
+    }
+
+    fn list_unused_workspaces(
+        &self,
+        before: i64,
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
+        if self.broken_list {
+            return ready(Err(BackendError("壊れた一覧".into())));
+        }
+        ready(self.check().map(|()| {
+            let pinned = self.pinned.lock().unwrap();
+            let mut ids: Vec<String> = self
+                .workspaces
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(id, last_used_at)| **last_used_at < before && !pinned.contains(*id))
+                .map(|(id, _)| id.clone())
+                .collect();
+            // テストで順番を決めるため、ID で並べる（本物の SQL は順番を決めない）。
+            ids.sort();
+            if let Some(used) = &self.used_after_listing {
+                let now = self.now_millis();
+                self.workspaces.lock().unwrap().insert(used.clone(), now);
+            }
+            ids
+        }))
+    }
+
+    fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.broken_records {
+            return ready(Err(BackendError("壊れた記録".into())));
+        }
+        ready(self.check().map(|()| {
+            self.photo_uploads.lock().unwrap().retain(|&t| t >= before);
+            self.workspace_creations
+                .lock()
+                .unwrap()
+                .retain(|&t| t >= before);
         }))
     }
 
@@ -373,9 +438,19 @@ impl Backend for FakeBackend {
     fn delete_workspace(
         &self,
         workspace: &WorkspaceId,
+        last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
         ready(self.check().map(|()| {
-            self.workspaces.lock().unwrap().remove(workspace.as_str())?;
+            // 本物の SQL と同じく、印のあるワークスペースと、last_used_before より後に使われたワークスペースは消さない。
+            let mut workspaces = self.workspaces.lock().unwrap();
+            let last_used_at = *workspaces.get(workspace.as_str())?;
+            if self.pinned.lock().unwrap().contains(workspace.as_str())
+                || last_used_before.is_some_and(|before| last_used_at >= before)
+            {
+                return None;
+            }
+            workspaces.remove(workspace.as_str());
+            drop(workspaces);
             // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
             let removed = self.workspace_photo_keys(workspace);
             self.recipes

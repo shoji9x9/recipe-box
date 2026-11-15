@@ -1,5 +1,6 @@
 //! router を通した API のテスト。D1 などの代わりに [`fake::FakeBackend`] を使う。
 
+mod cleanup;
 mod fake;
 mod photos;
 mod recipes;
