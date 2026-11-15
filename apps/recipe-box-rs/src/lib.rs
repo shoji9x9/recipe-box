@@ -79,6 +79,7 @@ fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
 /// 本文の大きさは API と同じ上限にする。`Content-Length` の無い本文（chunked）も、ここで止める。
 /// CSS・htmx・アイコンは静的アセット（`public/`）として Worker の外で配るので、ここには無い。
 fn screen_routes<B: Backend>(backend: B) -> Router<B> {
+    let check_routes = screen_check_routes(backend.clone());
     Router::new()
         .route("/", get(screen::index::<B>))
         .route("/recipes", post(screen::create::<B>))
@@ -106,7 +107,20 @@ fn screen_routes<B: Backend>(backend: B) -> Router<B> {
             screen::guard_writes::<B>,
         ))
         .route_layer(middleware::from_fn(screen::security_headers))
+        .merge(check_routes)
         .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
+}
+
+/// 画面のフォームを確かめるだけのルート。ワークスペースを読まないので、[`screen::identify`] を通さない。
+/// 送り元・回数・本文の大きさは、ほかの画面の POST と同じく確かめる。
+fn screen_check_routes<B: Backend>(backend: B) -> Router<B> {
+    Router::new()
+        .route("/recipes/check", post(screen::check_form))
+        .route_layer(middleware::from_fn_with_state(
+            backend,
+            screen::guard_writes::<B>,
+        ))
+        .route_layer(middleware::from_fn(screen::security_headers))
 }
 
 /// 無いパスへの応答。API（`/api` とその下）には JSON の形で、画面には本文の無い 404 で答える。

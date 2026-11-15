@@ -812,3 +812,57 @@ async fn empty_switch_id_is_asked_for() {
             .contains(r#"aria-describedby="workspace-id-error""#)
     );
 }
+
+#[tokio::test]
+async fn fields_are_checked_on_submit_then_on_blur() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    // 送信する前は、欄から離れても確かめない（mode: onSubmit）。
+    let response = screen_get(&backend, "/recipes/new", Some(&a)).await;
+    assert!(!response.body.contains("hx-post"));
+    // 送信して誤りが出た後は、どの欄も、離れたときに確かめ直す（reValidateMode: onBlur）。
+    let response = screen_post(&backend, "/recipes", Some(&a), "name=&servings=2").await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    for field in ["name", "servings", "ingredients", "steps"] {
+        assert!(
+            response.body.contains(&format!(
+                r##"hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}""##
+            )),
+            "{field}"
+        );
+    }
+    // 送信したときは、誤りの一覧にフォーカスを移す。
+    assert!(response.body.contains(r#"tabindex="-1" autofocus"#));
+}
+
+#[tokio::test]
+async fn check_route_only_validates() {
+    let backend = backend_with_workspaces();
+    // ワークスペースの Cookie が無くても確かめられ、何も保存しない。
+    let response = screen_post(&backend, "/recipes/check", None, "name=&servings=2").await;
+    // 確かめること自体は成功なので 200。誤りは一覧と欄に出す。
+    assert_eq!(response.status, StatusCode::OK);
+    assert!(response.body.contains("入力に誤りがあります（1 件）"));
+    assert!(
+        response
+            .body
+            .contains(r#"<p id="name-error" class="field-error">料理名を入力してください</p>"#)
+    );
+    // 欄から離れたときに確かめ直すので、フォーカスは動かさない。続けて確かめられるよう、属性は残す。
+    assert!(!response.body.contains("autofocus"));
+    assert!(response.body.contains(r#"hx-post="/recipes/check""#));
+    // 直った欄は、誤りが消える。
+    let response = screen_post(&backend, "/recipes/check", None, "name=x&servings=2").await;
+    assert!(!response.body.contains("field-error"));
+    assert!(response.body.contains(r#"<div id="error-summary">"#));
+    assert!(backend.recipes.lock().unwrap().is_empty());
+    // ほかの画面の POST と同じく、別のサイトからは受け付けない。
+    let request = Request::post("/recipes/check")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, "https://evil.example")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("name=x"))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+}

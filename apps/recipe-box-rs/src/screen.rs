@@ -282,6 +282,21 @@ struct FormPage {
     servings_error: Option<&'static str>,
     ingredients_error: Option<&'static str>,
     steps_error: Option<&'static str>,
+    /// 送信して誤りが出た後か。後なら、欄から離れたときにも確かめ直す（reValidateMode: onBlur）。
+    revalidate: bool,
+    /// 誤りの一覧にフォーカスを移すか（送信したときだけ。欄から離れたときに移すと、入力の邪魔になる）。
+    focus_summary: bool,
+}
+
+/// フォームを確かめた段階。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Validation {
+    /// まだ送信していない。誤りは出さず、欄から離れても確かめない（mode: onSubmit）。
+    NotSubmitted,
+    /// 送信して誤りが出た。誤りの一覧にフォーカスを移し、以後は欄から離れたときにも確かめる。
+    Submitted,
+    /// 送信した後に、欄から離れて確かめ直した。フォーカスは動かさない。
+    Revalidated,
 }
 
 #[derive(Template)]
@@ -573,6 +588,7 @@ fn form_page(
     kind: &FormKind,
     form: &RecipeForm,
     errors: Vec<FieldError>,
+    validation: Validation,
 ) -> FormPage {
     let error_of = |field: &str| {
         errors
@@ -602,6 +618,8 @@ fn form_page(
         steps_error: error_of("steps"),
         errors,
         layout,
+        revalidate: validation != Validation::NotSubmitted,
+        focus_summary: validation == Validation::Submitted,
     }
 }
 
@@ -628,7 +646,7 @@ async fn save<B: Backend>(
         Err(errors) => {
             return Ok(render(
                 StatusCode::BAD_REQUEST,
-                &form_page(layout(), &kind, form, errors),
+                &form_page(layout(), &kind, form, errors, Validation::Submitted),
             ));
         }
     };
@@ -647,7 +665,13 @@ async fn save<B: Backend>(
         Ok((id, flash)) => Ok(see_other_with(&format!("/recipes/{id}"), flash)),
         Err(error @ ApiError::RecipeLimitReached) => {
             let (status, _, message) = error.parts();
-            let page = form_page(layout().with_alert(message), &kind, form, Vec::new());
+            let page = form_page(
+                layout().with_alert(message),
+                &kind,
+                form,
+                Vec::new(),
+                Validation::NotSubmitted,
+            );
             Ok(render(status, &page))
         }
         Err(error) => Err(error.into()),
@@ -665,6 +689,7 @@ pub async fn new_form<B: Backend>(
         &FormKind::New,
         &RecipeForm::default(),
         Vec::new(),
+        Validation::NotSubmitted,
     );
     Ok(render(StatusCode::OK, &page))
 }
@@ -678,6 +703,25 @@ pub async fn create<B: Backend>(
     let viewer = require_viewer(&backend, &session).await?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     save(&backend, &session, &viewer, FormKind::New, &form).await
+}
+
+/// `POST /recipes/check`: フォームを確かめるだけで、保存しない。欄から離れたときに htmx が呼ぶ。
+///
+/// 返す画面からは、離れた欄と誤りの一覧だけを使う。確かめた結果が誤りでも、確かめること自体は成功なので 200 にする。
+/// ワークスペースを読まないので、[`identify`] を通さない（D1 を読まない）。
+pub async fn check_form(
+    form: Result<Form<RecipeForm>, FormRejection>,
+) -> Result<Response, ScreenError> {
+    let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
+    let errors = recipe::check(form.to_input()).err().unwrap_or_default();
+    let page = form_page(
+        Layout::default(),
+        &FormKind::New,
+        &form,
+        errors,
+        Validation::Revalidated,
+    );
+    Ok(render(StatusCode::OK, &page))
 }
 
 /// パスのレシピの ID を読む。形が正しくなければ、API と同じく「見つからない」にする。
@@ -735,6 +779,7 @@ pub async fn edit_form<B: Backend>(
         &kind,
         &form,
         Vec::new(),
+        Validation::NotSubmitted,
     );
     Ok(render(StatusCode::OK, &page))
 }
