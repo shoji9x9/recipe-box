@@ -49,3 +49,12 @@ simple = { limit = 10, period = 60 }
 name = "WRITE_LIMITER"
 namespace_id = "1002"
 simple = { limit = 30, period = 60 }
+
+# Workers のログ。tail を開いていない間のエラー（src/error.rs の log_error。ID を伏せてから出す）を、後から見られるようにする。
+# リクエストの記録（invocation logs）は残さない。API の X-Workspace-Id（ワークスペースの ID）が残るかもしれないためである。
+# そのため、リクエストごとの cpuTime は wrangler tail で見る。
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false

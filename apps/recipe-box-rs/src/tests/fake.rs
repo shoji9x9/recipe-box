@@ -17,7 +17,7 @@ use crate::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
         WorkspaceLimits, WorkspaceStatus,
     },
-    photo::{Photo, PhotoId, object_key},
+    photo::{Photo, PhotoBody, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -68,6 +68,8 @@ pub struct FakeBackend {
     pub objects: Arc<Mutex<Objects>>,
     /// `true` なら、R2 への書き込みが失敗したことにする。
     pub broken_r2_put: bool,
+    /// `true` なら、`run_to_completion` の task を動かさずに捨てたことにする（`None` を返す）。
+    pub task_dropped: bool,
     /// `true` なら、R2 に書き込んでいる間に、別のリクエストがすべての写真の行を消したことにする。
     pub photo_rows_vanish_on_put: bool,
     /// `true` なら、R2 の削除が失敗したことにする。
@@ -107,6 +109,7 @@ impl Default for FakeBackend {
             photo_uploads: Arc::default(),
             objects: Arc::default(),
             broken_r2_put: false,
+            task_dropped: false,
             photo_rows_vanish_on_put: false,
             broken_r2_delete: false,
             photo_added_after_first_delete: false,
@@ -568,12 +571,27 @@ impl Backend for FakeBackend {
         }))
     }
 
+    // 偽物には接続が無いので、そのまま待つ。
+    async fn run_to_completion<T: Send + 'static>(
+        &self,
+        task: impl Future<Output = T> + Send + 'static,
+    ) -> Option<T> {
+        if self.task_dropped {
+            return None;
+        }
+        Some(task.await)
+    }
+
     fn put_object(
         &self,
         key: &str,
-        bytes: Vec<u8>,
+        body: PhotoBody,
         content_type: &str,
     ) -> impl Future<Output = BackendResult<()>> + Send {
+        // テストの本文は、いつもバイト列で届く（ストリームは本番の wasm でだけ作る）。
+        let PhotoBody::Bytes(bytes) = body else {
+            panic!("テストでストリームの本文は作らない");
+        };
         if self.photo_rows_vanish_on_put {
             self.photos.lock().unwrap().clear();
         }

@@ -10,6 +10,7 @@ mod limits;
 mod photo;
 mod recipe;
 mod screen;
+mod stream;
 mod workspace;
 
 use axum::{
@@ -22,7 +23,7 @@ use axum::{
 };
 use serde::Serialize;
 use tower_service::Service;
-use worker::{Context, Env, HttpRequest, ScheduleContext, ScheduledEvent, event};
+use worker::{Context, Env, ScheduleContext, ScheduledEvent, event};
 
 use crate::{backend::Backend, cloudflare::CloudflareBackend, error::ApiError};
 
@@ -192,13 +193,17 @@ async fn api_method_not_allowed() -> ApiError {
 /// Workers がリクエストを受け取るたびに呼ぶ入口。
 #[event(fetch)]
 async fn fetch(
-    req: HttpRequest,
+    req: worker::Request,
     env: Env,
-    _ctx: Context,
+    ctx: Context,
 ) -> worker::Result<axum::http::Response<axum::body::Body>> {
     // panic したときに、原因をログに出す。
     console_error_panic_hook::set_once();
-    Ok(router(CloudflareBackend::new(env)).call(req).await?)
+    // 写真のバイト列をそのまま送るリクエストは、本文を読みためずに R2 へ流す（[`stream`]）。
+    let req = stream::split_photo_body(req)?;
+    Ok(router(CloudflareBackend::with_context(env, ctx))
+        .call(req)
+        .await?)
 }
 
 /// 定期実行（wrangler.toml の Cron Trigger）の入口。使われていないワークスペースを消す（[`workspace::delete_unused`]）。

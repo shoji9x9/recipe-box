@@ -7,7 +7,7 @@ use std::fmt;
 use std::future::Future;
 
 use crate::{
-    photo::{Photo, PhotoId},
+    photo::{Photo, PhotoBody, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId},
     workspace::WorkspaceId,
 };
@@ -255,11 +255,21 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &PhotoId,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
 
+    /// `task` を、送り手との接続が切れても最後まで動かし、その結果を返す。
+    ///
+    /// 本番では Workers の `waitUntil` に渡す（接続が切れた後も 30 秒まで動く）。
+    /// 接続が切れると、待っていた側は取り消されるが、`task` は最後まで動く。
+    /// `None` は、ランタイムが `task` を最後まで動かさずに捨てたとき（`waitUntil` の 30 秒を超えたときなど）だけである。
+    fn run_to_completion<T: Send + 'static>(
+        &self,
+        task: impl Future<Output = T> + Send + 'static,
+    ) -> impl Future<Output = Option<T>> + Send;
+
     /// オブジェクトストレージ（R2）に、写真のデータを書き込む。
     fn put_object(
         &self,
         key: &str,
-        bytes: Vec<u8>,
+        body: PhotoBody,
         content_type: &str,
     ) -> impl Future<Output = BackendResult<()>> + Send;
 

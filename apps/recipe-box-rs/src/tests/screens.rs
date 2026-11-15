@@ -1037,6 +1037,68 @@ async fn post_photo(
     .await
 }
 
+/// 写真のバイト列をそのまま本文にして送る（JavaScript が 1 枚ずつ送るときの形）。
+async fn post_raw_photo(
+    backend: &FakeBackend,
+    recipe_path: &str,
+    cookie: &str,
+    content_type: &str,
+    photo: Vec<u8>,
+) -> TestResponse {
+    let request = Request::post(format!("{recipe_path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header("cf-connecting-ip", "192.0.2.1")
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, photo.len())
+        .body(Body::from(photo))
+        .unwrap();
+    send(router(backend.clone()), request).await
+}
+
+#[tokio::test]
+async fn photo_bytes_can_be_sent_without_multipart() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+
+    // JavaScript が送るので、詳細の画面に移らせず、知らせ（flash）も付けない。
+    let response = post_raw_photo(&backend, &path, &a, "image/jpeg", jpeg(10)).await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT, "{}", response.body);
+    assert_eq!(response.location, "");
+    assert!(set_cookie_named(&response, "__Host-flash").is_none());
+    {
+        let stored = backend.objects.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored.values().next().unwrap().0, jpeg(10));
+    }
+
+    // 形式は中身で決めるので、宣言が画像でも中身が違えば断る。
+    let response =
+        post_raw_photo(&backend, &path, &a, "image/jpeg", b"not an image".to_vec()).await;
+    assert_eq!(response.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    // 空の本文は、ファイルを選ばずに送ったときと同じに扱う。
+    let response = post_raw_photo(&backend, &path, &a, "image/jpeg", Vec::new()).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("追加する写真を選んでください"));
+    // 画面の本文の上限（multipart の区切りの分だけ大きい）より小さくても、写真の上限を超えれば、本文を読む前に断る。
+    // 本文は空にして `Content-Length` だけを大きくする。本文を読めば「写真を選んでください」の 400 になる。
+    let request = Request::post(format!("{path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header("cf-connecting-ip", "192.0.2.1")
+        .header(header::COOKIE, &a)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CONTENT_LENGTH, crate::photo::MAX_PHOTO_BYTES + 1)
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(response.body.contains("レシピに戻る"), "{}", response.body);
+    assert_eq!(backend.objects.lock().unwrap().len(), 1);
+}
+
 /// JPEG の先頭のバイトで始まり、全体で `size` バイトのデータ。
 fn jpeg(size: usize) -> Vec<u8> {
     let mut bytes = vec![0; size];
@@ -1136,6 +1198,32 @@ async fn photo_errors_are_shown_on_the_detail_page() {
     assert!(backend.photos.lock().unwrap().is_empty());
 }
 
+/// 画面の JavaScript（`public/assets/photo-upload.js`）が、送る前に確かめるための値。
+#[tokio::test]
+async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert!(
+        response
+            .body
+            .contains(r#"<script src="/assets/photo-upload.js" defer></script>"#)
+    );
+    assert!(response.body.contains(" data-photo-upload "));
+    assert!(response.body.contains(r#"data-remaining="5""#));
+    assert!(response.body.contains(r#"data-max-bytes="4000000""#));
+    assert!(response.body.contains(&format!(
+        r#"data-too-large="{}""#,
+        crate::screen::PHOTO_TOO_LARGE
+    )));
+
+    let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert!(response.body.contains(r#"data-remaining="4""#));
+}
+
 #[tokio::test]
 async fn add_form_is_hidden_when_the_recipe_has_the_maximum_photos() {
     let backend = backend_with_workspaces();
@@ -1147,6 +1235,7 @@ async fn add_form_is_hidden_when_the_recipe_has_the_maximum_photos() {
     }
     let response = screen_get(&backend, &path, Some(&a)).await;
     assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+    assert!(!response.body.contains("data-photo-upload"));
     assert!(response.body.contains("写真は 5 枚まで付けられます"));
     let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
     assert_eq!(response.status, StatusCode::CONFLICT);
