@@ -146,6 +146,7 @@ impl Flash {
 #[derive(Debug, Clone)]
 pub struct Session {
     /// その人のワークスペース（在ることを確かめ、最終利用日時を更新した後のもの）。
+    /// 共有のデモの ID は入らない（[`identify`] が外す。[`resolve`] などはこれを前提にする）。
     own: Option<WorkspaceId>,
     /// 自分のワークスペースを持ちながら、一時的に共有のデモを見ているか。
     viewing_demo: bool,
@@ -375,6 +376,19 @@ fn remove_cookie(response: &mut Response, name: &str) {
     add_cookie(response, name, "", 0);
 }
 
+/// 応答が、`name` の Cookie を付けるか消すか（`Set-Cookie` にあるか）。
+fn sets_cookie(response: &Response, name: &str) -> bool {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .any(|value| {
+            value
+                .to_str()
+                .is_ok_and(|text| text.starts_with(&format!("{name}=")))
+        })
+}
+
 /// Cookie の値を読む。無いか、同じ名前が 2 つ以上あれば `None`（どちらを使うか決められないため）。
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut found = None;
@@ -415,13 +429,15 @@ pub async fn identify<B: Backend>(
     let headers = request.headers();
     let flash = cookie_value(headers, FLASH_COOKIE).and_then(Flash::parse);
     let viewing_demo = cookie_value(headers, DEMO_VIEW_COOKIE) == Some("1");
-    // Cookie の ID が共有のデモの ID なら（Cookie を手で書き換えたなど）、自分のワークスペースとして扱わず、Cookie を消す。
+    // Cookie の ID が共有のデモの ID なら（Cookie を手で書き換えたなど）、自分のワークスペースとして扱わない。
     // デモでは写真を追加・削除させないなど、デモかどうかで扱いが変わるので、どの画面でも同じに決めるため。
+    // Cookie は消さない（運営がデモの ID を指定し直したときに、元のワークスペースに戻れるように）。
+    // デモの ID かどうかを応答の時間で分からないよう、ほかの ID と同じく D1 を読んでから決める。
     let demo = backend.demo_workspace_id();
     let cookie_id = cookie_workspace(headers);
     let (own, stale) = match cookie_id {
-        Some(id) if demo.as_ref() == Some(&id) => (None, true),
         Some(id) => match workspace::touch(&backend, &id).await {
+            Ok(true) if demo.as_ref() == Some(&id) => (None, false),
             Ok(true) => (Some(id), false),
             Ok(false) => (None, true),
             Err(error) => return error_page(&error),
@@ -434,9 +450,13 @@ pub async fn identify<B: Backend>(
         flash,
     });
     let mut response = next.run(request).await;
-    if stale {
+    // 消えたワークスペースの Cookie を消す。ただし、ハンドラーが同じ応答で付け直した Cookie
+    // （ワークスペースを作った・切り替えたとき）は、後ろに削除を足すと打ち消されるので、消さない。
+    if stale && !sets_cookie(&response, WORKSPACE_COOKIE) {
         remove_cookie(&mut response, WORKSPACE_COOKIE);
-        remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+        if !sets_cookie(&response, DEMO_VIEW_COOKIE) {
+            remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+        }
     }
     if flash.is_some() && !response.status().is_redirection() {
         remove_cookie(&mut response, FLASH_COOKIE);

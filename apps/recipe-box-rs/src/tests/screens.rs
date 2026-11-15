@@ -1227,15 +1227,12 @@ async fn demo_id_is_never_treated_as_own_workspace() {
     assert!(response.body.contains("見つかりません"));
     assert_eq!(set_cookie_named(&response, "__Host-workspace"), None);
 
-    // Cookie を手で書き換えても、デモとして扱い、Cookie を消す（写真の追加・削除のボタンを出さず、送られても断る）。
+    // Cookie を手で書き換えても、デモとして扱う（写真の追加・削除のボタンを出さず、送られても断る）。
+    // Cookie は消さない（運営がデモの ID を指定し直したときに、元のワークスペースに戻れるように）。
     let demo_cookie = cookie(DEMO);
     let response = screen_get(&backend, &path, Some(&demo_cookie)).await;
     assert_eq!(response.status, StatusCode::OK);
-    assert!(
-        set_cookie_named(&response, "__Host-workspace")
-            .unwrap()
-            .contains("Max-Age=0")
-    );
+    assert_eq!(set_cookie_named(&response, "__Host-workspace"), None);
     assert!(
         response.body.contains("共有のデモです"),
         "{}",
@@ -1257,10 +1254,8 @@ async fn demo_id_is_never_treated_as_own_workspace() {
     assert!(!response.body.contains(DEMO), "{}", response.body);
     assert!(!response.body.contains("自分のレシピ帳に戻る"));
     let response = screen_post(&backend, "/workspace/demo", Some(&demo_cookie), "").await;
-    assert!(
-        !set_cookie_named(&response, "__Host-demo-view")
-            .is_some_and(|cookie| cookie.starts_with("__Host-demo-view=1"))
-    );
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(set_cookies(&response), Vec::<String>::new());
 }
 
 #[test]
@@ -1287,4 +1282,35 @@ fn photo_limit_message_matches_max_photo_bytes() {
     assert!(crate::screen::PHOTO_TOO_LARGE.contains(&format!("約 {megabytes} MB")));
     let detail = include_str!("../../templates/detail.html");
     assert!(detail.contains(&format!("1 枚 {megabytes} MB まで")));
+}
+
+#[tokio::test]
+async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
+    let backend = backend_with_workspaces();
+    // Cookie の ID のワークスペースが消えている（自動削除など）まま、ほかの ID に切り替える・作る。
+    let gone = cookie("cccccccccccccccccccccccccccccccc");
+    let response = screen_post(
+        &backend,
+        "/workspace/switch",
+        Some(&gone),
+        &format!("id={WORKSPACE_B}"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let cookies: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-workspace="))
+        .collect();
+    // 消えた ID の Cookie を消す Set-Cookie を後ろに足して、新しい Cookie を打ち消さない。
+    assert_eq!(cookies.len(), 1, "{cookies:?}");
+    assert!(cookies[0].starts_with(&cookie(WORKSPACE_B)));
+
+    let response = screen_post(&backend, "/workspace", Some(&gone), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let cookies: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-workspace="))
+        .collect();
+    assert_eq!(cookies.len(), 1, "{cookies:?}");
+    assert!(!cookies[0].contains("Max-Age=0"));
 }
