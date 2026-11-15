@@ -14,7 +14,8 @@
 //   3. 公開 API で、サンプルのレシピを入れる。
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
 //      アプリと同じく D1 の行を先に入れる。書いた後に行が消えていれば（レシピが消された）R2 のデータを消し、
-//      書けなかった写真は R2 のデータを消してから行を消す。どの行からもたどれないデータを R2 に残さないためである。
+//      書けなかった写真は R2 のデータを消してから行を消す（R2 から消せなければ、行を残す）。
+//      どの行からもたどれないデータを R2 に残さないためである。R2 から消せず、行も無いデータは、手で消せるようキーを表示する。
 //   5. 公開 API で、レシピの数と、写真をすべて読めることを確かめる。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
 import { execFile } from "node:child_process";
@@ -245,7 +246,8 @@ async function r2(action, photo, ...extra) {
       return true;
     } catch (error) {
       if (attempt >= R2_ATTEMPTS) {
-        console.error(`写真 ${photo.file} の R2 の ${action} に失敗した: ${error.message}`);
+        // キーはデモの ID を伏せて表示する（手で消すときは、伏せた所にデモの ID を入れる）。
+        console.error(`写真 ${photo.file} の R2 の ${action} に失敗した（キー ${redact(key)}）: ${error.message}`);
         return false;
       }
       console.log(`写真 ${photo.file} の R2 の ${action} に失敗したので、やり直す（${attempt} 回目）`);
@@ -340,9 +342,14 @@ async function main() {
   const probeFile = join(tmpdir(), `recipe-box-seed-${probe.id}`);
   writeFileSync(probeFile, "seed");
   // 書けないと報告されても書けていることがあるので、書いた結果に関わらず消す。
-  const written = await r2("put", probe, "--file", probeFile);
-  const removed = await r2("delete", probe);
-  rmSync(probeFile, { force: true });
+  let written;
+  let removed;
+  try {
+    written = await r2("put", probe, "--file", probeFile);
+    removed = await r2("delete", probe);
+  } finally {
+    rmSync(probeFile, { force: true });
+  }
   if (!written || !removed) {
     fail("R2 に書けないか、消せない。wrangler の認証と API トークンの権限を確かめる");
   }
@@ -405,7 +412,8 @@ async function main() {
       }
     } catch (error) {
       // 途中で失敗したら、もう入れた行（R2 のデータはまだ無い）を消してから止まる。
-      await deletePhotoRows(photos);
+      // 消すのにも失敗したら、それを表示したうえで、元の失敗を伝える。
+      await deletePhotoRows(photos).catch((cleanup) => console.error(`入れた写真の行を消せなかった: ${redact(cleanup.message)}`));
       throw error;
     }
     const rows = await existingPhotoIds(photos);
@@ -419,7 +427,8 @@ async function main() {
     const after = await existingPhotoIds(inserted);
     const gone = inserted.filter((photo) => !after.has(photo.id) || failed.has(photo));
     const notDeleted = new Set(await eachPhoto(gone, (photo) => r2("delete", photo)));
-    // R2 から消せなかった写真の行は残し（データが残っていれば、行からたどれる）、消せた写真の行を消す。
+    // 書けなかった写真のうち、R2 から消せなかったものは行を残し（データが残っていても、行からたどれる）、消せたものは行を消す。
+    // レシピが消されて行の無い写真を R2 から消せなかったときは、上の r2 がキーを表示する。
     await deletePhotoRows([...failed].filter((photo) => !notDeleted.has(photo)));
     if (notDeleted.size > 0) {
       fail(`写真 ${notDeleted.size} 枚のデータを R2 から消せなかった`);
