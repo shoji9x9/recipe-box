@@ -241,6 +241,8 @@ async function wrangler(...wranglerArgs) {
   try {
     const { stdout } = await run(wranglerBin, [...wranglerArgs, target], {
       cwd: appDir,
+      // 色の制御文字を出させない（制御文字で値が分かれると、伏せられなくなるため）。
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
       maxBuffer: 16 * 1024 * 1024,
     });
     return stdout;
@@ -248,25 +250,32 @@ async function wrangler(...wranglerArgs) {
     // 理由は stderr か stdout（--json のとき）にある。Node のエラーの文は、コマンドの全体（ホームのディレクトリのパスと SQL）を
     // 含むので使わず、終了コードかシグナル（起動できなければ ENOENT などのコード）だけを添える。
     // 色の制御文字は、伏せる前に取り除く（制御文字に挟まれた値も伏せるため）。
-    const output = [error.stderr, error.stdout]
-      .filter((text) => text?.trim())
-      .join("\n")
-      .replace(ANSI_COLOR, "");
-    const status = `wrangler が失敗した（${[error.code, error.signal].filter((v) => v !== undefined && v !== null).join("・")}）`;
-    // 長いときは、頭（stderr の [ERROR]）と終わり（stdout の JSON のエラー）の両方を残す。
+    // ログのファイルの場所の行（ホームのディレクトリのパスを含む）は除く。
+    const output = redact(
+      [error.stderr, error.stdout]
+        .filter((text) => text?.trim())
+        .join("\n")
+        .replace(ANSI_COLOR, "")
+        .split("\n")
+        .filter((line) => !line.includes("Logs were written"))
+        .join("\n"),
+    );
+    const detail = [error.code, error.signal].filter((value) => value != null).join("・") || error.name;
+    // 伏せた後で切り詰める。長いときは、頭（stderr の [ERROR]）と終わり（stdout の JSON のエラー）の両方を残す。
     const text = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
-    throw new Error(redact(`${status}\n${text}`));
+    throw new Error(`wrangler が失敗した（${detail}）\n${text}`);
   }
 }
 
 // wrangler の失敗の文から、理由を短く選ぶ。wrangler は理由を JSON の "text" か「[ERROR]」の行に書き、
-// API のエラーでは、原因を [code: ...] の付いた行（JSON では notes の "text"）に書く。どれも無ければ、最初の行（終了コード）にする。
+// API のエラーでは、原因を [code: ...] の付いた行（JSON では notes の "text"）に書く。
+// どれも無ければ、wrangler の出力の最初の行（無ければ、1 行目の終了コード）にする。
 function shortReason(message) {
   const lines = message
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.includes("Logs were written"));
-  const main = lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]")) ?? lines[0] ?? "";
+    .filter((line) => line !== "");
+  const main = lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]")) ?? lines[1] ?? lines[0] ?? "";
   const code = lines.find((l) => l !== main && l.includes("[code:"));
   return (code === undefined ? main : `${main} ${code}`).slice(0, REASON_LENGTH);
 }
