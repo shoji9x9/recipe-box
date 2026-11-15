@@ -715,13 +715,15 @@ pub async fn check_form(
 ) -> Result<Response, ScreenError> {
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     let errors = recipe::check(form.to_input()).err().unwrap_or_default();
-    let page = form_page(
+    let mut page = form_page(
         Layout::default(),
         &FormKind::New,
         &form,
         errors,
         Validation::Revalidated,
     );
+    // 誤りの一覧は使わないので出さない（各欄の誤りは、欄ごとの値で出す）。
+    page.errors.clear();
     Ok(render(StatusCode::OK, &page))
 }
 

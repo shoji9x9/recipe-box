@@ -875,6 +875,10 @@ async fn fields_are_checked_on_submit_then_on_blur() {
     // 送信して誤りが出た後は、どの欄も、離れたときに確かめ直す（reValidateMode: onBlur）。
     let response = screen_post(&backend, "/recipes", Some(&a), "name=&servings=2").await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    // 誤りの一覧は送信したときに出す。欄から離れたときに入れ替えないよう、一覧を入れ替える属性は付けない。
+    assert!(response.body.contains(r#"class="error-summary""#));
+    assert!(!response.body.contains(r#"id="error-summary""#));
+    assert!(!response.body.contains("hx-select-oob"));
     for field in ["name", "servings", "ingredients", "steps"] {
         assert!(
             response.body.contains(&format!(
@@ -894,6 +898,12 @@ async fn check_route_only_validates() {
     let response = screen_post(&backend, "/recipes/check", None, "name=&servings=2").await;
     // 確かめること自体は成功なので 200。誤りは欄のすぐ下に出す（画面は欄だけを入れ替える）。
     assert_eq!(response.status, StatusCode::OK);
+    // 誤りの一覧は、欄から離れたときには出さない（入れ替えると、押している途中の一覧のリンクのクリックが失われる）。
+    assert!(
+        !response.body.contains(r#"class="error-summary""#),
+        "{}",
+        response.body
+    );
     assert!(
         response
             .body
