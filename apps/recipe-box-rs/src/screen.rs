@@ -61,7 +61,8 @@ const HX_PUSH_URL: HeaderName = HeaderName::from_static("hx-push-url");
 
 /// 画面の応答に付けるヘッダー。
 ///
-/// - CSP: スクリプトとスタイルは自分のドメインのファイル（htmx・CSS）だけにし、インラインを禁じる。
+/// - CSP: スクリプトとスタイルは自分のドメインのファイル（htmx・写真の追加の JavaScript・CSS）だけにし、インラインを禁じる。
+///   写真の追加の JavaScript は、同じドメインに写真を送り（`connect-src`）、失敗の応答の画面から知らせの文を読む。
 /// - Cache-Control: 画面にはワークスペースのデータが入るので、共有のキャッシュに残さない。
 const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
     (
@@ -285,9 +286,12 @@ struct DetailPage {
     photos: Vec<Photo>,
     /// 写真を追加・削除できるか（共有のデモではできない）。
     photos_editable: bool,
-    /// 写真をもう 1 枚追加できるか（レシピの枚数の上限に達していない）。
-    can_add_photo: bool,
     max_photos: i64,
+    /// あと何枚追加できるか。0 なら追加のフォームを出さない。画面の JavaScript は、選んだ枚数が多すぎないかを送る前に確かめる。
+    remaining_photos: i64,
+    /// 1 枚の写真の大きさの上限と、超えたときの説明。画面の JavaScript が、送る前に確かめる。
+    max_photo_bytes: usize,
+    photo_too_large: &'static str,
 }
 
 #[derive(Template)]
@@ -832,8 +836,10 @@ async fn detail_page<B: Backend>(
             photos,
             // 共有のデモでは追加・削除できない（デモの ID の Cookie は、identify が自分のワークスペースから外す）。
             photos_editable: matches!(viewer, Viewer::Own(_)),
-            can_add_photo: count < photo::MAX_PHOTOS_PER_RECIPE,
             max_photos: photo::MAX_PHOTOS_PER_RECIPE,
+            remaining_photos: (photo::MAX_PHOTOS_PER_RECIPE - count).max(0),
+            max_photo_bytes: photo::MAX_PHOTO_BYTES,
+            photo_too_large: PHOTO_TOO_LARGE,
         },
     ))
 }
@@ -885,11 +891,12 @@ pub async fn photo_file<B: Backend>(
     Ok(photo::photo_response(&backend, viewer.id(), &id, &photo_id).await?)
 }
 
-/// `POST /recipes/{id}/photos`: 写真を追加し、詳細へ戻る。
+/// `POST /recipes/{id}/photos`: 写真を追加する。
 ///
 /// 本文は 2 つの形を受け付ける。
-/// - フォーム（multipart）の `photo` の欄。JavaScript が動かなくても使える。
+/// - フォーム（multipart）の `photo` の欄。JavaScript が動かなくても使える。追加したら、詳細へ戻る（`303`）。
 /// - 写真のバイト列そのもの（JavaScript が 1 枚ずつ送る）。本番では本文を読みためずに R2 へ流す（[`stream`]）。
+///   追加したら `204` を返す。JavaScript は、すべて送り終えてから詳細の画面を読み直すので、1 枚ごとに移らせない。
 pub async fn add_photo<B: Backend>(
     State(backend): State<B>,
     Extension(session): Extension<Session>,
@@ -899,6 +906,7 @@ pub async fn add_photo<B: Backend>(
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
     let id = parse_id(&id)?;
+    let from_script = raw.is_some() || !photo::has_multipart_body(request.headers());
     let body = match read_photo_body(raw, request).await {
         Ok(Some(body)) => body,
         Ok(None) => {
@@ -915,6 +923,7 @@ pub async fn add_photo<B: Backend>(
         Err(error) => return photo_failure(&backend, &viewer, &session, &id, error).await,
     };
     match photo::add(&backend, viewer.id(), &id, body).await {
+        Ok(_) if from_script => Ok(StatusCode::NO_CONTENT.into_response()),
         Ok(_) => Ok(see_other_with(&format!("/recipes/{id}"), Flash::PhotoAdded)),
         Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
     }

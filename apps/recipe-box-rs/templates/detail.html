@@ -23,8 +23,9 @@
     {%- endif %}
     {%- if !photos_editable %}
     <p class="note">共有のデモでは、写真を追加・削除できません。</p>
-    {%- else if can_add_photo %}
-    <form method="post" action="/recipes/{{ recipe.id }}/photos" enctype="multipart/form-data" class="photo-form">
+    {%- else if remaining_photos > 0 %}
+    <form method="post" action="/recipes/{{ recipe.id }}/photos" enctype="multipart/form-data" class="photo-form"
+      data-photo-upload data-remaining="{{ remaining_photos }}" data-max-bytes="{{ max_photo_bytes }}" data-too-large="{{ photo_too_large }}">
       <label for="photo">写真を追加（JPEG・PNG・WebP、1 枚 4 MB まで、{{ max_photos }} 枚まで）</label>
       <div class="row">
         <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp">
