@@ -259,7 +259,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
     ///
     /// 本番では Workers の `waitUntil` に渡す（接続が切れた後も 30 秒まで動く）。
     /// 接続が切れると、待っていた側は取り消されるが、`task` は最後まで動く。
-    /// `None` は、`task` が結果を返さずに終わったとき（panic など）だけである。
+    /// `None` は、ランタイムが `task` を最後まで動かさずに捨てたとき（`waitUntil` の 30 秒を超えたときなど）だけである。
     fn run_to_completion<T: Send + 'static>(
         &self,
         task: impl Future<Output = T> + Send + 'static,

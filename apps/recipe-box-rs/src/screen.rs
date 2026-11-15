@@ -925,11 +925,7 @@ async fn read_photo_body(
     raw: Option<Extension<RawPhotoBody>>,
     request: Request,
 ) -> Result<Option<PhotoBody>, ApiError> {
-    let content_type = request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok());
-    if raw.is_none() && photo::is_multipart(content_type) {
+    if raw.is_none() && photo::has_multipart_body(request.headers()) {
         let multipart = Multipart::from_request(request, &()).await;
         return Ok(read_photo_field(multipart).await?.map(PhotoBody::Bytes));
     }
@@ -1241,11 +1237,7 @@ pub async fn guard_photo_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    let content_type = request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok());
-    let max_body_bytes = if photo::is_multipart(content_type) {
+    let max_body_bytes = if photo::has_multipart_body(request.headers()) {
         PHOTO_FORM_MAX_BYTES
     } else {
         photo::MAX_PHOTO_BYTES

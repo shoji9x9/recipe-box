@@ -816,17 +816,25 @@ impl Backend for CloudflareBackend {
         &self,
         task: impl Future<Output = T> + Send + 'static,
     ) -> impl Future<Output = Option<T>> + Send {
-        let ctx = self.ctx.clone();
+        // 呼んだ時点で waitUntil に登録する（返した Future を待つ前に接続が切れても、task は動く）。
+        // 定期実行（context が無い）では、task をそのまま待つ。
+        let (receiver, inline) = match &self.ctx {
+            Some(ctx) => {
+                let (sender, receiver) = futures_channel::oneshot::channel();
+                ctx.wait_until(async move {
+                    // 待っていた側が先に取り消されていれば（接続が切れたとき）、結果は捨てる。
+                    let _ = sender.send(task.await);
+                });
+                (Some(receiver), None)
+            }
+            None => (None, Some(task)),
+        };
         async move {
-            let Some(ctx) = ctx else {
-                return Some(task.await);
-            };
-            let (sender, receiver) = futures_channel::oneshot::channel();
-            ctx.wait_until(async move {
-                // 待っていた側が先に取り消されていれば（接続が切れたとき）、結果は捨てる。
-                let _ = sender.send(task.await);
-            });
-            receiver.await.ok()
+            match (receiver, inline) {
+                (Some(receiver), _) => receiver.await.ok(),
+                (None, Some(task)) => Some(task.await),
+                (None, None) => None,
+            }
         }
     }
 

@@ -151,6 +151,15 @@ pub fn is_multipart(content_type: Option<&str>) -> bool {
     content_type.is_some_and(|value| value.to_ascii_lowercase().starts_with("multipart/"))
 }
 
+/// ヘッダーの `Content-Type` が multipart か（[`is_multipart`]）。画面の上限の選び方と本文の読み方で、同じ判定を使う。
+pub fn has_multipart_body(headers: &axum::http::HeaderMap) -> bool {
+    is_multipart(
+        headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    )
+}
+
 /// 写真を追加するパス（`/recipes/<id>/photos`）なら、レシピの詳細のパスを返す。
 ///
 /// 画面の 413 のエラーの画面と、API と画面のストリームの判定（`/api` を外して使う。[`crate::stream`]）の両方が使う。
@@ -298,7 +307,7 @@ pub async fn add<B: Backend>(
         backend.clone(),
         workspace.clone(),
         recipe.clone(),
-        photo.clone(),
+        photo,
         limits,
         body,
     );
@@ -308,8 +317,7 @@ pub async fn add<B: Backend>(
         ));
         return Err(ApiError::Internal);
     };
-    result?;
-    Ok(photo)
+    result
 }
 
 /// [`add`] の 2 から 4。
@@ -320,7 +328,7 @@ async fn store<B: Backend>(
     photo: Photo,
     limits: PhotoLimits,
     body: PhotoBody,
-) -> Result<(), ApiError> {
+) -> Result<Photo, ApiError> {
     match backend
         .insert_photo(&workspace, &recipe, &photo, &limits)
         .await?
@@ -335,11 +343,12 @@ async fn store<B: Backend>(
         backend,
         workspace,
         recipe,
-        PhotoId(photo.id),
+        PhotoId(photo.id.clone()),
         body,
-        photo.content_type,
+        photo.content_type.clone(),
     )
-    .await
+    .await?;
+    Ok(photo)
 }
 
 /// [`add`] の 3 と 4。R2 に書き込み、失敗したら D1 の行を消す。書いている間に行が消されていれば、R2 のデータを消す。
