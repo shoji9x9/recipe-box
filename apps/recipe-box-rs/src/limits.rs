@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{backend::Backend, error::ApiError, recipe::MAX_BODY_BYTES};
+use crate::{backend::Backend, error::ApiError, photo::MAX_PHOTO_BYTES, recipe::MAX_BODY_BYTES};
 
 /// リクエストを送った人を見分けるのに使うヘッダー。Cloudflare が接続元の IP アドレスを入れる。
 const CLIENT_IP_HEADER: &str = "cf-connecting-ip";
@@ -30,7 +30,33 @@ pub async fn limit_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    match check_write(&backend, request.method(), request.headers()).await {
+    match check_write(
+        &backend,
+        request.method(),
+        request.headers(),
+        MAX_BODY_BYTES,
+    )
+    .await
+    {
+        Ok(()) => next.run(request).await,
+        Err(error) => error.into_response(),
+    }
+}
+
+/// 写真の API の [`limit_writes`]。本文の上限だけが違い、1 枚の写真の大きさの上限（[`MAX_PHOTO_BYTES`]）にする。
+pub async fn limit_photo_writes<B: Backend>(
+    State(backend): State<B>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match check_write(
+        &backend,
+        request.method(),
+        request.headers(),
+        MAX_PHOTO_BYTES,
+    )
+    .await
+    {
         Ok(()) => next.run(request).await,
         Err(error) => error.into_response(),
     }
@@ -44,6 +70,7 @@ pub async fn check_write<B: Backend>(
     backend: &B,
     method: &Method,
     headers: &HeaderMap,
+    max_body_bytes: usize,
 ) -> Result<(), ApiError> {
     if !matches!(*method, Method::POST | Method::PUT | Method::DELETE) {
         return Ok(());
@@ -51,15 +78,15 @@ pub async fn check_write<B: Backend>(
     if !backend.allow_write(&client_key(headers)).await? {
         return Err(ApiError::TooManyRequests);
     }
-    check_body_size(headers)
+    check_body_size(headers, max_body_bytes)
 }
 
-/// `Content-Length` が本文の上限を超えていれば `PayloadTooLarge`。本文を読む前に断るために使う。
-pub fn check_body_size(headers: &HeaderMap) -> Result<(), ApiError> {
+/// `Content-Length` が本文の上限（`max_bytes`）を超えていれば `PayloadTooLarge`。本文を読む前に断るために使う。
+pub fn check_body_size(headers: &HeaderMap, max_bytes: usize) -> Result<(), ApiError> {
     // usize に収まらないほど大きい値も、上限を超えたものとして扱う。
-    if declared_length(headers).is_some_and(|length| {
-        usize::try_from(length).map_or(true, |length| length > MAX_BODY_BYTES)
-    }) {
+    if declared_length(headers)
+        .is_some_and(|length| usize::try_from(length).map_or(true, |length| length > max_bytes))
+    {
         return Err(ApiError::PayloadTooLarge);
     }
     Ok(())

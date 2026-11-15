@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backend::{Backend, RecipePage},
     error::ApiError,
-    id,
+    id, photo,
     workspace::{Workspace, WorkspaceId},
 };
 
@@ -437,8 +437,22 @@ pub async fn delete<B: Backend>(
     id: Result<Path<String>, PathRejection>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_recipe_id(id)?;
-    if backend.delete_recipe(&workspace.id, &id).await? {
-        Ok(StatusCode::NO_CONTENT)
+    remove(&backend, &workspace.id, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// レシピと、その写真を消す。API と画面の両方から使う。
+///
+/// 写真のデータ（R2）を先に消してから、レシピを消す（写真の行は、レシピと一緒に D1 が消す）。
+/// 逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るため。
+pub async fn remove<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    id: &RecipeId,
+) -> Result<(), ApiError> {
+    photo::remove_objects_of_recipe(backend, workspace, id).await?;
+    if backend.delete_recipe(workspace, id).await? {
+        Ok(())
     } else {
         Err(ApiError::RecipeNotFound)
     }

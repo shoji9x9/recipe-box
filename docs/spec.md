@@ -122,7 +122,8 @@ stateDiagram-v2
 | --- | --- |
 | `workspaces` | ワークスペース。最終利用日時と、自動削除の対象から外す印を持つ |
 | `recipes` | レシピ。`workspace_id`、`name`（料理名・必須）、`search_name`（検索用。料理名の ASCII の英字だけを小文字にしたもので、アプリが作る）、`servings`（何人分・1〜100 の整数）、`ingredients`（材料・複数行）、`steps`（手順・複数行）、作った日時と最後に変えた日時 |
-| 写真 | レシピの写真。`workspace_id`・`recipe_id`・形式・大きさ・保管先のキーなど（列は実装のときに決める） |
+| `photos` | 写真の情報。`workspace_id`・`recipe_id`・`id`・`content_type`（形式）・`size`（バイト）・`created_at`。写真のデータは R2 のキー `photos/<workspace_id>/<recipe_id>/<id>` に置く。レシピを消すと行も消える（`ON DELETE CASCADE`） |
+| `photo_uploads` | 写真を追加した記録（`id`・`created_at`）。アプリ全体の 1 日の追加の回数を数える。写真を消しても残す |
 
 ## API
 
@@ -134,9 +135,10 @@ stateDiagram-v2
 | `GET /api/recipes/:id` | レシピの取得 |
 | `PUT /api/recipes/:id` | レシピの更新 |
 | `DELETE /api/recipes/:id` | レシピの削除（写真も消す） |
+| `GET /api/recipes/:id/photos` | レシピの写真の一覧 |
 | `POST /api/recipes/:id/photos` | 写真を 1 枚追加する |
-
-写真の一覧・取得・削除のパスは、実装のときに決める。
+| `GET /api/recipes/:id/photos/:photo_id` | 写真のデータ |
+| `DELETE /api/recipes/:id/photos/:photo_id` | 写真の削除 |
 
 失敗したときは、状態コードと次の形の本文を返す。`error` は機械向けのコード、`message` は人向けの説明である。
 入力の項目が正しくないときだけ、どの項目かを `field` で示す。
@@ -151,15 +153,20 @@ stateDiagram-v2
 | `400` | `workspace_id_invalid` | `X-Workspace-Id` の形が正しくないか、2 つ以上ある |
 | `400` | `invalid_body` | 本文が JSON として読めない、項目の型が違う（`servings` が文字列など）、`Content-Type: application/json` が無い。JSON として正しくても、64 ビットの浮動小数点数で表せない大きさの数（`1e400` など）と、対になっていないサロゲートのエスケープ（`"\ud800"` など）も、読めないものとして扱う |
 | `400` | `invalid_field` | 項目の値が正しくない（下の「レシピの項目」） |
+| `403` | `demo_photos_disabled` | 共有のデモのワークスペースに、写真を追加するか、写真を消そうとした |
 | `404` | `workspace_not_found` | そのワークスペースが無い |
 | `404` | `recipe_not_found` | そのワークスペースに、その ID のレシピが無い（ID の形が正しくないときと、ほかのワークスペースのレシピを含む） |
+| `404` | `photo_not_found` | そのレシピに、その ID の写真が無い（ID の形が正しくないときを含む） |
 | `404` | `not_found` | `/api` で始まるが、定義されていないパス |
 | `405` | `method_not_allowed` | パスが受け付けないメソッド |
 | `409` | `recipe_limit_reached` | ワークスペースのレシピが上限（40 件）に達していて、登録できない |
-| `413` | `payload_too_large` | 本文が 128 KiB（131,072 バイト）を超える。`Content-Length` で超えると分かれば、本文を読まずに断る |
+| `409` | `photo_limit_reached` | レシピの写真が上限（5 枚）に達していて、追加できない |
+| `409` | `photo_storage_limit_reached` | 追加すると、ワークスペースの写真の大きさの合計が上限（100,000,000 バイト）を超える |
+| `413` | `payload_too_large` | 本文が 128 KiB（131,072 バイト）を超える。写真の API では、写真が 4,000,000 バイトを超える。`Content-Length` で超えると分かれば、本文を読まずに断る |
+| `415` | `unsupported_photo_type` | 写真が JPEG・PNG・WebP のどれでもない（中身の先頭のバイトで決める） |
 | `429` | `too_many_requests` | ワークスペースを作る回数か、書き込む API の回数の制限を超えた |
 | `500` | `internal_error` | サーバーの中の失敗（詳しいことはログにだけ出す） |
-| `503` | `capacity_reached` | アプリ全体のワークスペースの数か、1 日に作る数が上限に達していて、新しく作れない |
+| `503` | `capacity_reached` | アプリ全体の量が上限に達していて、新しく作れない。ワークスペースの数・1 日に作る数・写真の大きさの合計・1 日に写真を追加する回数（docs/security.md の「費用の対策」） |
 
 ### レシピの API
 
@@ -210,6 +217,32 @@ stateDiagram-v2
 検索には `LIKE` ではなく `instr`（SQLite の関数）を使う。D1 は `LIKE` のパターンを 50 バイトまでに制限していて、日本語の検索の文字列が 16 文字ほどで通らないためである（AGENTS.md の SQL の例外）。
 大文字と小文字は、DB の `LOWER` を使わずにそろえる（`LOWER` は SQLite と PostgreSQL で ASCII 以外の扱いが違うため）。料理名の ASCII の英字だけを小文字にした列（`search_name`）をアプリで作って保存し、検索の文字列にも同じ変換をしてから比べる。
 
+### 写真の API
+
+写真の API も、`X-Workspace-Id` で指定したワークスペースのレシピの写真だけを扱う。写真の情報は次の形の JSON で返す。
+
+```json
+{
+  "id": "0123456789abcdef0123456789abcdef",
+  "content_type": "image/jpeg",
+  "size": 1048576,
+  "created_at": 1794635048685
+}
+```
+
+| メソッドとパス | 成功したとき |
+| --- | --- |
+| `GET /api/recipes/:id/photos` | `200` と `{"photos": [<写真の情報>, ...]}`。追加した順（同じ日時なら ID の順） |
+| `POST /api/recipes/:id/photos` | `201` と追加した写真の情報。本文は写真のバイト列そのもの（multipart にしない） |
+| `GET /api/recipes/:id/photos/:photo_id` | `200` と写真のバイト列。`Content-Type` は保存した形式 |
+| `DELETE /api/recipes/:id/photos/:photo_id` | `204`（本文なし） |
+
+- 形式は、本文の先頭のバイト（マジックナンバー）で決める。`Content-Type` ヘッダーは見ない。宣言と中身が違うファイルを、別の形式として配らないためである。
+- 写真のデータを返すときは、`Cache-Control: private, max-age=31536000, immutable`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; sandbox` を付ける。写真の ID は使い回さず、中身も変わらないので、ブラウザーに長く残させる。
+- 失敗の理由が 2 つ以上あるときは、次の順に確かめる。
+  書き込みの回数（`too_many_requests`）→ `Content-Length`（`payload_too_large`）→ ワークスペース → パスの ID の形（`recipe_not_found`・`photo_not_found`）→ 本文の読み取り（`payload_too_large`）→ デモか（`demo_photos_disabled`）→ 大きさ（`payload_too_large`）→ 形式（`unsupported_photo_type`）→ レシピが在るか（`recipe_not_found`）→ レシピの枚数（`photo_limit_reached`）→ ワークスペースの合計（`photo_storage_limit_reached`）→ アプリ全体の上限（`capacity_reached`）。
+- レシピを消すと、その写真も消える。
+
 ## ワークスペースによるデータの分離
 
 - `POST /api/workspaces` が、推測できない 128 ビットの乱数の ID を発行し、`201` と `{"id": "<ID>"}` を返す。ID は 16 進数の小文字 32 文字。
@@ -226,16 +259,21 @@ stateDiagram-v2
 ## 写真
 
 - 1 つのレシピに複数の写真を付けられる。
-- 上限は 1 枚 4,000,000 バイト以下、1 レシピ 5 枚まで。形式は JPEG・PNG・WebP。
+- 上限は 1 枚 4,000,000 バイト以下、1 レシピ 5 枚まで、1 ワークスペースの合計 100,000,000 バイトまで。形式は JPEG・PNG・WebP。
+  アプリ全体の上限（合計の大きさと、1 日の追加の回数）は docs/security.md の「費用の対策」にある。
 - 大きさが上限を超えたら 413、6 枚目を追加しようとしたら 409 を返す。
 - リライト前は写真を R2 に、リライト後は DB に保管する。保管先が変わっても、API の仕様は変えない。
+- 写真のデータを R2 に書き込む前に、D1 に行と追加の記録を入れて上限を判定する（1 つのトランザクションで、同時に追加されても上限を超えない）。
+  R2 への書き込みが失敗したら、行を消す。追加の記録は残し、1 日の回数に数える。
+- 写真を消すときと、レシピを消すときは、R2 のデータを先に消してから D1 の行を消す。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためである。
+- 共有のデモでは、写真を追加・削除できない（API でも `403`）。デモの ID が漏れても、R2 に書き込ませないためである。
 
 ## デモ用のデータ
 
 - 自動削除の対象から外した、デモ用のワークスペースを 1 つ持つ。自動削除から外す印は、管理用のコマンドでだけ付けられる。
 - seed（`mise run seed`）が、デモ用のワークスペースのレシピを全部消してから、サンプルのレシピと写真を入れ直す。投入先はローカルと本番から選べる。
-- seed は公開 API だけを呼ぶので、リライト後も同じ seed を使える。
+- seed は、レシピを公開 API で入れる。写真は、デモでは API で追加できないので、wrangler で D1 と R2 に直接入れる。リライトの後は、写真を入れる部分を書き直す。
 - サンプルは `seed/recipes.json` と `seed/photos/` に置く。写真は自作かパブリックドメインのものだけを使う。
 - デモ用のワークスペースの ID は公開しない。Worker の secret の `DEMO_WORKSPACE_ID` と、GitHub の Secrets などに置く。
   設定されていて、そのワークスペースがあれば、Cookie の無い人の画面にデモを出す（「画面」）。
-- デモは誰でも読み書きできる共有のものなので、毎日決まった時刻に seed でリセットする（Issue #8）。デモでは写真を追加させない（Issue #6）。
+- デモは誰でも読み書きできる共有のものなので、毎日決まった時刻に seed でリセットする（Issue #8）。デモでは写真を追加・削除させない（「写真」）。

@@ -821,13 +821,7 @@ pub async fn delete<B: Backend>(
     let viewer = require_viewer(&backend, &session).await?;
     let id = parse_id(&id)?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
-    if !backend
-        .delete_recipe(viewer.id(), &id)
-        .await
-        .map_err(ApiError::from)?
-    {
-        return Err(ScreenError::Api(ApiError::RecipeNotFound));
-    }
+    recipe::remove(&backend, viewer.id(), &id).await?;
     // 戻り先は、検索の条件とページの番号から作り直す（送られた URL をそのまま使わない）。
     // 正しくない値なら、一覧の最初に戻す。
     let mut params = Vec::new();
@@ -989,7 +983,14 @@ pub async fn guard_writes<B: Backend>(
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
             },
         )
-    } else if let Err(error) = check_write(&backend, request.method(), request.headers()).await {
+    } else if let Err(error) = check_write(
+        &backend,
+        request.method(),
+        request.headers(),
+        recipe::MAX_BODY_BYTES,
+    )
+    .await
+    {
         error_page(&error)
     } else {
         next.run(request).await
@@ -1017,7 +1018,7 @@ pub async fn guard_check(request: Request, next: Next) -> Response {
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
             },
         )
-    } else if let Err(error) = check_body_size(request.headers()) {
+    } else if let Err(error) = check_body_size(request.headers(), recipe::MAX_BODY_BYTES) {
         error_page(&error)
     } else {
         next.run(request).await

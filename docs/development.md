@@ -24,7 +24,7 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp を入れ、leftho
 | --- | --- |
 | `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
 | `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
-| `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う |
+| `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 と R2（をまねたもの）を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う |
 | `mise run test` | Rust のテストを実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
@@ -50,13 +50,14 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `pr-title.yml` | PR のタイトルが Conventional Commits の形かを調べる（タイトルを直したときにも動く） |
 | `codeql.yml` | Rust のコードと workflow を CodeQL で解析する |
 | `claude-review.yml` | PR を Claude Code でレビューする |
-| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。先に D1 にマイグレーションを当てる |
+| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。D1 と R2 のバケットが無ければ作り、先に D1 にマイグレーションを当てる |
 | `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする |
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
 
 main は、ブランチルールで PR を通さない変更と強制 push を禁止し、CI の成功を必須にしている。
 
 D1 のデータベース（`recipe-box`）は、無ければ `deploy.yml` が作る。`wrangler.toml` にはアカウントごとの `database_id` を書かず、wrangler に名前で探させる。
+写真を置く R2 のバケット（`recipe-box-photos`）も、無ければ `deploy.yml` が作る。ローカル（`mise run dev`）では、wrangler が R2 をまねたものを `.wrangler/state` に作る。
 
 本番は `<名前>.workers.dev` で公開する（`wrangler.toml` の `workers_dev = true`）。版ごとのプレビューの URL は、誰でも開ける URL を増やさないよう作らない（`preview_urls = false`）。
 
@@ -66,7 +67,7 @@ GitHub の Settings → Environments に、次の値を置く。
 
 | Environment | 種類 | 名前 | 値 |
 | --- | --- | --- | --- |
-| `production` | secret | `CLOUDFLARE_API_TOKEN` | Cloudflare のダッシュボードの「Account API tokens」で作る。権限は「Edit Cloudflare Workers」と「D1 Edit」にし、対象はデプロイするアカウントだけに絞る |
+| `production` | secret | `CLOUDFLARE_API_TOKEN` | Cloudflare のダッシュボードの「Account API tokens」で作る。権限は「Edit Cloudflare Workers」のテンプレート（R2 の書き込みの権限「Workers R2 Storage Write」を含む）と「D1 Edit」にし、対象はデプロイするアカウントだけに絞る |
 | `production` | secret | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID。認証情報ではないが、公開リポジトリの Actions のログに出さないよう secret にする |
 | `claude-review` | secret | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` で作る |
 

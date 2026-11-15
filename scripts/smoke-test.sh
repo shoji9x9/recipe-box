@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ローカルで動かした Worker（wrangler dev）に API を呼び、実際の D1 を通して動くかを確かめる。
-# 単体テスト（cargo test）は D1 の代わりに偽物を使うので、SQL そのものはここで確かめる。
+# ローカルで動かした Worker（wrangler dev）に API を呼び、実際の D1 と R2 を通して動くかを確かめる。
+# 単体テスト（cargo test）は D1 と R2 の代わりに偽物を使うので、SQL と R2 の読み書きそのものはここで確かめる。
 #
 # 使い方: scripts/smoke-test.sh [ベースの URL]（省略すると http://localhost:8787）
 # ワークスペースとレシピを作るので、本番には使わない。
@@ -12,7 +12,9 @@ set -euo pipefail
 
 base_url="${1:-http://localhost:8787}"
 body_file="$(mktemp)"
-trap 'rm -f "$body_file"' EXIT
+photo_file="$(mktemp)"
+big_photo_file="$(mktemp)"
+trap 'rm -f "$body_file" "$photo_file" "$big_photo_file"' EXIT
 
 fail() {
   echo "::error::$*" >&2
@@ -25,7 +27,8 @@ fail() {
 # 制限そのものを確かめるときだけ false にする。
 retry_on_write_limit=true
 
-# request <メソッド> <パス> [ワークスペースの ID] [JSON の本文]
+# request <メソッド> <パス> [ワークスペースの ID] [JSON の本文、または @<ファイル>]
+# 本文が @ で始まれば、そのファイルの中身をバイト列のまま送る（写真の API）。
 # 応答の本文を $body_file に書き、状態コードを $status に入れる。
 request() {
   local method="$1" path="$2" workspace="${3:-}" body="${4:-}"
@@ -33,7 +36,9 @@ request() {
   if [ -n "$workspace" ]; then
     args+=(-H "X-Workspace-Id: $workspace")
   fi
-  if [ -n "$body" ]; then
+  if [[ "$body" == @* ]]; then
+    args+=(-H 'Content-Type: application/octet-stream' --data-binary "$body")
+  elif [ -n "$body" ]; then
     args+=(-H 'Content-Type: application/json' --data "$body")
   fi
   local attempt
@@ -66,7 +71,8 @@ expect 200 "GET /api/health"
 [ "$(cat "$body_file")" = '{"status":"ok"}' ] || fail "/api/health の本文が違う"
 request GET /
 expect 200 "GET /"
-grep -q 'はじめる' "$body_file" || fail "Cookie が無いのに / が「はじめる」画面を返さない"
+# デモ（.dev.vars の DEMO_WORKSPACE_ID）があればデモを、無ければ「はじめる」画面を返す。
+grep -q -e 'はじめる' -e '共有のデモ' "$body_file" || fail "Cookie が無いのに / が「はじめる」画面もデモも返さない"
 # CSS と htmx は静的アセットとして配る（wrangler.toml の [assets] と、ビルドでの htmx のコピーを確かめる）。
 # 画面の動きは単体テスト（src/tests/screens.rs）で確かめるので、ここでは操作しない。
 request GET /assets/style.css
@@ -211,11 +217,34 @@ expect 400 "X-Workspace-Id が無い"
 request GET /api/recipes ffffffffffffffffffffffffffffffff
 expect 404 "無いワークスペース"
 
+echo "写真（R2）"
+# PNG の先頭のバイトで始まる、小さなデータ。
+printf '\x89PNG\r\n\x1a\nsmoke-test' >"$photo_file"
+request POST "/api/recipes/$recipe_id/photos" "$workspace_a" "@$photo_file"
+expect 201 "POST /api/recipes/{id}/photos"
+[ "$(json .content_type)" = image/png ] || fail "写真の形式が image/png でない"
+photo_id="$(json .id)"
+request GET "/api/recipes/$recipe_id/photos" "$workspace_a"
+expect 200 "GET /api/recipes/{id}/photos"
+[ "$(json '.photos | length')" = 1 ] || fail "写真の一覧が 1 件でない"
+request GET "/api/recipes/$recipe_id/photos/$photo_id" "$workspace_a"
+expect 200 "GET /api/recipes/{id}/photos/{photo_id}"
+cmp -s "$body_file" "$photo_file" || fail "R2 から読んだ写真が、送ったものと違う"
+request GET "/api/recipes/$recipe_id/photos/$photo_id" "$workspace_b"
+expect 404 "GET /api/recipes/{id}/photos/{photo_id}（B から）"
+# 4,000,000 バイトを 1 バイト超える写真は、Content-Length で断る。
+head -c 4000001 /dev/zero >"$big_photo_file"
+request POST "/api/recipes/$recipe_id/photos" "$workspace_a" "@$big_photo_file"
+expect 413 "4,000,001 バイトの写真"
+
 echo "削除"
 request DELETE "/api/recipes/$recipe_id" "$workspace_a"
 expect 204 "DELETE /api/recipes/{id}"
 request GET "/api/recipes/$recipe_id" "$workspace_a"
 expect 404 "消したレシピ"
+# レシピを消すと、写真の行も（D1 の ON DELETE CASCADE で）消える。
+request GET "/api/recipes/$recipe_id/photos/$photo_id" "$workspace_a"
+expect 404 "消したレシピの写真"
 
 # 最後に、回数の制限（Rate Limiting）を確かめる。
 if [ "${CHECK_RATE_LIMIT:-}" = 1 ]; then
