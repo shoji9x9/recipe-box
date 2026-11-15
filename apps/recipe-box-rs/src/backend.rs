@@ -1,4 +1,4 @@
-//! アプリが外の世界（DB・レート制限・乱数・時計）に頼る部分。
+//! アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分。
 //!
 //! 本番では Cloudflare の機能を使う実装（`crate::cloudflare`）を、テストではメモリの中で動く偽物を使う。
 //! D1 などは wasm の上でしか動かないので、こうして分けておくと、普通の `cargo test` で API を確かめられる。
@@ -7,6 +7,7 @@ use std::fmt;
 use std::future::Future;
 
 use crate::{
+    photo::{Photo, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId},
     workspace::WorkspaceId,
 };
@@ -33,6 +34,35 @@ pub struct WorkspaceLimits {
     pub max_created_since: i64,
     /// 数え始める日時（UNIX 時間のミリ秒）。
     pub since: i64,
+}
+
+/// 写真を追加するときに確かめる上限。
+#[derive(Debug, Clone, Copy)]
+pub struct PhotoLimits {
+    /// 1 つのレシピの写真の数の上限。
+    pub max_per_recipe: i64,
+    /// 1 つのワークスペースの写真の大きさの合計の上限（バイト）。
+    pub max_bytes_per_workspace: i64,
+    /// アプリ全体の写真の大きさの合計の上限（バイト）。
+    pub max_bytes_total: i64,
+    /// `since` 以後にアプリ全体で写真を追加した回数の上限。
+    pub max_uploads_since: i64,
+    /// 数え始める日時（UNIX 時間のミリ秒）。
+    pub since: i64,
+}
+
+/// 写真の行を保存した結果。保存しなかったときは、その理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhotoInsert {
+    Inserted,
+    /// そのワークスペースに、そのレシピが無い。
+    RecipeNotFound,
+    /// レシピの写真の数が上限に達している。
+    RecipeFull,
+    /// 足すと、ワークスペースの写真の大きさの合計が上限を超える。
+    WorkspaceFull,
+    /// 足すと、アプリ全体の写真の大きさの合計か、1 日の追加の回数が上限を超える。
+    CapacityReached,
 }
 
 /// レシピの一覧の 1 ページ分。
@@ -131,10 +161,61 @@ pub trait Backend: Clone + Send + Sync + 'static {
         now: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
 
-    /// レシピを消す。レシピが無ければ `false` を返す。
+    /// レシピと、その写真の行を消し、消した写真の ID を返す。レシピが無ければ `None` を返す。
+    /// R2 のデータは消さない（呼び出し側が、返した ID で消す）。
+    ///
+    /// 写真の ID を読むことと消すことを 1 つのトランザクションで行う。間に写真が追加されて、
+    /// 消した後の R2 に、どの行からもたどれないデータが残るのを防ぐため。
     fn delete_recipe(
         &self,
         workspace: &WorkspaceId,
         id: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send;
+
+    /// 写真の行と、追加の記録を保存する。`limits` のどれかに当たれば保存せず、その理由を返す。
+    /// 上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えないようにする。
+    fn insert_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        photo: &Photo,
+        limits: &PhotoLimits,
+    ) -> impl Future<Output = BackendResult<PhotoInsert>> + Send;
+
+    /// レシピの写真の行を、追加した順（同じ日時なら ID の順）に返す。
+    fn list_photos(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Vec<Photo>>> + Send;
+
+    /// 写真の行を 1 件返す。無ければ `None` を返す。
+    fn get_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+    ) -> impl Future<Output = BackendResult<Option<Photo>>> + Send;
+
+    /// 写真の行を消す。行が無ければ `false` を返す。追加の記録は消さない。
+    fn delete_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
+
+    /// オブジェクトストレージ（R2）に、写真のデータを書き込む。
+    fn put_object(
+        &self,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> impl Future<Output = BackendResult<()>> + Send;
+
+    /// オブジェクトストレージから、写真のデータを読む。無ければ `None` を返す。
+    fn get_object(&self, key: &str) -> impl Future<Output = BackendResult<Option<Vec<u8>>>> + Send;
+
+    /// オブジェクトストレージから、写真のデータを消す。無いキーは無視する。
+    fn delete_objects(&self, keys: Vec<String>) -> impl Future<Output = BackendResult<()>> + Send;
 }

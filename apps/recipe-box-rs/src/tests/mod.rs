@@ -1,6 +1,7 @@
 //! router を通した API のテスト。D1 などの代わりに [`fake::FakeBackend`] を使う。
 
 mod fake;
+mod photos;
 mod recipes;
 mod routing;
 mod screens;
@@ -28,6 +29,8 @@ pub struct TestResponse {
     /// すべてのヘッダー。
     pub headers: axum::http::HeaderMap,
     pub body: String,
+    /// 本文のバイト列（写真など、UTF-8 でない本文を確かめるときに使う）。
+    pub bytes: Vec<u8>,
 }
 
 impl TestResponse {
@@ -59,7 +62,8 @@ pub async fn send(app: Router, request: Request<Body>) -> TestResponse {
         allow,
         location,
         headers,
-        body: String::from_utf8(bytes.to_vec()).unwrap(),
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+        bytes: bytes.to_vec(),
     }
 }
 
