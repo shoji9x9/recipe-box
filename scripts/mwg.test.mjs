@@ -32,15 +32,12 @@ describe("mwg.sh", () => {
     ["search", "dialog element"],
     ["list"],
     ["retrieve", "dialog"],
-    ["--skill-version", "2026_10_30-58d055df", "search", "dialog"],
-    ["--skill-version=2026_10_30-58d055df", "retrieve", "dialog"],
+    ["search", "dialog", "--skill-version", "2026_10_30-58d055df"],
+    ["retrieve", "dialog", "--skill-version=2026_10_30-58d055df"],
+    // サブコマンドが無ければ、ツールは版か使い方を出すだけである。
     ["-v"],
     ["-h"],
-    // サブコマンドが無ければ、ツールは使い方を出すだけである。
     [],
-    ["--choose"],
-    ["--skill-version", "x"],
-    ["--", "search", "dialog"],
   ]) {
     test(`[${args.join(", ")}] は、利用統計を止めて固定した版で動かす`, () => {
       const result = run(...args);
@@ -55,14 +52,14 @@ describe("mwg.sh", () => {
     ["uninstall"],
     ["legacy-scan", "."],
     ["set-allow-origin-trials"],
-    // --skill-version の値を読み飛ばした後のサブコマンドで決める。
-    ["--skill-version", "search", "install"],
-    ["--skill-version=x", "update"],
-    // ツールの parseArgs と同じく、-- の後は - で始まる語も、- だけの語も、位置の引数（サブコマンド）になる。
-    ["--", "install"],
-    ["--", "-v", "install"],
+    // サブコマンドは最初の引数に限るので、前にオプションや空の語があれば、何であっても断る。
+    ["--skill-version", "x", "search"],
+    ["--skill-version=x", "search"],
+    ["--", "search"],
     ["-", "search"],
+    ["", "install"],
     ["-v", "install"],
+    ["--choose"],
   ]) {
     test(`[${args.join(", ")}] は断る`, () => {
       const result = run(...args);

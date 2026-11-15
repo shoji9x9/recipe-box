@@ -6,35 +6,19 @@
 #   パッケージを npx で取ってきて、スキルを書き換えるため。
 set -euo pipefail
 
-# ツール（Node の parseArgs）と同じく、オプションを除いた最初の引数をサブコマンドとみなす。
-# - --skill-version は値を 1 つ取る。
-# - -- の後は、- で始まる語も位置の引数になる。- だけの語も位置の引数である。
-command=""
-skip_value=false
-after_double_dash=false
-for arg in "$@"; do
-  if [[ "$after_double_dash" == true ]]; then
-    command="$arg"
-    break
-  elif [[ "$skip_value" == true ]]; then
-    skip_value=false
-  elif [[ "$arg" == "--" ]]; then
-    after_double_dash=true
-  elif [[ "$arg" == "--skill-version" ]]; then
-    skip_value=true
-  elif [[ "$arg" == "-" || "$arg" != -* ]]; then
-    command="$arg"
-    break
-  fi
-done
-case "$command" in
-  search | list | retrieve) ;;
-  # サブコマンドが無ければ、ツールは版（-v）か使い方を出すだけである。
-  "") ;;
-  *)
-    echo "使えるのは search・list・retrieve だけです（scripts/mwg.sh）" >&2
-    exit 2
-    ;;
-esac
+# サブコマンドは最初の引数に限る（SKILL.md の使い方も、サブコマンドを先に書く）。
+# ツールの引数の読み方（Node の parseArgs と、値を取るオプション）を写すと、ツールの版でずれるため。
+# 引数が無いか、-v・-h だけなら、ツールは版か使い方を出すだけである。
+if [[ $# -eq 0 ]] || { [[ $# -eq 1 ]] && [[ "$1" == "-v" || "$1" == "-h" ]]; }; then
+  :
+else
+  case "$1" in
+    search | list | retrieve) ;;
+    *)
+      echo "使えるのは search・list・retrieve だけで、サブコマンドを最初に書きます（scripts/mwg.sh）" >&2
+      exit 2
+      ;;
+  esac
+fi
 export DISABLE_TELEMETRY=1
 exec pnpm exec modern-web-guidance "$@"
