@@ -879,6 +879,15 @@ async fn delete_asks_with_a_dialog_without_javascript() {
         assert!(response.body.contains("元には戻せません"));
         assert!(!response.body.contains("hx-confirm"));
     }
+    // 一覧から消すときは、戻る先の検索の条件とページを一緒に送る。詳細からは送らない。
+    let hidden_q = r#"<input type="hidden" name="q" value="カ">"#;
+    let hidden_page = r#"<input type="hidden" name="page" value="1">"#;
+    let response = screen_get(&backend, "/?q=%E3%82%AB", Some(&cookie(WORKSPACE_A))).await;
+    assert!(response.body.contains(hidden_q), "{}", response.body);
+    assert!(response.body.contains(hidden_page));
+    let response = screen_get(&backend, &path, Some(&cookie(WORKSPACE_A))).await;
+    assert!(!response.body.contains(r#"name="q""#));
+    assert!(!response.body.contains(r#"name="page""#));
 }
 
 #[tokio::test]

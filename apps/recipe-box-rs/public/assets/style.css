@@ -54,7 +54,8 @@
   /* ボタンと入力の高さ */
   --control-height: 48px;
   --input-height: 56px;
-  /* ボタンの内側の余白。線のあるボタンは、線の 1px の分だけ減らす */
+  /* ボタンの内側の余白。線のあるボタンは、線の太さの分だけ減らす */
+  --button-border-width: 1px;
   --button-padding-y: 14px;
   --button-padding-x: var(--space-6);
 
@@ -210,7 +211,7 @@ input[readonly] {
 /*
  * ボタンと、ボタンの形のリンク（.button-link）。
  * 見た目は 2 つで、button の既定と .button-link.secondary は白地に黒い線、button.primary と .button-link はコーラル。
- * 白地のほうは線の 1px の分だけ内側の余白を減らし、どちらも同じ大きさにする。
+ * 白地のほうは線の太さ（--button-border-width）の分だけ内側の余白を減らし、どちらも同じ大きさにする。
  * :hover は入れ子にしない。選択子を並べた規則の中で & を使うと、:is() になって詳細度が上がり、
  * 後に書いた button.text などの指定に勝ってしまうため。
  */
@@ -236,8 +237,9 @@ button {
 /* 白地に黒い線 */
 button,
 .button-link.secondary {
-  padding: calc(var(--button-padding-y) - 1px) calc(var(--button-padding-x) - 1px);
-  border: 1px solid var(--ink);
+  padding: calc(var(--button-padding-y) - var(--button-border-width))
+    calc(var(--button-padding-x) - var(--button-border-width));
+  border: var(--button-border-width) solid var(--ink);
   color: var(--ink);
   background: var(--canvas);
 }
