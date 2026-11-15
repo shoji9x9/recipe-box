@@ -76,6 +76,10 @@ run = "scripts/smoke-test.sh"
 description = "ワークスペースに、自動削除と削除から外す印を付ける（管理用。ID は標準入力で渡す。例: mise run pin -- --remote < <ID のファイル>）"
 run = "scripts/pin-workspace.sh"
 
+[tasks.seed]
+description = "共有のデモを、サンプルのレシピと写真の状態に戻す（ID は標準入力で渡す。例: mise run seed -- --remote < <ID のファイル>）"
+run = "node scripts/seed.mjs"
+
 [tasks.dev]
 description = "ローカルの D1 にマイグレーションを当て、Worker を起動する（http://localhost:8787）"
 dir = "apps/recipe-box-rs"

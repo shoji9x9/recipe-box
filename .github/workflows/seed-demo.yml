@@ -1,0 +1,60 @@
+name: Reset demo
+
+# 共有のデモは誰でも書き換えられるので、毎日 seed でサンプルの状態に戻す（docs/spec.md の「デモ用のデータ」）。
+# デモの ID と Cloudflare の API トークンは、GitHub Environment「production」の secret に置く（deploy.yml と同じ）。
+# デモの ID を知れば誰でもデモに書き込めるので、公開リポジトリの Actions のログで伏せ字にする。
+on:
+  schedule:
+    - cron: "0 19 * * *" # 毎日 4:00（日本時間）。使われていないワークスペースの自動削除（3:00）の後
+  workflow_dispatch: {}
+
+permissions: {}
+
+# 2 つの seed が同時に消しては入れると、レシピが混ざる。途中で止めず、1 つずつ実行する。
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  seed:
+    name: Seed demo workspace
+    runs-on: ubuntu-latest
+    # 書き込む API の回数の制限（60 秒に 30 回）で待つので、レシピ 80 件を消して入れ直すと 6 分ほどかかる。
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read # seed のデータとスクリプトを読む
+    steps:
+      - name: Check secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEMO_WORKSPACE_ID: ${{ secrets.DEMO_WORKSPACE_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$DEMO_WORKSPACE_ID" ]; then
+            echo "::error::Environment「production」に secret の CLOUDFLARE_API_TOKEN・CLOUDFLARE_ACCOUNT_ID・DEMO_WORKSPACE_ID のどれかが無い"
+            exit 1
+          fi
+          # secret はログで自動で伏せ字になるが、念のため明示する。
+          echo "::add-mask::$DEMO_WORKSPACE_ID"
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.7
+        with:
+          cache: true
+          # seed は Node と pnpm（wrangler）だけを使う。Rust などは入れない。
+          install_args: node pnpm
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      - name: Seed
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEMO_WORKSPACE_ID: ${{ secrets.DEMO_WORKSPACE_ID }}
+        # ID は引数に置かず、標準入力で渡す（scripts/seed.mjs）。
+        run: printf '%s\n' "$DEMO_WORKSPACE_ID" | node scripts/seed.mjs --remote
