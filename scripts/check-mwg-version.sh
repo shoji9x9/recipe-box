@@ -4,11 +4,16 @@
 set -euo pipefail
 skill_file=.claude/skills/modern-web-guidance/SKILL.md
 package_file=node_modules/modern-web-guidance/skills/modern-web-guidance/skill-version.txt
-if [[ ! -f "$package_file" ]]; then
-  echo "$package_file がありません。先に pnpm install を実行してください" >&2
+if [[ ! -f "$skill_file" ]]; then
+  echo "$skill_file がありません。スキルを入れ直してください（AGENTS.md の「スキル」）" >&2
   exit 1
 fi
-skill=$(grep -oE -- '--skill-version[ =][^ `"]+' "$skill_file" | head -n 1 | sed -E 's/^--skill-version[ =]//' || true)
+if [[ ! -f "$package_file" ]]; then
+  echo "$package_file がありません。pnpm install を実行するか、パッケージの中のファイルの置き場所が変わっていないかを確かめてください" >&2
+  exit 1
+fi
+# 改行が CRLF でも比べられるよう、どちらも空白と CR を除く。
+skill=$(grep -oE -- '--skill-version[ =][^ `"]+' "$skill_file" | head -n 1 | sed -E 's/^--skill-version[ =]//' | tr -d '[:space:]' || true)
 package=$(tr -d '[:space:]' < "$package_file")
 if [[ -z "$skill" ]]; then
   echo "$skill_file から --skill-version を読めません。書き方が変わっていないか確かめてください" >&2
