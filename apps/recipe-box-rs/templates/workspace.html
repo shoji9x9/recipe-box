@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "delete_dialog.html" as dialog %}
 {% block title %}ワークスペース{% endblock %}
 {% block heading %}ワークスペース{% endblock %}
 {% block content %}
@@ -19,19 +20,10 @@
       <button type="submit">共有のデモを見る（1 時間）</button>
     </form>
     {%- endif %}
-    {#- 削除の確認。レシピの削除と同じく、Invoker Commands で <dialog> を開閉する。 #}
-    <button type="button" class="text danger" commandfor="delete-workspace" command="show-modal">ワークスペースを削除する</button>
-    <dialog id="delete-workspace" class="confirm" aria-labelledby="delete-workspace-title">
-      <h2 id="delete-workspace-title">ワークスペースを削除しますか？</h2>
-      <p>このワークスペースのレシピと写真を、すべて削除します。ほかの端末でも使えなくなります。元には戻せません。</p>
-      <div class="actions">
-        <button type="button" commandfor="delete-workspace" command="close">やめる</button>
-        <form method="post" action="/workspace/delete">
+    {%- call dialog::delete_dialog("delete-workspace", "ワークスペースを削除する", "ワークスペースを削除しますか？", "このワークスペースのレシピと写真を、すべて削除します。ほかの端末でも使えなくなります。元には戻せません。", "/workspace/delete") %}
+          {#- 画面に出した ID を送り、別のタブで切り替えた後のワークスペースを消さないようにする。 #}
           <input type="hidden" name="id" value="{{ id }}">
-          <button type="submit" class="primary danger-fill">削除する</button>
-        </form>
-      </div>
-    </dialog>
+    {%- endcall %}
   </div>
   {%- else %}
   {%- if viewing_demo %}
