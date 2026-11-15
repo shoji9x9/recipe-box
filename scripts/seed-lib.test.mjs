@@ -83,6 +83,8 @@ describe("shortReason", () => {
 });
 
 describe("validateRecipes", () => {
+  // base はリポジトリのルートにあたる一時ディレクトリ、dir はその下の seed/photos/。
+  let base;
   let dir;
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
   // 先頭だけを書いて、大きさは疎なファイルで決める（ディスクを使わない）。
@@ -93,20 +95,22 @@ describe("validateRecipes", () => {
     return name;
   }
   const recipe = (overrides = {}) => ({ name: "カレー", servings: 2, ...overrides });
-  const rejects = (recipes, pattern) => assert.throws(() => validateRecipes(recipes, dir), pattern);
+  const validate = (recipes, photoDir = dir) => validateRecipes(recipes, photoDir, base);
+  const rejects = (recipes, pattern, photoDir = dir) => assert.throws(() => validate(recipes, photoDir), pattern);
 
   before(() => {
     // 本物と同じく、<一時ディレクトリ>/seed/photos/ の形にする。
-    dir = join(mkdtempSync(join(tmpdir(), "seed-lib-test-")), "seed", "photos");
+    base = mkdtempSync(join(tmpdir(), "seed-lib-test-"));
+    dir = join(base, "seed", "photos");
     mkdirSync(dir, { recursive: true });
   });
   after(() => {
-    rmSync(join(dir, "..", ".."), { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
   });
 
   test("決まりどおりのレシピを受け付け、写真の形式と大きさを返す", () => {
     const file = photo("ok.jpg", 10);
-    const { recipes, photoBytes } = validateRecipes([recipe({ photos: [file] })], dir);
+    const { recipes, photoBytes } = validate([recipe({ photos: [file] })]);
     assert.deepEqual(recipes[0].body, { name: "カレー", servings: 2, ingredients: "", steps: "" });
     assert.equal(recipes[0].files[0].contentType, "image/jpeg");
     assert.equal(photoBytes, 10);
@@ -115,7 +119,7 @@ describe("validateRecipes", () => {
   test("レシピの件数は 1 件から上限まで", () => {
     rejects([], /1 件から/);
     rejects("x", /1 件から/);
-    assert.equal(validateRecipes(Array.from({ length: MAX_RECIPES }, () => recipe()), dir).recipes.length, MAX_RECIPES);
+    assert.equal(validate(Array.from({ length: MAX_RECIPES }, () => recipe())).recipes.length, MAX_RECIPES);
     rejects(
       Array.from({ length: MAX_RECIPES + 1 }, () => recipe()),
       /1 件から/,
@@ -123,35 +127,46 @@ describe("validateRecipes", () => {
   });
 
   test("name は上限の文字数まで（文字の数で数える）", () => {
-    validateRecipes([recipe({ name: "🍛".repeat(MAX_NAME) })], dir);
+    validate([recipe({ name: "🍛".repeat(MAX_NAME) })]);
     rejects([recipe({ name: "あ".repeat(MAX_NAME + 1) })], /name/);
     rejects([recipe({ name: "  " })], /name/);
     rejects([recipe({ name: 1 })], /name/);
   });
 
   test("servings は 1 から上限までの整数", () => {
-    validateRecipes([recipe({ servings: 1 }), recipe({ servings: MAX_SERVINGS })], dir);
+    validate([recipe({ servings: 1 }), recipe({ servings: MAX_SERVINGS })]);
     for (const servings of [0, MAX_SERVINGS + 1, 1.5, "2"]) {
       rejects([recipe({ servings })], /servings/);
     }
   });
 
   test("ingredients と steps の長さ", () => {
-    validateRecipes([recipe({ ingredients: "あ".repeat(MAX_INGREDIENTS), steps: "あ".repeat(MAX_STEPS) })], dir);
+    validate([recipe({ ingredients: "あ".repeat(MAX_INGREDIENTS), steps: "あ".repeat(MAX_STEPS) })]);
     rejects([recipe({ ingredients: "あ".repeat(MAX_INGREDIENTS + 1) })], /ingredients/);
     rejects([recipe({ steps: "あ".repeat(MAX_STEPS + 1) })], /steps/);
   });
 
   test("写真は 1 件に上限の枚数まで", () => {
     const files = Array.from({ length: MAX_PHOTOS_PER_RECIPE + 1 }, (_, i) => photo(`n${i}.jpg`, 10));
-    validateRecipes([recipe({ photos: files.slice(0, MAX_PHOTOS_PER_RECIPE) })], dir);
+    validate([recipe({ photos: files.slice(0, MAX_PHOTOS_PER_RECIPE) })]);
     rejects([recipe({ photos: files })], /photos/);
   });
 
-  test("seed/photos/ がシンボリックリンクなら断る", () => {
-    const link = join(dir, "..", "linked-photos");
-    symlinkSync(dir, link);
-    assert.throws(() => validateRecipes([recipe()], link), /シンボリックリンクでないディレクトリ/);
+  test("写真・seed/photos/・seed/ のどれかがシンボリックリンクなら断る", () => {
+    const file = photo("real.jpg", 10);
+    // 写真そのもの
+    symlinkSync(join(dir, file), join(dir, "link.jpg"));
+    rejects([recipe({ photos: ["link.jpg"] })], /シンボリックリンク/);
+    // seed/photos/
+    const linkedPhotos = join(base, "seed", "linked-photos");
+    symlinkSync(dir, linkedPhotos);
+    rejects([recipe({ photos: [file] })], /シンボリックリンク/, linkedPhotos);
+    // seed/
+    const linkedSeed = join(base, "linked-seed");
+    symlinkSync(join(base, "seed"), linkedSeed);
+    rejects([recipe({ photos: [file] })], /シンボリックリンク/, join(linkedSeed, "photos"));
+    // 写真を使わないレシピだけなら、ディレクトリを読まない
+    validate([recipe()], linkedPhotos);
   });
 
   test("写真のファイル名で、seed/photos/ の外を読ませない", () => {
@@ -160,18 +175,16 @@ describe("validateRecipes", () => {
     }
   });
 
-  test("同じ写真を 2 回使わない・無い写真を使わない", () => {
+  test("同じ写真を 2 回使わない・無い写真やディレクトリを使わない", () => {
     const file = photo("twice.jpg", 10);
     rejects([recipe({ photos: [file] }), recipe({ photos: [file] })], /2 回/);
-    rejects([recipe({ photos: ["missing.jpg"] })], /無い/);
+    rejects([recipe({ photos: ["missing.jpg"] })], /読めない（ENOENT）/);
     mkdirSync(join(dir, "dir.jpg"));
     rejects([recipe({ photos: ["dir.jpg"] })], /ふつうのファイルでない/);
-    symlinkSync(join(dir, "twice.jpg"), join(dir, "link.jpg"));
-    rejects([recipe({ photos: ["link.jpg"] })], /ふつうのファイルでない/);
   });
 
   test("写真は 1 バイトから上限のバイト数まで", () => {
-    validateRecipes([recipe({ photos: [photo("max.jpg", MAX_PHOTO_BYTES)] })], dir);
+    validate([recipe({ photos: [photo("max.jpg", MAX_PHOTO_BYTES)] })]);
     rejects([recipe({ photos: [photo("over.jpg", MAX_PHOTO_BYTES + 1)] })], /バイトまで/);
     rejects([recipe({ photos: [photo("empty.jpg", 0, Buffer.alloc(0))] })], /バイトまで/);
   });
@@ -179,7 +192,7 @@ describe("validateRecipes", () => {
   test("写真の形式は、中身の先頭で決める", () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const webp = Buffer.from("RIFF\0\0\0\0WEBP", "latin1");
-    const { recipes } = validateRecipes([recipe({ photos: [photo("p.png", 20, png), photo("w.webp", 20, webp)] })], dir);
+    const { recipes } = validate([recipe({ photos: [photo("p.png", 20, png), photo("w.webp", 20, webp)] })]);
     assert.deepEqual(
       recipes[0].files.map((f) => f.contentType),
       ["image/png", "image/webp"],
@@ -201,7 +214,7 @@ describe("validateRecipes", () => {
       Array.from({ length: Math.ceil(list.length / perRecipe) }, (_, i) =>
         recipe({ photos: list.slice(i * perRecipe, (i + 1) * perRecipe) }),
       );
-    assert.equal(validateRecipes(chunk(files.slice(0, count)), dir).photoBytes, MAX_WORKSPACE_PHOTO_BYTES);
+    assert.equal(validate(chunk(files.slice(0, count))).photoBytes, MAX_WORKSPACE_PHOTO_BYTES);
     rejects(chunk(files), /ワークスペースの上限/);
   });
 });
