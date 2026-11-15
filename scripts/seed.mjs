@@ -13,8 +13,8 @@
 //   2. 公開 API で、デモのレシピを全部消す（レシピを消すと、その写真も消える）。
 //   3. 公開 API で、サンプルのレシピを入れる。
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
-//      アプリと同じく D1 の行を先に入れる。書いた後に行が消えていれば（レシピが消された）R2 のデータを消し、
-//      書けなかった写真は R2 のデータを消してから行を消す（R2 から消せなければ、行を残す）。
+//      アプリと同じく D1 の行を先に入れる。書いた後に行が消えていれば（レシピが消された）、その写真の R2 のデータを消す。
+//      ほかの失敗では、どの段階で起きても、入れた写真をすべて R2・D1 の順に消してから止まる。
 //      どの行からもたどれないデータを R2 に残さないためである。R2 から消せず、行も無いデータは、手で消せるようキーを表示する。
 //   5. 公開 API で、レシピの数と、写真をすべて読めることを確かめる。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
@@ -246,14 +246,18 @@ async function r2(action, photo, ...extra) {
       return true;
     } catch (error) {
       if (attempt >= R2_ATTEMPTS) {
-        // キーはデモの ID を伏せて表示する（手で消すときは、伏せた所にデモの ID を入れる）。
-        console.error(`写真 ${photo.file} の R2 の ${action} に失敗した（キー ${redact(key)}）: ${error.message}`);
+        console.error(`写真 ${photo.file} の R2 の ${action} に失敗した: ${error.message}`);
         return false;
       }
       console.log(`写真 ${photo.file} の R2 の ${action} に失敗したので、やり直す（${attempt} 回目）`);
       await sleep(R2_RETRY_WAIT_MS * attempt);
     }
   }
+}
+
+// 写真の R2 のキー。表示するときは、デモの ID を伏せる（手で消すときは、伏せた所にデモの ID を入れる）。
+function shownKey(photo) {
+  return `${BUCKET}/photos/***/${photo.recipeId}/${photo.id}`;
 }
 
 // photos を UPLOAD_CONCURRENCY 個まで同時に処理し、task が false を返した写真を返す。
@@ -303,6 +307,36 @@ async function deletePhotoRows(photos) {
   await wrangler("d1", "execute", "DB", "--command", `DELETE FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`);
 }
 
+// seed が入れた写真を、アプリの削除と同じく R2・D1 の順に消す。失敗しても投げず、片付かなかった数を返す。
+// R2 から消せなかった写真は行を残す（データが残っていても、行からたどれる）。行も無ければ、手で消せるようキーを表示する。
+async function removePhotos(photos) {
+  if (photos.length === 0) {
+    return 0;
+  }
+  const notDeleted = new Set(await eachPhoto(photos, (photo) => r2("delete", photo)));
+  let problems = notDeleted.size;
+  try {
+    await deletePhotoRows(photos.filter((photo) => !notDeleted.has(photo)));
+  } catch (error) {
+    console.error(`写真の行を消せなかった（R2 のデータが無い行が残る。もう一度 seed を実行すれば消える）: ${error.message}`);
+    problems += 1;
+  }
+  if (notDeleted.size > 0) {
+    let rows = new Set();
+    try {
+      rows = await existingPhotoIds([...notDeleted]);
+    } catch (error) {
+      console.error(`写真の行を読めなかったので、R2 から消せなかったデータのキーをすべて表示する: ${error.message}`);
+    }
+    for (const photo of notDeleted) {
+      if (!rows.has(photo.id)) {
+        console.error(`どの行からもたどれないデータが R2 に残った。手で消す: ${shownKey(photo)}`);
+      }
+    }
+  }
+  return problems;
+}
+
 async function main() {
   const { recipes, photoBytes } = loadRecipes();
   const photoCount = recipes.reduce((sum, recipe) => sum + recipe.files.length, 0);
@@ -341,14 +375,12 @@ async function main() {
   const probe = { file: "（R2 の権限の確認）", recipeId: "seed-check", id: randomBytes(16).toString("hex") };
   const probeFile = join(tmpdir(), `recipe-box-seed-${probe.id}`);
   writeFileSync(probeFile, "seed");
-  // 書けないと報告されても書けていることがあるので、書いた結果に関わらず消す。
-  let written;
-  let removed;
-  try {
-    written = await r2("put", probe, "--file", probeFile);
-    removed = await r2("delete", probe);
-  } finally {
-    rmSync(probeFile, { force: true });
+  // 書けないと報告されても書けていることがあるので、書いた結果に関わらず消す（r2 は失敗を投げずに false を返す）。
+  const written = await r2("put", probe, "--file", probeFile);
+  const removed = await r2("delete", probe);
+  rmSync(probeFile, { force: true });
+  if (!removed) {
+    console.error(`確かめるために書いたデータを R2 から消せなかった。手で消す: ${shownKey(probe)}`);
   }
   if (!written || !removed) {
     fail("R2 に書けないか、消せない。wrangler の認証と API トークンの権限を確かめる");
@@ -394,50 +426,45 @@ async function main() {
 
   // 4. 写真の D1 の行を入れてから、R2 にデータを書く（アプリの写真の追加と同じ順）。
   //    デモは誰でも書き込めるので、入れている間にレシピが消されることがある。そのレシピの写真は入れない。
+  //    それ以外の失敗では、どの段階で起きても、入れた写真をすべて消してから止まる（もう一度実行すれば入れ直せる）。
   let inserted = [];
   let lost = 0;
   if (photos.length > 0) {
-    const now = Date.now();
-    // レシピが在るときだけ行を入れる（消されていても、ほかの写真の行は入れる）。
-    // 値は、形を確かめた ID・数・決まった形式の文字列だけなので、SQL に埋め込める。
-    const statements = photos.map(
-      (photo, index) =>
-        "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at) " +
-        `SELECT '${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index} ` +
-        `FROM recipes WHERE workspace_id = '${workspaceId}' AND id = '${photo.recipeId}'`,
-    );
     try {
+      const now = Date.now();
+      // レシピが在るときだけ行を入れる（消されていても、ほかの写真の行は入れる）。
+      // 値は、形を確かめた ID・数・決まった形式の文字列だけなので、SQL に埋め込める。
+      const statements = photos.map(
+        (photo, index) =>
+          "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at) " +
+          `SELECT '${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index} ` +
+          `FROM recipes WHERE workspace_id = '${workspaceId}' AND id = '${photo.recipeId}'`,
+      );
       for (let i = 0; i < statements.length; i += INSERT_BATCH) {
         await wrangler("d1", "execute", "DB", "--command", statements.slice(i, i + INSERT_BATCH).join("; "));
       }
-    } catch (error) {
-      // 途中で失敗したら、もう入れた行（R2 のデータはまだ無い）を消してから止まる。
-      // 消すのにも失敗したら、それを表示したうえで、元の失敗を伝える。
-      await deletePhotoRows(photos).catch((cleanup) => console.error(`入れた写真の行を消せなかった: ${redact(cleanup.message)}`));
-      throw error;
-    }
-    const rows = await existingPhotoIds(photos);
-    inserted = photos.filter((photo) => rows.has(photo.id));
-    lost += photos.length - inserted.length;
+      const rows = await existingPhotoIds(photos);
+      inserted = photos.filter((photo) => rows.has(photo.id));
+      lost += photos.length - inserted.length;
 
-    const failed = new Set(await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType)));
-    // R2 に書いている間にレシピが消されると、行は消えたのに R2 のデータが残る。
-    // アプリの写真の追加と同じく、書いた後に行が在るかを確かめ、無ければ R2 のデータを消す。
-    // 書けなかった写真も、失敗と報告されても実際は書けていることがあるので、R2 のデータを消してから行を消す（アプリの削除と同じ順）。
-    const after = await existingPhotoIds(inserted);
-    const gone = inserted.filter((photo) => !after.has(photo.id) || failed.has(photo));
-    const notDeleted = new Set(await eachPhoto(gone, (photo) => r2("delete", photo)));
-    // 書けなかった写真のうち、R2 から消せなかったものは行を残し（データが残っていても、行からたどれる）、消せたものは行を消す。
-    // レシピが消されて行の無い写真を R2 から消せなかったときは、上の r2 がキーを表示する。
-    await deletePhotoRows([...failed].filter((photo) => !notDeleted.has(photo)));
-    if (notDeleted.size > 0) {
-      fail(`写真 ${notDeleted.size} 枚のデータを R2 から消せなかった`);
+      const failed = await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType));
+      if (failed.length > 0) {
+        throw new Error(`写真 ${failed.length} 枚を R2 に書けなかった`);
+      }
+      // R2 に書いている間にレシピが消されると、行は消えたのに R2 のデータが残る。
+      // アプリの写真の追加と同じく、書いた後に行が在るかを確かめ、無ければ R2 のデータを消す。
+      const after = await existingPhotoIds(inserted);
+      const gone = inserted.filter((photo) => !after.has(photo.id));
+      if ((await removePhotos(gone)) > 0) {
+        throw new Error("消されたレシピの写真を片付けられなかった");
+      }
+      inserted = inserted.filter((photo) => after.has(photo.id));
+      lost += gone.length;
+    } catch (error) {
+      console.error(error.message);
+      await removePhotos(photos);
+      fail("写真を入れられなかったので、入れた写真を消した。もう一度実行する");
     }
-    if (failed.size > 0) {
-      fail(`写真 ${failed.size} 枚を R2 に書けなかった。もう一度実行する`);
-    }
-    inserted = inserted.filter((photo) => after.has(photo.id));
-    lost += gone.length;
     console.log(`写真 ${inserted.length} 枚を入れた`);
   }
   if (lost > 0) {
