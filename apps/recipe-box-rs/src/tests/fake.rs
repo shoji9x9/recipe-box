@@ -73,6 +73,8 @@ pub struct FakeBackend {
     /// `true` なら、最初の R2 の削除の直後に、別のリクエストが同じレシピに写真を 1 枚追加し（D1 の行と R2 のデータ）、
     /// 消したばかりのキーにも書き込んだことにする。レシピの削除と写真の追加が同時に起きた場合を確かめる。
     pub photo_added_after_first_delete: bool,
+    /// `true` なら、ワークスペースを消す直前に、別のリクエストが同じワークスペースを消したことにする。
+    pub workspace_vanishes_on_delete: bool,
     /// `photo_added_after_first_delete` の写真を、もう追加したか。
     pub injected_photo: Arc<AtomicBool>,
 }
@@ -99,6 +101,7 @@ impl Default for FakeBackend {
             photo_rows_vanish_on_put: false,
             broken_r2_delete: false,
             photo_added_after_first_delete: false,
+            workspace_vanishes_on_delete: false,
             injected_photo: Arc::default(),
         }
     }
@@ -372,6 +375,11 @@ impl Backend for FakeBackend {
         workspace: &WorkspaceId,
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
         ready(self.check().map(|()| {
+            if self.workspace_vanishes_on_delete {
+                // 別のリクエストが先に消したので、この削除では何も消さない。
+                self.workspaces.lock().unwrap().remove(workspace.as_str());
+                return None;
+            }
             self.workspaces.lock().unwrap().remove(workspace.as_str())?;
             // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
             let removed = self.workspace_photo_keys(workspace);

@@ -1446,3 +1446,30 @@ async fn deleting_workspace_while_visiting_demo_keeps_demo_and_removes_photos() 
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert!(backend.workspaces.lock().unwrap().contains_key(DEMO));
 }
+
+#[tokio::test]
+async fn workspace_deleted_by_another_request_is_treated_as_deleted() {
+    // 画面を開いて送るまでの間に、別のタブなどが同じワークスペースを消していた。
+    let backend = FakeBackend {
+        workspace_vanishes_on_delete: true,
+        ..backend_with_workspaces()
+    };
+    let response = screen_post(
+        &backend,
+        "/workspace/delete",
+        Some(&cookie(WORKSPACE_A)),
+        &format!("id={WORKSPACE_A}"),
+    )
+    .await;
+    // 消えたことに変わりはないので、消せたときと同じく移り、Cookie も消す。
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    for name in ["__Host-workspace", "__Host-demo-view"] {
+        assert!(
+            set_cookie_named(&response, name)
+                .unwrap()
+                .contains("Max-Age=0"),
+            "{name}"
+        );
+    }
+    assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+}
