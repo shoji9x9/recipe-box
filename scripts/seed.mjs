@@ -8,17 +8,19 @@
 //
 // 手順:
 //   1. seed/recipes.json と seed/photos/ を、API と同じ決まりで確かめる（入れ始めてから失敗しないように）。
-//      ID が、印（mise run pin）の付いたワークスペースのものかを、wrangler で D1 を読んで確かめる。
+//      wrangler で、ID が印（mise run pin）の付いたワークスペースのものか、アプリ全体の写真の合計の上限を超えないか、
+//      R2 に書けて消せるかを確かめる。
 //   2. 公開 API で、デモのレシピを全部消す（レシピを消すと、その写真も消える）。
 //   3. 公開 API で、サンプルのレシピを入れる。
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
-//      アプリと同じく D1 の行を先に入れ、R2 に書けなかった写真の行は消す。書いた後に行が消えていれば（レシピが消された）、
-//      R2 のデータも消す。どの行からもたどれないデータを R2 に残さないためである。
+//      アプリと同じく D1 の行を先に入れる。書いた後に行が消えていれば（レシピが消された）R2 のデータを消し、
+//      書けなかった写真は R2 のデータを消してから行を消す。どの行からもたどれないデータを R2 に残さないためである。
 //   5. 公開 API で、レシピの数と、写真をすべて読めることを確かめる。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -37,11 +39,15 @@ const BASE_URLS = {
 };
 const BUCKET = "recipe-box-photos";
 // API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
+// 値はアプリ（apps/recipe-box-rs/src/recipe.rs・photo.rs）と同じにする。アプリの値を変えたら、ここも直す。
 const MAX_RECIPES = 80;
 const MAX_PHOTOS_PER_RECIPE = 5;
 const MAX_PHOTO_BYTES = 4_000_000;
-// seed は写真の上限を判定する API を通らずに入れるので、ワークスペースの合計の上限も seed で確かめる。
+// seed は写真の上限を判定する API を通らずに入れるので、ワークスペースとアプリ全体の合計の上限も seed で確かめる。
 const MAX_WORKSPACE_PHOTO_BYTES = 100_000_000;
+const MAX_TOTAL_PHOTO_BYTES = 5_000_000_000;
+// 写真の行を入れる SQL を、1 回の wrangler にこの数ずつ渡す（コマンドの引数と D1 の SQL の長さの上限に収める）。
+const INSERT_BATCH = 50;
 const MAX_NAME = 100;
 const MAX_INGREDIENTS = 2_000;
 const MAX_STEPS = 5_000;
@@ -162,12 +168,11 @@ function loadRecipes() {
       if (size === 0 || size > MAX_PHOTO_BYTES) {
         fail(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
       }
-      const bytes = readFileSync(path);
-      const contentType = photoContentType(bytes);
+      const contentType = photoContentType(readFileSync(path));
       if (contentType === null) {
         fail(`${where}: 写真 ${file} が JPEG・PNG・WebP のどれでもない`);
       }
-      return { file, path, size, contentType, bytes };
+      return { file, path, size, contentType };
     });
     return { body: { name, servings, ingredients, steps }, files };
   });
@@ -175,7 +180,7 @@ function loadRecipes() {
   if (total > MAX_WORKSPACE_PHOTO_BYTES) {
     fail(`写真の合計が ${total} バイトで、ワークスペースの上限（${MAX_WORKSPACE_PHOTO_BYTES} バイト）を超える`);
   }
-  return parsed;
+  return { recipes: parsed, photoBytes: total };
 }
 
 // 公開 API を呼ぶ。書き込みが回数の制限で 429 になったら、待ってやり直す。
@@ -256,11 +261,16 @@ async function eachPhoto(photos, task) {
 }
 
 // 写真のうち、D1 に行が在るものの ID を返す。
+// SQL の IN に並べる、写真の ID の一覧。ID は seed が作った 16 進数なので、そのまま埋め込める。
+function photoIdList(photos) {
+  return photos.map((photo) => `'${photo.id}'`).join(", ");
+}
+
 async function existingPhotoIds(photos) {
   if (photos.length === 0) {
     return new Set();
   }
-  const ids = photos.map((photo) => `'${photo.id}'`).join(", ");
+  const ids = photoIdList(photos);
   const output = await wrangler(
     "d1",
     "execute",
@@ -276,28 +286,54 @@ async function deletePhotoRows(photos) {
   if (photos.length === 0) {
     return;
   }
-  const ids = photos.map((photo) => `'${photo.id}'`).join(", ");
+  const ids = photoIdList(photos);
   await wrangler("d1", "execute", "DB", "--command", `DELETE FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`);
 }
 
 async function main() {
-  const recipes = loadRecipes();
+  const { recipes, photoBytes } = loadRecipes();
   const photoCount = recipes.reduce((sum, recipe) => sum + recipe.files.length, 0);
   console.log(`${target === "--local" ? "ローカル" : "本番"}のデモに、レシピ ${recipes.length} 件と写真 ${photoCount} 枚を入れる`);
 
-  // 消し始める前に、ID が印（pinned）の付いたワークスペースかを D1 で確かめる。
-  // 間違えてほかの人のワークスペースの ID を渡しても消さないためと、写真を入れる wrangler の認証を先に確かめるためである
-  // （認証が無いと分かるのが写真を入れるときだと、写真の無いデモが残る）。
+  // 消し始める前に、wrangler で次を確かめる。間違えてほかの人のワークスペースの ID を渡しても消さないためと、
+  // 写真を入れるのに要る D1 と R2 の権限を先に確かめるためである（写真を入れるときに分かると、写真の無いデモが残る）。
+  // - ID が、印（pinned）の付いたワークスペースのものか
+  // - 入れ直した後の写真の合計が、アプリ全体の上限を超えないか（今のデモの写真は、入れ直すときに消える）
+  // - R2 に書けて、消せるか
   const status = JSON.parse(
-    await wrangler("d1", "execute", "DB", "--json", "--command", `SELECT pinned FROM workspaces WHERE id = '${workspaceId}'`),
+    await wrangler(
+      "d1",
+      "execute",
+      "DB",
+      "--json",
+      "--command",
+      `SELECT w.pinned AS pinned, ` +
+        `(SELECT COALESCE(SUM(size), 0) FROM photos) AS total, ` +
+        `(SELECT COALESCE(SUM(size), 0) FROM photos WHERE workspace_id = '${workspaceId}') AS demo ` +
+        `FROM workspaces w WHERE w.id = '${workspaceId}'`,
+    ),
   );
-  const pinned = status.at(-1)?.results?.[0]?.pinned;
-  if (pinned === undefined) {
+  const row = status.at(-1)?.results?.[0];
+  if (row === undefined) {
     fail("その ID のワークスペースが無い");
   }
   // D1（SQLite）は BOOLEAN を 0 と 1 で返す。
-  if (pinned !== 1) {
+  if (row.pinned !== 1) {
     fail("そのワークスペースには、自動削除と削除から外す印が無い。デモなら、先に mise run pin で印を付ける");
+  }
+  if (row.total - row.demo + photoBytes > MAX_TOTAL_PHOTO_BYTES) {
+    fail(`入れ直すと、アプリ全体の写真の合計が上限（${MAX_TOTAL_PHOTO_BYTES} バイト）を超える`);
+  }
+  // 確かめるためだけのデータなので、すぐに消す。キーはデモのワークスペースの下に置き、seed の写真と重ならない名前にする。
+  const probe = { file: "（R2 の権限の確認）", recipeId: "seed-check", id: randomBytes(16).toString("hex") };
+  const probeFile = join(tmpdir(), `recipe-box-seed-${probe.id}`);
+  writeFileSync(probeFile, "seed");
+  try {
+    if (!(await r2("put", probe, "--file", probeFile)) || !(await r2("delete", probe))) {
+      fail("R2 に書けないか、消せない。wrangler の認証と API トークンの権限を確かめる");
+    }
+  } finally {
+    rmSync(probeFile, { force: true });
   }
 
   // 2. 今のレシピを全部消す。消すと一覧が詰まるので、1 ページ目を読み直しながら消す。
@@ -352,23 +388,26 @@ async function main() {
         `SELECT '${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index} ` +
         `FROM recipes WHERE workspace_id = '${workspaceId}' AND id = '${photo.recipeId}'`,
     );
-    await wrangler("d1", "execute", "DB", "--command", statements.join("; "));
+    for (let i = 0; i < statements.length; i += INSERT_BATCH) {
+      await wrangler("d1", "execute", "DB", "--command", statements.slice(i, i + INSERT_BATCH).join("; "));
+    }
     const rows = await existingPhotoIds(photos);
     inserted = photos.filter((photo) => rows.has(photo.id));
     lost += photos.length - inserted.length;
 
-    const failed = await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType));
-    if (failed.length > 0) {
-      await deletePhotoRows(failed);
-      fail(`写真 ${failed.length} 枚を R2 に書けなかった。もう一度実行する`);
-    }
+    const failed = new Set(await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType)));
     // R2 に書いている間にレシピが消されると、行は消えたのに R2 のデータが残る。
     // アプリの写真の追加と同じく、書いた後に行が在るかを確かめ、無ければ R2 のデータを消す。
+    // 書けなかった写真も、失敗と報告されても実際は書けていることがあるので、R2 のデータを消してから行を消す（アプリの削除と同じ順）。
     const after = await existingPhotoIds(inserted);
-    const gone = inserted.filter((photo) => !after.has(photo.id));
+    const gone = inserted.filter((photo) => !after.has(photo.id) || failed.has(photo));
     const notDeleted = await eachPhoto(gone, (photo) => r2("delete", photo));
     if (notDeleted.length > 0) {
-      fail(`消されたレシピの写真 ${notDeleted.length} 枚のデータを R2 から消せなかった`);
+      fail(`写真 ${notDeleted.length} 枚のデータを R2 から消せなかった`);
+    }
+    await deletePhotoRows([...failed]);
+    if (failed.size > 0) {
+      fail(`写真 ${failed.size} 枚を R2 に書けなかった。もう一度実行する`);
     }
     inserted = inserted.filter((photo) => after.has(photo.id));
     lost += gone.length;
@@ -389,7 +428,7 @@ async function main() {
     const response = await api("GET", `/api/recipes/${photo.recipeId}/photos/${photo.id}`);
     await expectStatus(response, 200, `写真 ${photo.file} の取得`);
     const bytes = Buffer.from(await response.arrayBuffer());
-    if (!bytes.equals(photo.bytes)) {
+    if (!bytes.equals(readFileSync(photo.path))) {
       fail(`写真 ${photo.file} の中身が違う`);
     }
   }
