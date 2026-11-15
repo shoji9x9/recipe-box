@@ -34,6 +34,11 @@
 
 - commit の前に lefthook が整形と静的解析を実行する。フックを飛ばさない（`--no-verify` を使わない）。
 - PR を作る前に `mise run lint` と `mise run audit` を実行する。
+- push の前に、push するコミット（ベースブランチとの差分）に、次の 2 つを行う。見つかった問題を直してから push する。直さないものは、理由を PR に書く。
+  1. コードレビュー: Claude Code の `/code-review high`（不具合を探す）。
+  2. セキュリティのレビュー: `security-audit` スキルの guidance mode（範囲を差分に絞ったレビュー）。
+     スキルの full audit mode（6 つの段階・多数のサブエージェント・報告のファイル）は重いので、push のたびには行わない。利用者に求められたときだけ行う。
+  文書だけの変更（`*.md` など）では、2 を省いてよい。
 
 ## SQL
 
@@ -67,6 +72,12 @@
 - `browser-test`: 画面の変更を、chrome-devtools MCP で実際のブラウザを操作して確かめる。
 
 入れ方は `gh skill install shoji9x9/skills <スキル名> --agent claude-code --scope project`。
+
+[cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill) から、次のスキルを入れている（commit を固定。上げるときは公開から 7 日たった commit を選び、中身を読んでから入れ直す）。
+
+- `security-audit`: セキュリティのレビュー。push の前の確認（「確認」）に使う。
+  入れ方は `gh skill install cloudflare/security-audit-skill security-audit --agent claude-code --scope project --pin <commit>`。
+  スキルは、ビルドやテストなど対象のコードを動かすのを、外部のネットワークを切った OS のサンドボックスの中だけに限る。その用意が無ければ、コードを動かさずに読むだけで確かめる。
 
 `pr-finalize-loop` の再レビューの依頼先は `claude-code` にしている（`.config/skills/shoji9x9/common.jsonc`）。
 このリポジトリの Claude のレビュー（`claude-review.yml`）は、push のたびに自動で動き、`@claude review` のコメントには反応しない。
