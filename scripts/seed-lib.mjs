@@ -1,6 +1,6 @@
 // scripts/seed.mjs の、外部（API・wrangler・標準入力）に触れない部分。単体テスト（seed-lib.test.mjs）で確かめる。
 import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 
 // API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
 // 値はアプリ（apps/recipe-box-rs/src/recipe.rs・photo.rs）と同じにする。アプリの値を変えたら、ここも直す。
@@ -94,8 +94,13 @@ function length(text) {
 // path が、base の下にシンボリックリンクを通らずにあるかを確かめる（リポジトリの外のファイルを読まないため）。
 // path の実際の場所（realpath）が、base の実際の場所に、base からの相対パスを足したものと同じならよい。
 // base より下のどこかの階層（ファイル自身・seed/photos/・seed/ など）がリンクなら、食い違う。
+// base の外（相対パスが .. で始まる）は、リンクが無くても断る。
 export function isInsideWithoutLinks(path, base) {
-  return realpathSync(path) === join(realpathSync(base), relative(base, path));
+  const rel = relative(base, path);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    return false;
+  }
+  return realpathSync(path) === join(realpathSync(base), rel);
 }
 
 // seed/recipes.json の中身（JSON を読んだ値）を、API と同じ決まりで確かめる。写真は photoDir の下から探す。
@@ -136,18 +141,22 @@ export function validateRecipes(recipes, photoDir, base) {
       }
       used.add(file);
       const path = join(photoDir, file);
+      // リンクを辿って外のファイルに触れる前に、リンクが無いかを確かめる。
       let stat;
       try {
+        if (!isInsideWithoutLinks(path, base)) {
+          throw new Error(`${where}: 写真 seed/photos/${file} か、その上のディレクトリがシンボリックリンクになっている`);
+        }
         stat = statSync(path);
       } catch (error) {
-        throw new Error(`${where}: 写真 seed/photos/${file} を読めない（${error.code ?? error.message}）`);
+        if (error.code === undefined) {
+          throw error;
+        }
+        throw new Error(`${where}: 写真 seed/photos/${file} を読めない（${error.code}）`);
       }
       // ディレクトリなどは、先頭を読むときに理由の分からない失敗になるので、先に断る。
       if (!stat.isFile()) {
         throw new Error(`${where}: 写真 seed/photos/${file} がふつうのファイルでない`);
-      }
-      if (!isInsideWithoutLinks(path, base)) {
-        throw new Error(`${where}: 写真 seed/photos/${file} か、その上のディレクトリがシンボリックリンクになっている`);
       }
       const { size } = stat;
       if (size === 0 || size > MAX_PHOTO_BYTES) {

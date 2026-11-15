@@ -14,6 +14,7 @@ import {
   MAX_SERVINGS,
   MAX_STEPS,
   MAX_WORKSPACE_PHOTO_BYTES,
+  isInsideWithoutLinks,
   pathPattern,
   redact,
   shortReason,
@@ -79,6 +80,35 @@ describe("shortReason", () => {
 
   test("300 文字に切り詰める", () => {
     assert.equal(shortReason("x".repeat(1000)).length, 300);
+  });
+});
+
+describe("isInsideWithoutLinks", () => {
+  let base;
+  before(() => {
+    base = mkdtempSync(join(tmpdir(), "seed-lib-link-"));
+    mkdirSync(join(base, "seed", "photos"), { recursive: true });
+    writeFileSync(join(base, "seed", "photos", "a.jpg"), "x");
+    writeFileSync(join(base, "seed", "recipes.json"), "[]");
+    symlinkSync(join(base, "seed", "photos", "a.jpg"), join(base, "seed", "photos", "file-link.jpg"));
+    symlinkSync(join(base, "seed", "photos"), join(base, "seed", "photos-link"));
+    symlinkSync(join(base, "seed"), join(base, "seed-link"));
+  });
+  after(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("リンクを通らないファイルだけを受け付ける", () => {
+    assert.equal(isInsideWithoutLinks(join(base, "seed", "photos", "a.jpg"), base), true);
+    assert.equal(isInsideWithoutLinks(join(base, "seed", "recipes.json"), base), true);
+    assert.equal(isInsideWithoutLinks(join(base, "seed", "photos", "file-link.jpg"), base), false);
+    assert.equal(isInsideWithoutLinks(join(base, "seed", "photos-link", "a.jpg"), base), false);
+    assert.equal(isInsideWithoutLinks(join(base, "seed-link", "recipes.json"), base), false);
+  });
+
+  test("base の外と base そのものは断る", () => {
+    assert.equal(isInsideWithoutLinks(tmpdir(), base), false);
+    assert.equal(isInsideWithoutLinks(base, base), false);
   });
 });
 
