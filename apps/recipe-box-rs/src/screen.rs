@@ -248,6 +248,8 @@ struct PageLink {
 #[template(path = "list.html")]
 struct ListPage {
     layout: Layout,
+    /// 検索の条件の誤り。あれば一覧の代わりに出す（検索欄の htmx が入れ替える #results の中に出すため）。
+    query_error: Option<&'static str>,
     q: String,
     total: i64,
     page: i64,
@@ -473,11 +475,33 @@ pub async fn index<B: Backend>(
             },
         ));
     };
-    let Query(params) = params.map_err(|_| ApiError::InvalidField {
-        field: "q",
-        message: "検索の条件が正しくありません",
-    })?;
-    let (pattern, page) = recipe::parse_list_params(&params)?;
+    let params = params.map(|Query(params)| params).unwrap_or_default();
+    let (pattern, page) = match recipe::parse_list_params(&params) {
+        Ok(parsed) => parsed,
+        // 検索の条件が正しくなければ、エラーの画面ではなく一覧の画面に誤りを出す。
+        // 入力しながらの検索は #results だけを入れ替えるので、そこに誤りが無いと、一覧が黙って空になるため。
+        Err(error) => {
+            let message = error.parts().2;
+            let q = params
+                .iter()
+                .find(|(key, _)| key == "q")
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default();
+            return Ok(render(
+                StatusCode::BAD_REQUEST,
+                &ListPage {
+                    layout: Layout::new(Some(&viewer), &session),
+                    query_error: Some(message),
+                    first_page_href: "/".to_owned(),
+                    q,
+                    total: 0,
+                    page: 1,
+                    recipes: Vec::new(),
+                    pages: Vec::new(),
+                },
+            ));
+        }
+    };
     let result = recipe::list_page(&backend, viewer.id(), pattern.as_deref(), page).await?;
     let q = pattern.unwrap_or_default();
     // レシピが無くても 1 ページ目は出す。レシピの数の上限があるので、ページの数は MAX_PAGE を超えない。
@@ -493,6 +517,7 @@ pub async fn index<B: Backend>(
         StatusCode::OK,
         &ListPage {
             layout: Layout::new(Some(&viewer), &session),
+            query_error: None,
             first_page_href: list_href(&q, 1),
             q,
             total: result.total,

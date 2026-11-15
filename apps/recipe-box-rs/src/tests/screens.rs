@@ -394,9 +394,39 @@ async fn list_pages_keep_the_search() {
     let response = screen_get(&backend, "/?q=curry&page=2", Some(&a)).await;
     assert!(response.body.contains("Curry 1<"), "{}", response.body);
     assert!(response.body.contains(r#"aria-current="page">2<"#));
-    // 正しくないページの番号は、エラーの画面にする。
-    let response = screen_get(&backend, "/?page=9", Some(&a)).await;
-    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    // 検索の条件が正しくなければ、API と同じく 400 にし、誤りを一覧の場所（#results の中）に出す。
+    // 入力しながらの検索は #results だけを入れ替えるので、そこに誤りが無いと一覧が黙って空になる。
+    for (path, message) in [
+        (
+            "/?page=3".to_owned(),
+            "ページの番号は 1 から 2 までの整数です",
+        ),
+        (
+            format!("/?q={}", "a".repeat(101)),
+            "検索する料理名は 100 文字までです",
+        ),
+    ] {
+        let response = screen_get(&backend, &path, Some(&a)).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{path}");
+        let results = response
+            .body
+            .split(r#"<section id="results">"#)
+            .nth(1)
+            .unwrap();
+        assert!(
+            results.contains(&format!(
+                r#"<p class="message error" role="alert">{message}</p>"#
+            )),
+            "{path}: {results}"
+        );
+    }
+    // 入力した検索の文字列は、検索欄に残す。
+    let response = screen_get(&backend, &format!("/?q={}", "a".repeat(101)), Some(&a)).await;
+    assert!(
+        response
+            .body
+            .contains(&format!(r#"value="{}""#, "a".repeat(101)))
+    );
 }
 
 #[tokio::test]

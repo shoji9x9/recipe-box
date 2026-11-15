@@ -14,6 +14,9 @@
   <button type="submit">探す</button>
 </form>
 <section id="results">
+  {%- if let Some(error) = query_error %}
+  <p class="message error" role="alert">{{ error }}</p>
+  {%- else %}
   <p class="count">{{ total }} 件{% if !q.is_empty() %}（「{{ q }}」を含む料理名）{% endif %}</p>
   {%- if recipes.is_empty() %}
   <p>{% if total == 0 %}レシピがありません。{% else %}このページにはレシピがありません。<a href="{{ first_page_href }}">最初のページへ</a>{% endif %}</p>
@@ -41,6 +44,7 @@
     {%- endif %}
     {%- endfor %}
   </nav>
+  {%- endif %}
   {%- endif %}
 </section>
 {% endblock %}
