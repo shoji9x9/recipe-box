@@ -103,8 +103,9 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 - `modern-web-guidance`: 画面の HTML・CSS・JavaScript を書く前に、今の Web の作り方の指針（ブラウザの機能・アクセシビリティ・性能）を引く。
   入れ方は `gh skill install GoogleChrome/modern-web-guidance modern-web-guidance --agent claude-code --scope project --pin <commit>`。
   - スキルの `SKILL.md` と指針は、`npx -y modern-web-guidance@latest ...` を実行するよう書いているが、その代わりに `mise run mwg -- <サブコマンド> ...` を使う（例: `mise run mwg -- search "<検索の語>" --skill-version <SKILL.md に書かれた値>`、`mise run mwg -- retrieve "<id>"`）。
-    `npx`・`pnpx`・`npm exec`・`pnpm exec` や、`node_modules` の中のファイルで直接実行しない。Claude Code では、コマンドの先頭がよくある形のものを `.claude/settings.json` の `permissions.deny` で止めている。
-    ほかのコマンドに包んだ実行や、環境変数を前に付けた実行などは止まらない（広く止めると、この語を含む grep や commit まで止まる）ので、この決まりが主である。
+    `mise run mwg` 以外の方法（`npx`・`pnpm`・`npm`・`yarn`・`bun` などの起動の仕組みや、`node_modules` の中のファイル）では、どの形でも実行しない。
+    Claude Code では、よくある起動の形を、コマンドの先頭で `.claude/settings.json` の `permissions.deny` によって止めているが、止まらない形もある。
+    広く止めると、この語を含む `grep` や `git commit` まで止まるので、止める形は絞っている。この決まりが主で、deny は補いである。
     - `@latest` は 7 日の待ち（「依存の追加と更新」）を守れないので、`package.json` で版を固定したパッケージを使う。
     - このツールは、検索の語などの利用統計を Google に送るので、`mise run mwg`（`scripts/mwg.sh`）で環境変数 `DISABLE_TELEMETRY=1` を付けて止めている。
     - 使うのは、読むだけの `search`・`list`・`retrieve` に限る（`scripts/mwg.sh` が、ほかを断る）。`install`・`update` などは、版を固定していないパッケージを `npx` で取ってきてスキルを書き換える。
