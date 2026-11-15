@@ -114,19 +114,20 @@ function sleep(ms) {
 }
 
 // seed/recipes.json を読み、API と同じ決まりで確かめる（seed-lib.mjs の validateRecipes）。
-// データの誤り（SeedDataError）は文だけを、それ以外（プログラムの誤りなど）は原因を探せるよう stack も出す。
+// 失敗の文は、公開のログに出るので、stack を出さない（stack の file:// の URL は、パスがエンコードされて伏せられないことがある）。
 function loadRecipes() {
+  const path = join(seedDir, "recipes.json");
   try {
-    regularFileWithoutLinks(join(seedDir, "recipes.json"), root, "seed/recipes.json");
+    regularFileWithoutLinks(path, root, "seed/recipes.json");
     let recipes;
     try {
-      recipes = JSON.parse(readFileSync(join(seedDir, "recipes.json"), "utf8"));
+      recipes = JSON.parse(readFileSync(path, "utf8"));
     } catch (error) {
       throw new SeedDataError(`seed/recipes.json を読めない: ${error.message}`);
     }
     return validateRecipes(recipes, photoDir, root);
   } catch (error) {
-    fail(error instanceof SeedDataError ? error.message : (error.stack ?? String(error)));
+    fail(error?.message ?? String(error));
   }
 }
 

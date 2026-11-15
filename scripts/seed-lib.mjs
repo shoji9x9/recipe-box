@@ -91,9 +91,11 @@ function length(text) {
   return [...text].length;
 }
 
-// seed のデータ（recipes.json と写真）が決まりに合わないときの例外。呼ぶ側は、これだけを利用者向けの文として表示し、
-// ほかの例外（プログラムの誤りなど）は stack を残すため、そのまま投げる。
-export class SeedDataError extends Error {}
+// seed のデータ（recipes.json と写真）が決まりに合わないか、読めないときの例外。
+// validateRecipes は、これにだけ「何件目のレシピか」を添え、ほかの例外（プログラムの誤りなど）はデータの誤りに見せずにそのまま投げる。
+export class SeedDataError extends Error {
+  name = "SeedDataError";
+}
 
 // path を、base（リポジトリのルート）から 1 階層ずつ lstat でたどり、どこにもシンボリックリンクが無ければ、
 // path の lstat の結果を返す（リポジトリの外のファイルを読まないため）。lstat はリンクを辿らないので、外には触れない。
@@ -147,7 +149,7 @@ export function regularFileWithoutLinks(path, base, shown) {
 
 // seed/recipes.json の中身（JSON を読んだ値）を、API と同じ決まりで確かめる。写真は photoDir の下から探す。
 // 写真は、base（リポジトリのルート）の下にリンクを通らずにあるものだけを受け付ける。
-// 決まりに合わなければ、理由を書いた Error を投げる。
+// 決まりに合わないか読めなければ、理由を書いた SeedDataError を投げる。ほかの例外は、そのまま投げる。
 export function validateRecipes(recipes, photoDir, base) {
   if (!Array.isArray(recipes) || recipes.length === 0 || recipes.length > MAX_RECIPES) {
     throw new SeedDataError(`seed/recipes.json は 1 件から ${MAX_RECIPES} 件までの配列にする`);
@@ -196,7 +198,16 @@ export function validateRecipes(recipes, photoDir, base) {
       if (size === 0 || size > MAX_PHOTO_BYTES) {
         throw new SeedDataError(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
       }
-      const contentType = photoContentType(readHead(path));
+      let head;
+      try {
+        head = readHead(path);
+      } catch (error) {
+        if (error.syscall === undefined) {
+          throw error;
+        }
+        throw new SeedDataError(`${where}: 写真 seed/photos/${file} を読めない（${error.code}）`);
+      }
+      const contentType = photoContentType(head);
       if (contentType === null) {
         throw new SeedDataError(`${where}: 写真 ${file} が JPEG・PNG・WebP のどれでもない`);
       }

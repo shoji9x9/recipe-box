@@ -160,7 +160,12 @@ describe("validateRecipes", () => {
   }
   const recipe = (overrides = {}) => ({ name: "カレー", servings: 2, ...overrides });
   const validate = (recipes, photoDir = dir) => validateRecipes(recipes, photoDir, base);
-  const rejects = (recipes, pattern, photoDir = dir) => assert.throws(() => validate(recipes, photoDir), pattern);
+  // データの誤りは、どれも SeedDataError で、文が pattern に合う。
+  const rejects = (recipes, pattern, photoDir = dir) =>
+    assert.throws(
+      () => validate(recipes, photoDir),
+      (error) => error instanceof SeedDataError && pattern.test(error.message),
+    );
 
   before(() => {
     // 本物と同じく、<一時ディレクトリ>/seed/photos/ の形にする。
@@ -231,6 +236,13 @@ describe("validateRecipes", () => {
     rejects([recipe({ photos: [file] })], /シンボリックリンク/, join(linkedSeed, "photos"));
     // 写真を使わないレシピだけなら、ディレクトリを読まない
     validate([recipe()], linkedPhotos);
+  });
+
+  test("データの誤りでない例外は、レシピの番号を添えずにそのまま投げる", () => {
+    assert.throws(
+      () => validateRecipes([recipe({ photos: [photo("bug.jpg", 10)] })], dir, undefined),
+      (error) => !(error instanceof SeedDataError) && error instanceof TypeError,
+    );
   });
 
   test("写真のファイル名で、seed/photos/ の外を読ませない", () => {
