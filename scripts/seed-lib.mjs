@@ -1,6 +1,6 @@
 // scripts/seed.mjs の、外部（API・wrangler・標準入力）に触れない部分。単体テスト（seed-lib.test.mjs）で確かめる。
 import { closeSync, lstatSync, openSync, readSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
 // 値はアプリ（apps/recipe-box-rs/src/recipe.rs・photo.rs）と同じにする。アプリの値を変えたら、ここも直す。
@@ -96,6 +96,18 @@ function length(text) {
 export function validateRecipes(recipes, photoDir) {
   if (!Array.isArray(recipes) || recipes.length === 0 || recipes.length > MAX_RECIPES) {
     throw new Error(`seed/recipes.json は 1 件から ${MAX_RECIPES} 件までの配列にする`);
+  }
+  // 写真のディレクトリと、その上（seed/）がシンボリックリンクなら、リポジトリの外を読むことになるので断る。
+  for (const dir of [photoDir, dirname(photoDir)]) {
+    let stat;
+    try {
+      stat = lstatSync(dir);
+    } catch {
+      throw new Error("写真のディレクトリ（seed/photos/）が無い");
+    }
+    if (!stat.isDirectory()) {
+      throw new Error("seed/ と seed/photos/ は、シンボリックリンクでないディレクトリにする");
+    }
   }
   const used = new Set();
   const parsed = recipes.map((recipe, index) => {

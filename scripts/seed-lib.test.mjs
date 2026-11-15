@@ -96,10 +96,12 @@ describe("validateRecipes", () => {
   const rejects = (recipes, pattern) => assert.throws(() => validateRecipes(recipes, dir), pattern);
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), "seed-lib-test-"));
+    // 本物と同じく、<一時ディレクトリ>/seed/photos/ の形にする。
+    dir = join(mkdtempSync(join(tmpdir(), "seed-lib-test-")), "seed", "photos");
+    mkdirSync(dir, { recursive: true });
   });
   after(() => {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(join(dir, "..", ".."), { recursive: true, force: true });
   });
 
   test("決まりどおりのレシピを受け付け、写真の形式と大きさを返す", () => {
@@ -146,6 +148,12 @@ describe("validateRecipes", () => {
     rejects([recipe({ photos: files })], /photos/);
   });
 
+  test("seed/photos/ がシンボリックリンクなら断る", () => {
+    const link = join(dir, "..", "linked-photos");
+    symlinkSync(dir, link);
+    assert.throws(() => validateRecipes([recipe()], link), /シンボリックリンクでないディレクトリ/);
+  });
+
   test("写真のファイル名で、seed/photos/ の外を読ませない", () => {
     for (const file of ["../recipes.json", "/etc/passwd", "a/b.jpg", "A.jpg", "-a.jpg", "a.gif", 1]) {
       rejects([recipe({ photos: [file] })], /ファイル名/);
@@ -184,6 +192,9 @@ describe("validateRecipes", () => {
     // 上限ちょうどになるよう、最大の大きさの写真を並べ、最後の 1 枚で端数を合わせる。そこへ写真を 1 枚足すと超える。
     const count = Math.ceil(MAX_WORKSPACE_PHOTO_BYTES / MAX_PHOTO_BYTES);
     const last = MAX_WORKSPACE_PHOTO_BYTES - (count - 1) * MAX_PHOTO_BYTES;
+    // テストの前提: 最後の 1 枚が画像の先頭を持てる大きさで、レシピの件数の上限に収まる（上限の値を変えたら、作り方を見直す）。
+    assert.ok(last >= jpeg.length);
+    assert.ok(Math.ceil((count + 1) / MAX_PHOTOS_PER_RECIPE) <= MAX_RECIPES);
     const sizes = [...Array(count - 1).fill(MAX_PHOTO_BYTES), last, jpeg.length];
     const files = sizes.map((size, i) => photo(`t${i}.jpg`, size));
     const chunk = (list) =>
