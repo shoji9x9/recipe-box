@@ -1485,6 +1485,9 @@ async fn workspace_deleted_by_another_request_is_treated_as_deleted() {
             "{name}"
         );
     }
-    // D1 を消す前の R2 の削除は、済んでいる。
+    // ワークスペース・レシピ・写真の行と、R2 のデータが残っていない。
+    assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    assert!(backend.recipes.lock().unwrap().is_empty());
+    assert!(backend.photos.lock().unwrap().is_empty());
     assert!(backend.objects.lock().unwrap().is_empty());
 }
