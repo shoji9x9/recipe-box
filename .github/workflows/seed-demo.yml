@@ -4,6 +4,7 @@ name: Reset demo
 # デモの ID と Cloudflare の API トークンは、GitHub Environment「production」の secret に置く（deploy.yml と同じ）。
 # デモの ID を知れば誰でもデモに書き込めるので、公開リポジトリの Actions のログで伏せ字にする。
 on:
+  # GitHub は、公開リポジトリで 60 日活動が無いと schedule を止める。止まったら Actions の画面で有効にし直す（docs/development.md）。
   schedule:
     - cron: "0 19 * * *" # 毎日 4:00（日本時間）。使われていないワークスペースの自動削除（3:00）の後
   workflow_dispatch: {}
@@ -48,7 +49,8 @@ jobs:
         with:
           cache: true
           # seed は Node と pnpm（wrangler）だけを使う。Rust などは入れない。
-          install_args: node pnpm
+          # lefthook は、pnpm install がルートの package.json の prepare（lefthook install）で使う。
+          install_args: node pnpm lefthook
       - name: Install Node packages
         run: pnpm install --frozen-lockfile
       - name: Seed

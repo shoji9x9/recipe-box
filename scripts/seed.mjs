@@ -12,7 +12,8 @@
 //   2. 公開 API で、デモのレシピを全部消す（レシピを消すと、その写真も消える）。
 //   3. 公開 API で、サンプルのレシピを入れる。
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
-//      アプリと同じく D1 の行を先に入れ、R2 に書けなかった写真の行は消す（どの行からもたどれないデータを R2 に残さない）。
+//      アプリと同じく D1 の行を先に入れ、R2 に書けなかった写真の行は消す。書いた後に行が消えていれば（レシピが消された）、
+//      R2 のデータも消す。どの行からもたどれないデータを R2 に残さないためである。
 //   5. 公開 API で、レシピの数と、写真をすべて読めることを確かめる。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
 import { execFile } from "node:child_process";
@@ -27,6 +28,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const seedDir = join(root, "seed");
 const photoDir = join(seedDir, "photos");
 const appDir = join(root, "apps", "recipe-box-rs");
+// 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
+const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
 
 const BASE_URLS = {
   "--local": "http://localhost:8787",
@@ -37,16 +40,19 @@ const BUCKET = "recipe-box-photos";
 const MAX_RECIPES = 80;
 const MAX_PHOTOS_PER_RECIPE = 5;
 const MAX_PHOTO_BYTES = 4_000_000;
+// seed は写真の上限を判定する API を通らずに入れるので、ワークスペースの合計の上限も seed で確かめる。
+const MAX_WORKSPACE_PHOTO_BYTES = 100_000_000;
 const MAX_NAME = 100;
 const MAX_INGREDIENTS = 2_000;
 const MAX_STEPS = 5_000;
 // 書き込む API の回数の制限（60 秒に 30 回）で 429 になったら、枠が空くまで待ってやり直す。
 const RATE_LIMIT_WAIT_MS = 61_000;
 const MAX_RETRIES = 5;
-// 写真を R2 に書く wrangler を同時に動かす数。ローカルでは、wrangler dev が使う保存先に同時に書くと失敗することがあるので、1 つずつ書く。
+// 写真の R2 の操作で wrangler を同時に動かす数。ローカルでは、wrangler dev が使う保存先に同時に書くと失敗することがあるので、1 つずつ書く。
 const UPLOAD_CONCURRENCY = { "--local": 1, "--remote": 4 };
-// R2 への書き込みが失敗したときに試す回数。
-const UPLOAD_ATTEMPTS = 3;
+// R2 への書き込みと削除が失敗したときに試す回数と、やり直す前に待つ時間（回ごとに延ばす）。
+const R2_ATTEMPTS = 4;
+const R2_RETRY_WAIT_MS = 5_000;
 
 const ID_PATTERN = /^[0-9a-f]{32}$/;
 const PHOTO_FILE_PATTERN = /^[a-z0-9][a-z0-9-]*\.(jpg|png|webp)$/;
@@ -119,7 +125,7 @@ function loadRecipes() {
     fail(`seed/recipes.json は 1 件から ${MAX_RECIPES} 件までの配列にする`);
   }
   const used = new Set();
-  return recipes.map((recipe, index) => {
+  const parsed = recipes.map((recipe, index) => {
     const where = `seed/recipes.json の ${index + 1} 件目`;
     const { name, servings, ingredients = "", steps = "", photos = [] } = recipe ?? {};
     if (typeof name !== "string" || name.trim() === "" || length(name) > MAX_NAME) {
@@ -156,14 +162,20 @@ function loadRecipes() {
       if (size === 0 || size > MAX_PHOTO_BYTES) {
         fail(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
       }
-      const contentType = photoContentType(readFileSync(path));
+      const bytes = readFileSync(path);
+      const contentType = photoContentType(bytes);
       if (contentType === null) {
         fail(`${where}: 写真 ${file} が JPEG・PNG・WebP のどれでもない`);
       }
-      return { file, path, size, contentType };
+      return { file, path, size, contentType, bytes };
     });
     return { body: { name, servings, ingredients, steps }, files };
   });
+  const total = parsed.flatMap((recipe) => recipe.files).reduce((sum, file) => sum + file.size, 0);
+  if (total > MAX_WORKSPACE_PHOTO_BYTES) {
+    fail(`写真の合計が ${total} バイトで、ワークスペースの上限（${MAX_WORKSPACE_PHOTO_BYTES} バイト）を超える`);
+  }
+  return parsed;
 }
 
 // 公開 API を呼ぶ。書き込みが回数の制限で 429 になったら、待ってやり直す。
@@ -198,7 +210,7 @@ async function expectStatus(response, status, what) {
 // wrangler を動かす。出力には ID が入るので、失敗したときだけ、ID を伏せて表示する。
 async function wrangler(...wranglerArgs) {
   try {
-    const { stdout } = await run("pnpm", ["exec", "wrangler", ...wranglerArgs, target], {
+    const { stdout } = await run(wranglerBin, [...wranglerArgs, target], {
       cwd: appDir,
       maxBuffer: 16 * 1024 * 1024,
     });
@@ -208,41 +220,64 @@ async function wrangler(...wranglerArgs) {
   }
 }
 
-// 写真を R2 に書く。ファイルを順に取り、UPLOAD_CONCURRENCY 個まで同時に動かす。やり直しても書けなかった写真を返す。
-async function uploadPhotos(photos) {
+// R2 の操作を、一時的な失敗なら待ってやり直す。やり直しても失敗したら false を返す。
+async function r2(action, photo, ...extra) {
+  const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await wrangler("r2", "object", action, key, ...extra);
+      return true;
+    } catch (error) {
+      if (attempt >= R2_ATTEMPTS) {
+        console.error(`写真 ${photo.file} の R2 の ${action} に失敗した: ${error.message}`);
+        return false;
+      }
+      console.log(`写真 ${photo.file} の R2 の ${action} に失敗したので、やり直す（${attempt} 回目）`);
+      await sleep(R2_RETRY_WAIT_MS * attempt);
+    }
+  }
+}
+
+// photos を UPLOAD_CONCURRENCY 個まで同時に処理し、task が false を返した写真を返す。
+async function eachPhoto(photos, task) {
   const failed = [];
   let next = 0;
   async function worker() {
     while (next < photos.length) {
       const photo = photos[next];
       next += 1;
-      for (let attempt = 1; ; attempt += 1) {
-        try {
-          await wrangler(
-            "r2",
-            "object",
-            "put",
-            `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`,
-            "--file",
-            photo.path,
-            "--content-type",
-            photo.contentType,
-          );
-          break;
-        } catch (error) {
-          if (attempt < UPLOAD_ATTEMPTS) {
-            console.log(`写真 ${photo.file} を R2 に書けなかったので、やり直す（${attempt} 回目）`);
-            continue;
-          }
-          console.error(`写真 ${photo.file} を R2 に書けなかった: ${error.message}`);
-          failed.push(photo);
-          break;
-        }
+      if (!(await task(photo))) {
+        failed.push(photo);
       }
     }
   }
   await Promise.all(Array.from({ length: UPLOAD_CONCURRENCY[target] }, worker));
   return failed;
+}
+
+// 写真のうち、D1 に行が在るものの ID を返す。
+async function existingPhotoIds(photos) {
+  if (photos.length === 0) {
+    return new Set();
+  }
+  const ids = photos.map((photo) => `'${photo.id}'`).join(", ");
+  const output = await wrangler(
+    "d1",
+    "execute",
+    "DB",
+    "--json",
+    "--command",
+    `SELECT id FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`,
+  );
+  return new Set((JSON.parse(output).at(-1)?.results ?? []).map((row) => row.id));
+}
+
+async function deletePhotoRows(photos) {
+  if (photos.length === 0) {
+    return;
+  }
+  const ids = photos.map((photo) => `'${photo.id}'`).join(", ");
+  await wrangler("d1", "execute", "DB", "--command", `DELETE FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`);
 }
 
 async function main() {
@@ -303,34 +338,44 @@ async function main() {
   }
   console.log(`レシピ ${recipes.length} 件を入れた`);
 
-  // 4. 写真の D1 の行を入れてから、R2 にデータを書く。
+  // 4. 写真の D1 の行を入れてから、R2 にデータを書く（アプリの写真の追加と同じ順）。
+  //    デモは誰でも書き込めるので、入れている間にレシピが消されることがある。そのレシピの写真は入れない。
+  let inserted = [];
+  let lost = 0;
   if (photos.length > 0) {
     const now = Date.now();
+    // レシピが在るときだけ行を入れる（消されていても、ほかの写真の行は入れる）。
     // 値は、形を確かめた ID・数・決まった形式の文字列だけなので、SQL に埋め込める。
-    const rows = photos.map(
+    const statements = photos.map(
       (photo, index) =>
-        `('${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index})`,
+        "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at) " +
+        `SELECT '${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index} ` +
+        `FROM recipes WHERE workspace_id = '${workspaceId}' AND id = '${photo.recipeId}'`,
     );
-    await wrangler(
-      "d1",
-      "execute",
-      "DB",
-      "--command",
-      `INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at) VALUES ${rows.join(", ")}`,
-    );
-    const failed = await uploadPhotos(photos);
+    await wrangler("d1", "execute", "DB", "--command", statements.join("; "));
+    const rows = await existingPhotoIds(photos);
+    inserted = photos.filter((photo) => rows.has(photo.id));
+    lost += photos.length - inserted.length;
+
+    const failed = await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType));
     if (failed.length > 0) {
-      const ids = failed.map((photo) => `'${photo.id}'`).join(", ");
-      await wrangler(
-        "d1",
-        "execute",
-        "DB",
-        "--command",
-        `DELETE FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`,
-      );
-      fail(`写真 ${failed.length} 枚を入れられなかった。もう一度実行する`);
+      await deletePhotoRows(failed);
+      fail(`写真 ${failed.length} 枚を R2 に書けなかった。もう一度実行する`);
     }
-    console.log(`写真 ${photos.length} 枚を入れた`);
+    // R2 に書いている間にレシピが消されると、行は消えたのに R2 のデータが残る。
+    // アプリの写真の追加と同じく、書いた後に行が在るかを確かめ、無ければ R2 のデータを消す。
+    const after = await existingPhotoIds(inserted);
+    const gone = inserted.filter((photo) => !after.has(photo.id));
+    const notDeleted = await eachPhoto(gone, (photo) => r2("delete", photo));
+    if (notDeleted.length > 0) {
+      fail(`消されたレシピの写真 ${notDeleted.length} 枚のデータを R2 から消せなかった`);
+    }
+    inserted = inserted.filter((photo) => after.has(photo.id));
+    lost += gone.length;
+    console.log(`写真 ${inserted.length} 枚を入れた`);
+  }
+  if (lost > 0) {
+    fail(`入れている間にレシピが消され、写真 ${lost} 枚を入れられなかった。もう一度実行する`);
   }
 
   // 5. 公開 API で確かめる。
@@ -340,11 +385,11 @@ async function main() {
   if (total !== recipes.length) {
     fail(`レシピの数が ${total} 件で、入れた ${recipes.length} 件と違う（入れている間に誰かが書き込んだかもしれない）`);
   }
-  for (const photo of photos) {
+  for (const photo of inserted) {
     const response = await api("GET", `/api/recipes/${photo.recipeId}/photos/${photo.id}`);
     await expectStatus(response, 200, `写真 ${photo.file} の取得`);
     const bytes = Buffer.from(await response.arrayBuffer());
-    if (!bytes.equals(readFileSync(photo.path))) {
+    if (!bytes.equals(photo.bytes)) {
       fail(`写真 ${photo.file} の中身が違う`);
     }
   }
