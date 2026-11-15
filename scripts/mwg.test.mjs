@@ -34,12 +34,15 @@ describe("mwg.sh", () => {
     ["retrieve", "dialog"],
     ["search", "dialog", "--skill-version", "2026_10_30-58d055df"],
     ["retrieve", "dialog", "--skill-version=2026_10_30-58d055df"],
-    // サブコマンドが無ければ、ツールは版か使い方を出すだけである。
+    // サブコマンドが無ければ、ツールは版か使い方を出すだけである（引数が無いときは、使い方を出して 1 で終わる）。
+    // ここでは、門を通ってツールに渡ることだけを確かめる（偽の pnpm は 0 で終わる）。
     ["-v"],
+    ["--version"],
     ["-h"],
+    ["--help"],
     [],
   ]) {
-    test(`[${args.join(", ")}] は、利用統計を止めて固定した版で動かす`, () => {
+    test(`[${args.join(", ")}] は、利用統計を止めて固定した版でツールに渡す`, () => {
       const result = run(...args);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, ["telemetry=1", "exec", "modern-web-guidance", ...args].join("\n") + "\n");
@@ -58,7 +61,11 @@ describe("mwg.sh", () => {
     ["--", "search"],
     ["-", "search"],
     ["", "install"],
+    ["x:search"],
+    ["search-x"],
     ["-v", "install"],
+    ["-h", "install"],
+    ["-v", "-h"],
     ["--choose"],
   ]) {
     test(`[${args.join(", ")}] は断る`, () => {
