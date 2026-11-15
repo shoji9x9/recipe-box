@@ -9,9 +9,10 @@ export const MAX_PHOTOS_PER_RECIPE = 5;
 export const MAX_PHOTO_BYTES = 4_000_000;
 // seed は写真の上限を判定する API を通らずに入れるので、ワークスペースの合計の上限も seed で確かめる。
 export const MAX_WORKSPACE_PHOTO_BYTES = 100_000_000;
-const MAX_NAME = 100;
-const MAX_INGREDIENTS = 2_000;
-const MAX_STEPS = 5_000;
+export const MAX_NAME = 100;
+export const MAX_SERVINGS = 100;
+export const MAX_INGREDIENTS = 2_000;
+export const MAX_STEPS = 5_000;
 // やり直すときのログに出す理由の長さ。
 const REASON_LENGTH = 300;
 
@@ -103,8 +104,8 @@ export function validateRecipes(recipes, photoDir) {
     if (typeof name !== "string" || name.trim() === "" || length(name) > MAX_NAME) {
       throw new Error(`${where}: name は空でない ${MAX_NAME} 文字までの文字列にする`);
     }
-    if (!Number.isInteger(servings) || servings < 1 || servings > 100) {
-      throw new Error(`${where}: servings は 1 から 100 までの整数にする`);
+    if (!Number.isInteger(servings) || servings < 1 || servings > MAX_SERVINGS) {
+      throw new Error(`${where}: servings は 1 から ${MAX_SERVINGS} までの整数にする`);
     }
     if (typeof ingredients !== "string" || length(ingredients) > MAX_INGREDIENTS) {
       throw new Error(`${where}: ingredients は ${MAX_INGREDIENTS} 文字までの文字列にする`);
@@ -127,12 +128,17 @@ export function validateRecipes(recipes, photoDir) {
       }
       used.add(file);
       const path = join(photoDir, file);
-      let size;
+      let stat;
       try {
-        size = statSync(path).size;
+        stat = statSync(path);
       } catch {
         throw new Error(`${where}: 写真 seed/photos/${file} が無い`);
       }
+      // ディレクトリなどは、先頭を読むときに理由の分からない失敗になるので、先に断る。
+      if (!stat.isFile()) {
+        throw new Error(`${where}: 写真 seed/photos/${file} がふつうのファイルでない`);
+      }
+      const { size } = stat;
       if (size === 0 || size > MAX_PHOTO_BYTES) {
         throw new Error(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
       }

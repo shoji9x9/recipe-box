@@ -1,14 +1,18 @@
 // scripts/seed-lib.mjs の単体テスト（mise run test で実行する）。
 // 伏せ字は、公開の Actions のログにデモの ID などを出さないための要なので、形ごとに確かめる。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import {
+  MAX_INGREDIENTS,
+  MAX_NAME,
   MAX_PHOTO_BYTES,
   MAX_PHOTOS_PER_RECIPE,
   MAX_RECIPES,
+  MAX_SERVINGS,
+  MAX_STEPS,
   MAX_WORKSPACE_PHOTO_BYTES,
   pathPattern,
   redact,
@@ -116,24 +120,24 @@ describe("validateRecipes", () => {
     );
   });
 
-  test("name は 100 文字まで（文字の数で数える）", () => {
-    validateRecipes([recipe({ name: "🍛".repeat(100) })], dir);
-    rejects([recipe({ name: "あ".repeat(101) })], /name/);
+  test("name は上限の文字数まで（文字の数で数える）", () => {
+    validateRecipes([recipe({ name: "🍛".repeat(MAX_NAME) })], dir);
+    rejects([recipe({ name: "あ".repeat(MAX_NAME + 1) })], /name/);
     rejects([recipe({ name: "  " })], /name/);
     rejects([recipe({ name: 1 })], /name/);
   });
 
-  test("servings は 1 から 100 までの整数", () => {
-    validateRecipes([recipe({ servings: 1 }), recipe({ servings: 100 })], dir);
-    for (const servings of [0, 101, 1.5, "2"]) {
+  test("servings は 1 から上限までの整数", () => {
+    validateRecipes([recipe({ servings: 1 }), recipe({ servings: MAX_SERVINGS })], dir);
+    for (const servings of [0, MAX_SERVINGS + 1, 1.5, "2"]) {
       rejects([recipe({ servings })], /servings/);
     }
   });
 
   test("ingredients と steps の長さ", () => {
-    validateRecipes([recipe({ ingredients: "あ".repeat(2000), steps: "あ".repeat(5000) })], dir);
-    rejects([recipe({ ingredients: "あ".repeat(2001) })], /ingredients/);
-    rejects([recipe({ steps: "あ".repeat(5001) })], /steps/);
+    validateRecipes([recipe({ ingredients: "あ".repeat(MAX_INGREDIENTS), steps: "あ".repeat(MAX_STEPS) })], dir);
+    rejects([recipe({ ingredients: "あ".repeat(MAX_INGREDIENTS + 1) })], /ingredients/);
+    rejects([recipe({ steps: "あ".repeat(MAX_STEPS + 1) })], /steps/);
   });
 
   test("写真は 1 件に上限の枚数まで", () => {
@@ -152,6 +156,8 @@ describe("validateRecipes", () => {
     const file = photo("twice.jpg", 10);
     rejects([recipe({ photos: [file] }), recipe({ photos: [file] })], /2 回/);
     rejects([recipe({ photos: ["missing.jpg"] })], /無い/);
+    mkdirSync(join(dir, "dir.jpg"));
+    rejects([recipe({ photos: ["dir.jpg"] })], /ふつうのファイルでない/);
   });
 
   test("写真は 1 バイトから上限のバイト数まで", () => {
@@ -173,8 +179,12 @@ describe("validateRecipes", () => {
 
   test("写真の合計は、ワークスペースの上限まで", () => {
     const perRecipe = MAX_PHOTOS_PER_RECIPE;
-    const count = MAX_WORKSPACE_PHOTO_BYTES / MAX_PHOTO_BYTES;
-    const files = Array.from({ length: count + 1 }, (_, i) => photo(`t${i}.jpg`, MAX_PHOTO_BYTES));
+    // 上限ちょうどになるよう、最大の大きさの写真を並べ、割り切れない分を最後の 1 枚にする。最後に 1 バイトの写真を足すと超える。
+    const full = Math.floor(MAX_WORKSPACE_PHOTO_BYTES / MAX_PHOTO_BYTES);
+    const rest = MAX_WORKSPACE_PHOTO_BYTES - full * MAX_PHOTO_BYTES;
+    const sizes = [...Array(full).fill(MAX_PHOTO_BYTES), ...(rest > 0 ? [rest] : []), 1];
+    const files = sizes.map((size, i) => photo(`t${i}.jpg`, Math.max(size, 4)));
+    const count = files.length - 1;
     const chunk = (list) =>
       Array.from({ length: Math.ceil(list.length / perRecipe) }, (_, i) =>
         recipe({ photos: list.slice(i * perRecipe, (i + 1) * perRecipe) }),
