@@ -8,7 +8,7 @@ use std::{
     future::{Future, ready},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering},
     },
 };
 
@@ -67,6 +67,13 @@ pub struct FakeBackend {
     pub broken_r2_put: bool,
     /// `true` なら、R2 に書き込んでいる間に、別のリクエストがすべての写真の行を消したことにする。
     pub photo_rows_vanish_on_put: bool,
+    /// `true` なら、R2 の削除が失敗したことにする。
+    pub broken_r2_delete: bool,
+    /// `true` なら、最初の R2 の削除の直後に、別のリクエストが同じレシピに写真を 1 枚追加し（D1 の行と R2 のデータ）、
+    /// 消したばかりのキーにも書き込んだことにする。レシピの削除と写真の追加が同時に起きた場合を確かめる。
+    pub photo_added_after_first_delete: bool,
+    /// `photo_added_after_first_delete` の写真を、もう追加したか。
+    pub injected_photo: Arc<AtomicBool>,
 }
 
 impl Default for FakeBackend {
@@ -89,6 +96,9 @@ impl Default for FakeBackend {
             objects: Arc::default(),
             broken_r2_put: false,
             photo_rows_vanish_on_put: false,
+            broken_r2_delete: false,
+            photo_added_after_first_delete: false,
+            injected_photo: Arc::default(),
         }
     }
 }
@@ -454,9 +464,35 @@ impl Backend for FakeBackend {
     }
 
     fn delete_objects(&self, keys: Vec<String>) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.broken_r2_delete {
+            return ready(Err(BackendError("壊れた R2".into())));
+        }
         let mut objects = self.objects.lock().unwrap();
-        for key in keys {
-            objects.remove(&key);
+        for key in &keys {
+            objects.remove(key);
+        }
+        if self.photo_added_after_first_delete && !self.injected_photo.swap(true, Ordering::Relaxed)
+        {
+            // キーは photos/<workspace>/<recipe>/<photo>。同じレシピに、別の写真を足す。
+            let parts: Vec<&str> = keys[0].split('/').collect();
+            let (workspace, recipe) = (parts[1], parts[2]);
+            let id = "99999999999999999999999999999999";
+            self.photos.lock().unwrap().push((
+                workspace.to_owned(),
+                recipe.to_owned(),
+                Photo {
+                    id: id.to_owned(),
+                    content_type: "image/jpeg".to_owned(),
+                    size: 1,
+                    created_at: self.now_millis(),
+                },
+            ));
+            objects.insert(
+                format!("photos/{workspace}/{recipe}/{id}"),
+                (vec![0xff], "image/jpeg".to_owned()),
+            );
+            // 一覧に載っていた写真のデータが、消した後に書き込まれた場合（追加の途中の写真）。
+            objects.insert(keys[0].clone(), (vec![0xff], "image/jpeg".to_owned()));
         }
         ready(Ok(()))
     }
