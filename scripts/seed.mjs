@@ -255,7 +255,8 @@ async function api(method, path, body) {
     } catch (error) {
       // fetch の error.message は「fetch failed」だけなので、原因（ECONNRESET など）を添える。
       // 接続を何度か試して失敗すると、cause が AggregateError になり、原因はその errors に入る。
-      const cause = error.cause?.code ?? error.cause?.errors?.[0]?.code ?? error.cause?.message;
+      const cause =
+        error.cause?.code ?? error.cause?.errors?.[0]?.code ?? error.cause?.errors?.[0]?.message ?? error.cause?.message;
       const reason = `${error.message}${cause ? `（${cause}）` : ""}`;
       if (!retryable || attempt >= MAX_RETRIES) {
         throw new Error(`${label} に失敗した: ${reason}`);
@@ -515,14 +516,14 @@ async function main() {
   let deleted = 0;
   const attempted = new Set();
   for (let round = 0; ; round += 1) {
-    if (round >= MAX_DELETE_ROUNDS) {
-      fail("レシピを消し終わらない（入れ直している間に、誰かがレシピを足し続けているかもしれない）");
-    }
     const response = await api("GET", "/api/recipes?page=1");
     await expectStatus(response, 200, "レシピの一覧の取得");
     const { recipes: page } = await response.json();
     if (page.length === 0) {
       break;
+    }
+    if (round >= MAX_DELETE_ROUNDS) {
+      fail("レシピを消し終わらない（入れ直している間に、誰かがレシピを足し続けているかもしれない）");
     }
     if (page.some((recipe) => attempted.has(recipe.id))) {
       fail("レシピを消しても一覧から無くならない");

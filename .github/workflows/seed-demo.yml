@@ -60,17 +60,22 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # 色の制御文字が ID の途中に入ると、下の伏せ字の正規表現に合わなくなるので、色を付けさせない。
+          NO_COLOR: "1"
+          FORCE_COLOR: "0"
         run: |
-          # 失敗したら、理由を、ID の形の値（UUID・16 進数 32 文字）を伏せてから出す（まだ ::add-mask:: をしていないため）。
+          # 失敗したら、理由を、ID の形の値を伏せてから出す（まだ ::add-mask:: をしていないため）。
+          # scripts/seed.mjs の redact() と同じく、16 進数と - が 32 文字以上続くところを 1 つの正規表現で伏せる。
           mask() {
-            sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/***/g; s/[0-9a-f]{32}/***/g' "$@"
+            sed -E 's/[0-9a-fA-F-]{32,}/***/g' "$@"
           }
           if ! pnpm exec wrangler d1 list --json >/tmp/d1-list.json 2>/tmp/d1-list.log; then
-            mask /tmp/d1-list.log
+            mask /tmp/d1-list.json /tmp/d1-list.log
             echo "::error::D1 のデータベースの一覧を取れない"
             exit 1
           fi
-          database_id=$(jq -r 'first(.[] | select(.name == "recipe-box") | .uuid) // empty' /tmp/d1-list.json) || database_id=""
+          # jq の失敗の文には一覧の中身が入りうるので、出さない。
+          database_id=$(jq -r 'first(.[] | select(.name == "recipe-box") | .uuid) // empty' /tmp/d1-list.json 2>/dev/null) || database_id=""
           if [ -z "$database_id" ]; then
             echo "::error::D1 のデータベース recipe-box の ID を取れない"
             exit 1
