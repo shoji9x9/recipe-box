@@ -34,6 +34,12 @@ if ! [[ "$id" =~ ^[0-9a-f]{32}$ ]]; then
   exit 2
 fi
 
+# 結果を読むのに jq を使う。D1 を変えた後で jq が無いと分かると、変えたかどうかを示せないので、先に確かめる。
+if ! command -v jq >/dev/null; then
+  echo "jq が要る（docs/development.md の「前提」）" >&2
+  exit 1
+fi
+
 cd "$(dirname "$0")/../apps/recipe-box-rs"
 # wrangler d1 execute は値を別に渡せないので、形を確かめた ID を埋め込む。
 # ローカルの D1 は変えた件数を返さないので、続けて同じ ID の印を読み、変わったかを確かめる。

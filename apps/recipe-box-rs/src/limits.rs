@@ -16,6 +16,14 @@ use axum::{
 
 use crate::{backend::Backend, error::ApiError, photo::MAX_PHOTO_BYTES, recipe::MAX_BODY_BYTES};
 
+/// 1 日のミリ秒。
+pub const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
+
+/// `now` の日の、UTC の 0 時（ミリ秒）。1 日の数の上限と、その記録の片付け（`workspace::delete_unused`）で同じ境目を使う。
+pub const fn start_of_utc_day(now: i64) -> i64 {
+    now - now.rem_euclid(DAY_MILLIS)
+}
+
 /// リクエストを送った人を見分けるのに使うヘッダー。Cloudflare が接続元の IP アドレスを入れる。
 const CLIENT_IP_HEADER: &str = "cf-connecting-ip";
 

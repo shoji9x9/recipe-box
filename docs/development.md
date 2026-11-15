@@ -7,7 +7,7 @@
 - [mise](https://mise.jdx.dev/)
 - [GitHub CLI](https://cli.github.com/)（`gh auth login` で認証しておく）
 - Google Chrome（エージェントが chrome-devtools MCP で画面を確かめるときだけ要る）
-- `curl` と `jq`（`mise run smoke` のスモークテストで使う）
+- `curl` と `jq`（`mise run smoke` のスモークテストと、`mise run pin` で使う）
 - OS のパッケージの `pkg-config` と OpenSSL の開発用ファイル。worker-build のビルドに要る。
   Ubuntu では `sudo apt-get install -y pkg-config libssl-dev` で入る。
 

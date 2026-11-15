@@ -77,6 +77,8 @@ pub struct FakeBackend {
     pub photo_added_after_first_delete: bool,
     /// `true` なら、ワークスペースを消す直前に、別のリクエストが同じワークスペースを消したことにする。
     pub workspace_vanishes_on_delete: bool,
+    /// 自動削除の対象を選んだ直後に、別のリクエストがこのワークスペースを使った（最終利用日時を今にした）ことにする。
+    pub used_after_listing: Option<String>,
     /// `photo_added_after_first_delete` の写真を、もう追加したか。
     pub injected_photo: Arc<AtomicBool>,
 }
@@ -105,6 +107,7 @@ impl Default for FakeBackend {
             broken_r2_delete: false,
             photo_added_after_first_delete: false,
             workspace_vanishes_on_delete: false,
+            used_after_listing: None,
             injected_photo: Arc::default(),
         }
     }
@@ -266,6 +269,10 @@ impl Backend for FakeBackend {
                 .collect();
             // テストで順番を決めるため、ID で並べる（本物の SQL は順番を決めない）。
             ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            if let Some(used) = &self.used_after_listing {
+                let now = self.now_millis();
+                self.workspaces.lock().unwrap().insert(used.clone(), now);
+            }
             ids
         }))
     }

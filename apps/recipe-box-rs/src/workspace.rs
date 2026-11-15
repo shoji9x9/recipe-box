@@ -10,10 +10,10 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    backend::{Backend, PhotoKey, WorkspaceLimits},
-    error::ApiError,
+    backend::{Backend, BackendError, PhotoKey, WorkspaceLimits},
+    error::{ApiError, log_error},
     id,
-    limits::client_key,
+    limits::{DAY_MILLIS, client_key, start_of_utc_day},
     photo::{self, object_key},
     recipe::RecipeId,
 };
@@ -31,8 +31,6 @@ pub const MAX_WORKSPACES: i64 = 100;
 ///
 /// 上限いっぱいまで一度に作られるのを遅らせる。
 pub const MAX_WORKSPACES_PER_DAY: i64 = 20;
-/// 1 日のミリ秒。
-const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
 
 /// 最終利用日時を書き換える間隔（1 時間）。
 ///
@@ -154,7 +152,7 @@ pub async fn create_new<B: Backend>(
         max_total: MAX_WORKSPACES,
         max_created_since: MAX_WORKSPACES_PER_DAY,
         // UTC の今日の 0 時。
-        since: now - now.rem_euclid(DAY_MILLIS),
+        since: start_of_utc_day(now),
     };
     if !backend.insert_workspace(&id, now, &limits).await? {
         return Err(ApiError::CapacityReached);
@@ -226,37 +224,81 @@ pub struct CleanupSummary {
     pub deleted: usize,
     /// 対象に選んだが、消さなかった数（共有のデモ・選んだ後に使われた・印が付いた）。
     pub skipped: usize,
-    /// 消すのに失敗した数（理由はログに出す。次の実行でもう一度消す）。
+    /// 消すのに失敗した数（理由はログに出す）。
     pub failed: usize,
+    /// 対象のワークスペースを選べなかったか。
+    pub list_failed: bool,
+    /// 1 日の数を数えるための古い記録を消せなかったか。
+    pub records_failed: bool,
+}
+
+impl CleanupSummary {
+    /// どこかで失敗したか。
+    pub const fn has_failure(&self) -> bool {
+        self.failed > 0 || self.list_failed || self.records_failed
+    }
 }
 
 /// 定期実行（Cron Trigger）で呼ぶ。14 日使われていないワークスペースを、レシピと写真ごと消す。
 ///
 /// 1 つのワークスペースで失敗しても、ほかのワークスペースは消す。
-/// 最後に、1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、前の日までのものを消す。
-pub async fn delete_unused<B: Backend>(backend: &B) -> Result<CleanupSummary, ApiError> {
+/// ワークスペースの削除とは別に、1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、前の日までのものを消す。
+/// 失敗の理由はログに出す。ワークスペースの ID は持ち主の証なので、ログにも出さない。
+pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
     let now = backend.now_millis();
     let before = now - UNUSED_DELETE_AFTER_MILLIS;
     let demo = backend.demo_workspace_id();
     let mut summary = CleanupSummary::default();
-    for id in backend.list_unused_workspaces(before).await? {
+    let ids = match backend.list_unused_workspaces(before).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            log_error(&error);
+            summary.list_failed = true;
+            Vec::new()
+        }
+    };
+    for id in ids {
         // 共有のデモは、印を付け忘れていても消さない。
         if demo.as_ref() == Some(&id) {
             summary.skipped += 1;
             continue;
         }
-        // 選んだ後に使われたワークスペースは、D1 の削除の条件（last_used_before）で消さない。
-        match remove_with_photos(backend, &id, Some(before)).await {
+        match remove_unused(backend, &id, before).await {
             Ok(true) => summary.deleted += 1,
             Ok(false) => summary.skipped += 1,
-            Err(_) => summary.failed += 1,
+            Err(error) => {
+                log_error(&BackendError(format!(
+                    "使われていないワークスペースを消せない: {error:?}"
+                )));
+                summary.failed += 1;
+            }
         }
     }
     // UTC の今日の 0 時より前の記録は、1 日の数に入らない。
-    backend
-        .delete_old_records(now - now.rem_euclid(DAY_MILLIS))
-        .await?;
-    Ok(summary)
+    if let Err(error) = backend.delete_old_records(start_of_utc_day(now)).await {
+        log_error(&error);
+        summary.records_failed = true;
+    }
+    summary
+}
+
+/// 使われていないワークスペースを 1 つ消す。消さなかったとき（選んだ後に使われた・印が付いた）は `false` を返す。
+///
+/// 対象を選んでから順に消すので、選んだ後に使われたワークスペースがありうる。
+/// R2 の写真を消す前に最終利用日時と印を読み直し、使われていれば消さない。D1 の削除でも、同じ条件で確かめ直す。
+async fn remove_unused<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    before: i64,
+) -> Result<bool, ApiError> {
+    match backend.workspace_last_used_at(workspace).await? {
+        Some(last_used_at) if last_used_at < before => {}
+        _ => return Ok(false),
+    }
+    if backend.workspace_pinned(workspace).await? != Some(false) {
+        return Ok(false);
+    }
+    remove_with_photos(backend, workspace, Some(before)).await
 }
 
 /// ワークスペースの写真のデータを R2 から消す。

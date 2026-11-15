@@ -205,10 +205,12 @@ async fn fetch(
 #[event(scheduled)]
 async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     console_error_panic_hook::set_once();
-    match workspace::delete_unused(&CloudflareBackend::new(env)).await {
-        Ok(summary) => worker::console_log!("使われていないワークスペースの自動削除: {summary:?}"),
-        // 失敗の理由は、変換のときにログに出している（error::log_error）。
-        Err(_) => worker::console_error!("使われていないワークスペースの自動削除に失敗した"),
+    let summary = workspace::delete_unused(&CloudflareBackend::new(env)).await;
+    // 失敗の理由は、失敗したところでログに出している（error::log_error）。
+    if summary.has_failure() {
+        worker::console_error!("使われていないワークスペースの自動削除: {summary:?}");
+    } else {
+        worker::console_log!("使われていないワークスペースの自動削除: {summary:?}");
     }
 }
 

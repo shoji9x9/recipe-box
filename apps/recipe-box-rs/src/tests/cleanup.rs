@@ -6,12 +6,14 @@ use super::{
     WORKSPACE_A, WORKSPACE_B, call,
     fake::{FakeBackend, NOW},
 };
-use crate::workspace::{CleanupSummary, UNUSED_DELETE_AFTER_MILLIS, delete_unused};
+use crate::{
+    limits::{DAY_MILLIS, start_of_utc_day},
+    workspace::{CleanupSummary, UNUSED_DELETE_AFTER_MILLIS, delete_unused},
+};
 
 const WORKSPACE_C: &str = "cccccccccccccccccccccccccccccccc";
 const DEMO: &str = "dddddddddddddddddddddddddddddddd";
 const PINNED: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
 /// 自動削除の境目。最終利用日時がこれより前なら消す。
 const BEFORE: i64 = NOW - UNUSED_DELETE_AFTER_MILLIS;
 
@@ -62,14 +64,14 @@ fn setup() -> FakeBackend {
 #[tokio::test]
 async fn unused_workspaces_are_deleted_with_recipes_and_photos() {
     let backend = setup();
-    let summary = delete_unused(&backend).await.unwrap();
+    let summary = delete_unused(&backend).await;
     // A だけを消す。B はちょうど 14 日なので残す。デモは印が無くても残す。
     assert_eq!(
         summary,
         CleanupSummary {
             deleted: 1,
             skipped: 1,
-            failed: 0
+            ..CleanupSummary::default()
         }
     );
     let workspaces = backend.workspaces.lock().unwrap();
@@ -109,12 +111,13 @@ async fn failed_workspace_is_retried_next_time_and_others_are_deleted() {
         ..backend.clone()
     };
     // A は R2 の削除で失敗するが、写真の無い B は消す。A は D1 の行が残るので、次の実行で消せる。
-    let summary = delete_unused(&broken).await.unwrap();
+    let summary = delete_unused(&broken).await;
     assert_eq!((summary.deleted, summary.failed), (1, 1));
+    assert!(summary.has_failure());
     assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
     assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_B));
 
-    let summary = delete_unused(&backend).await.unwrap();
+    let summary = delete_unused(&backend).await;
     assert_eq!((summary.deleted, summary.failed), (1, 0));
     assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
 }
@@ -122,10 +125,10 @@ async fn failed_workspace_is_retried_next_time_and_others_are_deleted() {
 #[tokio::test]
 async fn records_before_today_are_deleted() {
     let backend = setup();
-    let today = NOW - NOW.rem_euclid(DAY_MILLIS);
+    let today = start_of_utc_day(NOW);
     *backend.photo_uploads.lock().unwrap() = vec![today - 1, today, NOW];
     *backend.workspace_creations.lock().unwrap() = vec![today - DAY_MILLIS, today - 1, today];
-    delete_unused(&backend).await.unwrap();
+    delete_unused(&backend).await;
     // UTC の今日の 0 時より前の記録は、1 日の数に入らないので消す。
     assert_eq!(*backend.photo_uploads.lock().unwrap(), [today, NOW]);
     assert_eq!(*backend.workspace_creations.lock().unwrap(), [today]);
@@ -154,4 +157,37 @@ async fn pinned_workspace_cannot_be_deleted_by_api() {
             .keys()
             .any(|key| key.contains(PINNED))
     );
+}
+
+#[tokio::test]
+async fn workspace_used_after_listing_keeps_its_photos() {
+    // 対象を選んだ直後に、A の持ち主が A を開いた。
+    let backend = FakeBackend {
+        used_after_listing: Some(WORKSPACE_A.to_owned()),
+        ..setup()
+    };
+    let summary = delete_unused(&backend).await;
+    assert_eq!((summary.deleted, summary.skipped), (0, 2));
+    // A は消さず、R2 の写真も消さない。
+    assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    assert!(
+        backend
+            .objects
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|key| key.contains(WORKSPACE_A))
+    );
+}
+
+#[tokio::test]
+async fn records_are_deleted_even_if_listing_fails() {
+    let backend = FakeBackend {
+        broken: true,
+        ..setup()
+    };
+    let summary = delete_unused(&backend).await;
+    assert!(summary.list_failed);
+    assert!(summary.records_failed);
+    assert!(summary.has_failure());
 }
