@@ -53,6 +53,20 @@ jobs:
           install_args: node pnpm lefthook
       - name: Install Node packages
         run: pnpm install --frozen-lockfile
+      # D1 のデータベースの ID は secret ではないので、deploy.yml と同じく ::add-mask:: に渡し、この後のログで伏せ字にする。
+      # seed.mjs も ID の形の値を伏せるが、形の思わぬ出方に頼らず、GitHub の側でも伏せる。
+      - name: Mask D1 database ID
+        working-directory: apps/recipe-box-rs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          database_id=$(pnpm exec wrangler d1 list --json | jq -r 'first(.[] | select(.name == "recipe-box") | .uuid) // empty')
+          if [ -z "$database_id" ]; then
+            echo "::error::D1 のデータベース recipe-box の ID を取れない"
+            exit 1
+          fi
+          echo "::add-mask::$database_id"
       - name: Seed
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
