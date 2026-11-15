@@ -15,7 +15,7 @@
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
 //      アプリと同じく D1 の行を先に入れる。書いた後に行が消えていれば（レシピが消された）、その写真の R2 のデータを消す。
 //      ほかの失敗では、入れた写真を消してから止まる（R2 に書き始める前なら行だけを、後なら R2・D1 の順に）。
-//      書いた後に行を読めなければ、残ったかもしれない R2 のデータのキーを表示して止まる。
+//      D1 の読み取りと R2 の操作は、一時的な失敗なら待ってやり直す。
 //      どの行からもたどれないデータを R2 に残さないためである。R2 から消せず、行も無いデータは、手で消せるようキーを表示する。
 //   5. 公開 API で、レシピの数と、写真をすべて読めることを確かめる。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
@@ -58,9 +58,9 @@ const RATE_LIMIT_WAIT_MS = 61_000;
 const MAX_RETRIES = 5;
 // 写真の R2 の操作で wrangler を同時に動かす数。ローカルでは、wrangler dev が使う保存先に同時に書くと失敗することがあるので、1 つずつ書く。
 const UPLOAD_CONCURRENCY = { "--local": 1, "--remote": 4 };
-// R2 への書き込みと削除が失敗したときに試す回数と、やり直す前に待つ時間（回ごとに延ばす）。
-const R2_ATTEMPTS = 4;
-const R2_RETRY_WAIT_MS = 5_000;
+// wrangler の R2 の書き込み・削除と D1 の読み取りが失敗したときに試す回数と、やり直す前に待つ時間（回ごとに延ばす）。
+const RETRY_ATTEMPTS = 4;
+const RETRY_WAIT_MS = 5_000;
 
 const ID_PATTERN = /^[0-9a-f]{32}$/;
 const PHOTO_FILE_PATTERN = /^[a-z0-9][a-z0-9-]*\.(jpg|png|webp)$/;
@@ -246,12 +246,12 @@ async function r2(action, photo, ...extra) {
       await wrangler("r2", "object", action, key, ...extra);
       return true;
     } catch (error) {
-      if (attempt >= R2_ATTEMPTS) {
+      if (attempt >= RETRY_ATTEMPTS) {
         console.error(`写真 ${photo.file} の R2 の ${action} に失敗した: ${error.message}`);
         return false;
       }
       console.log(`写真 ${photo.file} の R2 の ${action} に失敗したので、やり直す（${attempt} 回目）`);
-      await sleep(R2_RETRY_WAIT_MS * attempt);
+      await sleep(RETRY_WAIT_MS * attempt);
     }
   }
 }
@@ -289,15 +289,19 @@ async function existingPhotoIds(photos) {
     return new Set();
   }
   const ids = photoIdList(photos);
-  const output = await wrangler(
-    "d1",
-    "execute",
-    "DB",
-    "--json",
-    "--command",
-    `SELECT id FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`,
-  );
-  return new Set((JSON.parse(output).at(-1)?.results ?? []).map((row) => row.id));
+  const sql = `SELECT id FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const output = await wrangler("d1", "execute", "DB", "--json", "--command", sql);
+      return new Set((JSON.parse(output).at(-1)?.results ?? []).map((row) => row.id));
+    } catch (error) {
+      if (attempt >= RETRY_ATTEMPTS) {
+        throw error;
+      }
+      console.log(redact(`写真の行を読めなかったので、やり直す（${attempt} 回目）: ${error.message}`));
+      await sleep(RETRY_WAIT_MS * attempt);
+    }
+  }
 }
 
 async function deletePhotoRows(photos) {
@@ -316,20 +320,6 @@ async function tryDeletePhotoRows(photos) {
   } catch (error) {
     console.error(redact(`写真の行を消せなかった（R2 のデータが無い行が残る。もう一度 seed を実行すれば消える）: ${error.message}`));
     return false;
-  }
-}
-
-// 書いた後の行の読み直し。一時的な失敗なら、R2 と同じく待ってやり直す。
-async function existingPhotoIdsWithRetry(photos) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await existingPhotoIds(photos);
-    } catch (error) {
-      if (attempt >= R2_ATTEMPTS) {
-        throw error;
-      }
-      await sleep(R2_RETRY_WAIT_MS * attempt);
-    }
   }
 }
 
@@ -478,8 +468,14 @@ async function main() {
           : "写真の行を入れられず、入れた行も消せなかった。もう一度実行する",
       );
     }
-    // r2 は失敗を投げずに false を返す。
-    const failed = await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType));
+    // r2 は失敗を投げずに false を返すが、思わぬ失敗で投げられても、書いた写真を片付けてから止まる。
+    let failed;
+    try {
+      failed = await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType));
+    } catch (error) {
+      console.error(redact(error.message));
+      failed = inserted;
+    }
     if (failed.length > 0) {
       fail(
         (await removePhotos(inserted))
@@ -489,18 +485,16 @@ async function main() {
     }
     // R2 に書いている間にレシピが消されると、行は消えたのに R2 のデータが残る。
     // アプリの写真の追加と同じく、書いた後に行が在るかを確かめ、無ければ R2 のデータを消す。
-    // やり直しても行を読めなければ、どれを消すか決められない。書いている間に消されたレシピがあれば、
-    // その写真のデータが行からたどれずに R2 に残るので、残ったかもしれないキーをすべて表示して止まる。
+    // やり直しても行を読めなければ、どれが消されたかを決められないので、ほかの失敗と同じく、書いた写真をすべて消して止まる。
     let after;
     try {
-      after = await existingPhotoIdsWithRetry(inserted);
+      after = await existingPhotoIds(inserted);
     } catch (error) {
       console.error(redact(error.message));
-      for (const photo of inserted) {
-        console.error(`残ったかもしれないキー: ${shownKey(photo)}`);
-      }
       fail(
-        "写真の行を読めなかった。上のキーのうち、D1 に行が無いもの（SELECT id FROM photos で確かめる）は、行からたどれずに R2 に残っているので、手で消す",
+        (await removePhotos(inserted))
+          ? "写真を書いた後に行を読めなかったので、入れた写真を消した。もう一度実行する"
+          : "写真を書いた後に行を読めず、入れた写真も一部を消せなかった（上の表示を見る）。もう一度実行する",
       );
     }
     const gone = inserted.filter((photo) => !after.has(photo.id));
