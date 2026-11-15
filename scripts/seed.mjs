@@ -238,21 +238,30 @@ async function wrangler(...wranglerArgs) {
   }
 }
 
-// R2 の操作を、一時的な失敗なら待ってやり直す。やり直しても失敗したら false を返す。
-async function r2(action, photo, ...extra) {
-  const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
+// wrangler を動かし、失敗したら待ち時間を延ばしながら RETRY_ATTEMPTS 回まで試す。最後の失敗は投げる。
+async function wranglerWithRetry(what, ...wranglerArgs) {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await wrangler("r2", "object", action, key, ...extra);
-      return true;
+      return await wrangler(...wranglerArgs);
     } catch (error) {
       if (attempt >= RETRY_ATTEMPTS) {
-        console.error(`写真 ${photo.file} の R2 の ${action} に失敗した: ${error.message}`);
-        return false;
+        throw error;
       }
-      console.log(`写真 ${photo.file} の R2 の ${action} に失敗したので、やり直す（${attempt} 回目）`);
+      console.log(`${what}に失敗したので、やり直す（${attempt} 回目）`);
       await sleep(RETRY_WAIT_MS * attempt);
     }
+  }
+}
+
+// R2 の操作を、一時的な失敗なら待ってやり直す。やり直しても失敗したら、投げずに false を返す。
+async function r2(action, photo, ...extra) {
+  const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
+  try {
+    await wranglerWithRetry(`写真 ${photo.file} の R2 の ${action} `, "r2", "object", action, key, ...extra);
+    return true;
+  } catch (error) {
+    console.error(`写真 ${photo.file} の R2 の ${action} に失敗した: ${error.message}`);
+    return false;
   }
 }
 
@@ -290,18 +299,9 @@ async function existingPhotoIds(photos) {
   }
   const ids = photoIdList(photos);
   const sql = `SELECT id FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      const output = await wrangler("d1", "execute", "DB", "--json", "--command", sql);
-      return new Set((JSON.parse(output).at(-1)?.results ?? []).map((row) => row.id));
-    } catch (error) {
-      if (attempt >= RETRY_ATTEMPTS) {
-        throw error;
-      }
-      console.log(redact(`写真の行を読めなかったので、やり直す（${attempt} 回目）: ${error.message}`));
-      await sleep(RETRY_WAIT_MS * attempt);
-    }
-  }
+  // やり直すのは wrangler の失敗だけで、出力を読めない失敗はやり直さない。
+  const output = await wranglerWithRetry("写真の行の読み取り", "d1", "execute", "DB", "--json", "--command", sql);
+  return new Set((JSON.parse(output).at(-1)?.results ?? []).map((row) => row.id));
 }
 
 async function deletePhotoRows(photos) {
@@ -309,7 +309,7 @@ async function deletePhotoRows(photos) {
     return;
   }
   const ids = photoIdList(photos);
-  await wrangler("d1", "execute", "DB", "--command", `DELETE FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`);
+  await wranglerWithRetry("写真の行の削除", "d1", "execute", "DB", "--command", `DELETE FROM photos WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`);
 }
 
 // 写真の行を消す。失敗しても投げず、消せたかを返す。
@@ -468,14 +468,8 @@ async function main() {
           : "写真の行を入れられず、入れた行も消せなかった。もう一度実行する",
       );
     }
-    // r2 は失敗を投げずに false を返すが、思わぬ失敗で投げられても、書いた写真を片付けてから止まる。
-    let failed;
-    try {
-      failed = await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType));
-    } catch (error) {
-      console.error(redact(error.message));
-      failed = inserted;
-    }
+    // r2 は失敗を投げずに false を返す。
+    const failed = await eachPhoto(inserted, (photo) => r2("put", photo, "--file", photo.path, "--content-type", photo.contentType));
     if (failed.length > 0) {
       fail(
         (await removePhotos(inserted))
