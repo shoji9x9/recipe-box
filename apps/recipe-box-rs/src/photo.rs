@@ -57,7 +57,8 @@ const PHOTO_CACHE_CONTROL: &str = "private, max-age=86400";
 /// 同じ URL でもワークスペースが違えば、ブラウザーのキャッシュを使わせない。
 const PHOTO_VARY: &str = "X-Workspace-Id, Cookie";
 /// 写真を配るときの CSP。写真を直接開いたときに、何も読み込ませない。
-const PHOTO_CSP: &str = "default-src 'none'; sandbox";
+/// ほかのサイトの枠（iframe）にも入れさせない（画面と同じ）。
+const PHOTO_CSP: &str = "default-src 'none'; frame-ancestors 'none'; sandbox";
 
 /// 写真の形式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,13 +196,7 @@ pub async fn create<B: Backend>(
 ) -> Result<(StatusCode, Json<Photo>), ApiError> {
     let Path(recipe) = recipe.map_err(|_| ApiError::RecipeNotFound)?;
     let recipe = parse_recipe_id(&recipe)?;
-    let body = body.map_err(|rejection| {
-        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-            ApiError::PayloadTooLarge
-        } else {
-            ApiError::InvalidBody
-        }
-    })?;
+    let body = body.map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
     // Bytes がほかに持ち主の無い 1 つの塊なら、コピーせずに Vec にする。
     let photo = add(&backend, &workspace.id, &recipe, Vec::from(body)).await?;
     Ok((StatusCode::CREATED, Json(photo)))

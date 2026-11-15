@@ -232,6 +232,8 @@ impl IntoResponse for ScreenError {
 #[template(path = "error.html")]
 struct ErrorPage {
     layout: Layout,
+    /// 戻り先。`None` なら一覧に戻す。
+    back: Option<(String, &'static str)>,
 }
 
 /// エラーの画面。説明は見出しの下の知らせに出す。
@@ -241,6 +243,7 @@ fn error_page(error: &ApiError) -> Response {
         status,
         &ErrorPage {
             layout: Layout::default().with_alert(message),
+            back: None,
         },
     )
 }
@@ -798,24 +801,28 @@ async fn detail_page<B: Backend>(
             layout,
             recipe,
             photos,
-            photos_editable: matches!(viewer, Viewer::Own(_)),
+            // 共有のデモでは追加・削除できない。デモの ID を自分のワークスペースとして入れた場合も同じ（photo::add と同じ判定）。
+            photos_editable: backend.demo_workspace_id().as_ref() != Some(viewer.id()),
             can_add_photo: count < photo::MAX_PHOTOS_PER_RECIPE,
             max_photos: photo::MAX_PHOTOS_PER_RECIPE,
         },
     ))
 }
 
+/// 写真が大きすぎるときの説明。[`photo::MAX_PHOTO_BYTES`] を変えたら、文も直す（テストで確かめる）。
+const PHOTO_TOO_LARGE: &str = "写真は 1 枚 4,000,000 バイト（約 4 MB）までです";
+
 /// 写真の操作の失敗のうち、詳細の画面に知らせとして出すものの説明。ほかの失敗はエラーの画面にする。
 fn photo_alert(error: &ApiError) -> Option<&'static str> {
     match error {
-        ApiError::PayloadTooLarge => Some("写真は 1 枚 4,000,000 バイト（約 4 MB）までです"),
+        ApiError::PayloadTooLarge => Some(PHOTO_TOO_LARGE),
+        ApiError::InvalidBody => Some("写真を読めませんでした。もう一度選んで送ってください"),
         ApiError::UnsupportedPhotoType
         | ApiError::PhotoLimitReached
         | ApiError::PhotoStorageLimitReached
         | ApiError::PhotoNotFound
         | ApiError::DemoPhotosDisabled
-        | ApiError::CapacityReached
-        | ApiError::TooManyRequests => Some(error.parts().2),
+        | ApiError::CapacityReached => Some(error.parts().2),
         _ => None,
     }
 }
@@ -888,7 +895,7 @@ async fn read_photo_field(
         let field = match multipart.next_field().await {
             Ok(Some(field)) => field,
             Ok(None) => return Ok(None),
-            Err(error) => return Err(multipart_error(error.status())),
+            Err(error) => return Err(ApiError::from_body_status(error.status())),
         };
         if field.name() != Some("photo") {
             continue;
@@ -896,18 +903,9 @@ async fn read_photo_field(
         let bytes = field
             .bytes()
             .await
-            .map_err(|error| multipart_error(error.status()))?;
+            .map_err(|error| ApiError::from_body_status(error.status()))?;
         // ファイルを選ばずに送ると、中身の空の欄が届く。
         return Ok((!bytes.is_empty()).then(|| Vec::from(bytes)));
-    }
-}
-
-/// multipart を読めなかったときの失敗。本文の上限を超えたときだけ `PayloadTooLarge` にする。
-fn multipart_error(status: StatusCode) -> ApiError {
-    if status == StatusCode::PAYLOAD_TOO_LARGE {
-        ApiError::PayloadTooLarge
-    } else {
-        ApiError::InvalidBody
     }
 }
 
@@ -1170,12 +1168,24 @@ async fn guard<B: Backend>(
             &ErrorPage {
                 layout: Layout::default()
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
+                back: None,
             },
         )
     } else if let Err(error) =
         check_write(backend, request.method(), request.headers(), max_body_bytes).await
     {
-        error_page(&error)
+        match (&error, photo_recipe_path(request.uri().path())) {
+            // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
+            // よく起きるので、一般の説明ではなく写真の上限を出し、レシピに戻れるようにする。
+            (ApiError::PayloadTooLarge, Some(recipe_path)) => render(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &ErrorPage {
+                    layout: Layout::default().with_alert(PHOTO_TOO_LARGE),
+                    back: Some((recipe_path.to_owned(), "レシピに戻る")),
+                },
+            ),
+            _ => error_page(&error),
+        }
     } else {
         next.run(request).await
     };
@@ -1189,6 +1199,13 @@ async fn guard<B: Backend>(
     response
 }
 
+/// 写真を送るフォームのパス（`/recipes/<id>/photos`）なら、レシピの詳細のパスを返す。
+fn photo_recipe_path(path: &str) -> Option<&str> {
+    let recipe_path = path.strip_suffix("/photos")?;
+    let id = recipe_path.strip_prefix("/recipes/")?;
+    RecipeId::parse(id).map(|_| recipe_path)
+}
+
 /// 確かめるだけのルート（[`check_form`]）の前に確かめる middleware。送り元と本文の大きさだけを確かめる。
 ///
 /// 書き込みの回数の制限は使わない。欄から離れるたびに呼ぶので、使うと保存の POST の枠を食い、
@@ -1200,6 +1217,7 @@ pub async fn guard_check(request: Request, next: Next) -> Response {
             &ErrorPage {
                 layout: Layout::default()
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
+                back: None,
             },
         )
     } else if let Err(error) = check_body_size(request.headers(), recipe::MAX_BODY_BYTES) {

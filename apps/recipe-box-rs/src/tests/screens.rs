@@ -1154,3 +1154,82 @@ async fn photo_form_from_another_site_is_rejected() {
     assert_eq!(response.status, StatusCode::FORBIDDEN);
     assert!(backend.photos.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn too_large_photo_form_shows_the_photo_limit_without_reading_the_body() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    // スマートフォンの写真（5 MB）。Content-Length で、本文を読む前に断る。
+    let (content_type, _) = photo_form(Some(&jpeg(3)));
+    let request = Request::post(format!("{path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header(header::COOKIE, &a)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, 5_000_000)
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(
+        response
+            .body
+            .contains("写真は 1 枚 4,000,000 バイト（約 4 MB）までです"),
+        "{}",
+        response.body
+    );
+    assert!(
+        response
+            .body
+            .contains(&format!(r#"href="{path}">レシピに戻る"#))
+    );
+    assert!(backend.photos.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unreadable_photo_form_is_shown_on_the_detail_page() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let request = Request::post(format!("{path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header(header::COOKIE, &a)
+        .header(header::CONTENT_TYPE, "multipart/form-data; boundary=x")
+        .body(Body::from("not multipart"))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response.body.contains("写真を読めませんでした"),
+        "{}",
+        response.body
+    );
+    assert!(!response.body.contains("JSON"));
+}
+
+#[tokio::test]
+async fn demo_id_used_as_own_workspace_does_not_offer_photo_controls() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let path = create_recipe(&backend, DEMO, "デモのカレー").await;
+    // デモの ID を「ほかの端末の ID」として入れると、自分のワークスペースとして使える。
+    let response = screen_get(&backend, &path, Some(&cookie(DEMO))).await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+    assert!(
+        response
+            .body
+            .contains("共有のデモでは、写真を追加・削除できません")
+    );
+}
+
+#[test]
+fn photo_limit_message_matches_max_photo_bytes() {
+    // 画面の文（"4,000,000 バイト（約 4 MB）"・"1 枚 4 MB まで"）は定数から作らないので、上限を変えたら文も直す。
+    assert_eq!(crate::photo::MAX_PHOTO_BYTES, 4_000_000);
+}

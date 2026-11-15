@@ -66,6 +66,15 @@ struct ErrorBody {
 }
 
 impl ApiError {
+    /// 本文を読めなかったときの失敗。本文の上限を超えたとき（`413`）だけ `PayloadTooLarge` にし、ほかは `InvalidBody` にする。
+    pub fn from_body_status(status: StatusCode) -> Self {
+        if status == StatusCode::PAYLOAD_TOO_LARGE {
+            Self::PayloadTooLarge
+        } else {
+            Self::InvalidBody
+        }
+    }
+
     /// 状態コード・機械向けのコード・人向けの説明。画面のエラーの表示にも使う。
     pub fn parts(&self) -> (StatusCode, &'static str, &'static str) {
         match self {

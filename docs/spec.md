@@ -63,7 +63,10 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
 - 写真は、詳細の画面で、追加した順に並べる。追加は普通のフォーム（`multipart/form-data`）で送り、JavaScript が動かなくても使える。
   上限や形式の誤り（`413`・`415`・`409` など）は、詳細の画面の見出しの下に赤で出す。ファイルを選ばずに送ったときは `400`。
   写真のフォームの本文の上限は、1 枚の写真の上限（4,000,000 バイト）に multipart の区切りの分（64 KiB）を足したものにし、写真そのものの大きさは API と同じく確かめる。
+  `Content-Length` が本文の上限を超えるとき（スマートフォンの写真でよく起きる）は、本文を読まずに `413` のエラーの画面にし、写真の上限と「レシピに戻る」を出す。
+  multipart として読めない本文は、詳細の画面に「写真を読めませんでした」と出す（`400`）。
   レシピの写真が上限（5 枚）に達したら、追加のフォームを出さない。共有のデモでは、追加のフォームと削除のボタンを出さず、送られても `403` で断る。
+  デモの ID を自分のワークスペースとして入れたときも、デモと同じに扱う。
 - 削除は、レシピも写真も、確認のダイアログ（`<dialog>`）で確かめる。JavaScript は使わず、HTML の Invoker Commands（`commandfor`・`command`）で開閉する。
   ブラウザ標準の `confirm()` はタイトル（「<ホスト> の内容」）を変えられないので使わない。Invoker Commands に対応していない古いブラウザでは、削除のボタンが反応しない。
 - 画面の応答には、CSP（スクリプトとスタイルは自分のドメインのファイルだけ、インラインは禁止）・`X-Content-Type-Options: nosniff`・`Referrer-Policy: same-origin`・`Cache-Control: no-store` を付ける。
@@ -247,7 +250,7 @@ stateDiagram-v2
 | `DELETE /api/recipes/:id/photos/:photo_id` | `204`（本文なし） |
 
 - 形式は、本文の先頭のバイト（マジックナンバー）で決める。`Content-Type` ヘッダーは見ない。宣言と中身が違うファイルを、別の形式として配らないためである。
-- 写真のデータを返すときは、`Cache-Control: private, max-age=86400`・`Vary: X-Workspace-Id, Cookie`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; sandbox` を付ける。
+- 写真のデータを返すときは、`Cache-Control: private, max-age=86400`・`Vary: X-Workspace-Id, Cookie`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox` を付ける。
   写真の ID は使い回さず、中身も変わらないので、ブラウザーに 1 日残させて R2 の読み取りを減らす。消した写真が残り続けないよう、それより長くはしない。
 - 失敗の理由が 2 つ以上あるときは、次の順に確かめる。
   書き込みの回数（`too_many_requests`）→ `Content-Length`（`payload_too_large`）→ ワークスペース → パスの ID の形（`recipe_not_found`・`photo_not_found`）→ 本文の読み取り（`payload_too_large`）→ デモか（`demo_photos_disabled`）→ 大きさ（`payload_too_large`）→ 形式（`unsupported_photo_type`）→ レシピが在るか（`recipe_not_found`）→ レシピの枚数（`photo_limit_reached`）→ ワークスペースの合計（`photo_storage_limit_reached`）→ アプリ全体の上限（`capacity_reached`）。
