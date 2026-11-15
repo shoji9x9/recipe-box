@@ -77,6 +77,8 @@ const MAX_STEPS = 5_000;
 // 書き込む API の回数の制限（60 秒に 30 回）で 429 になったら、枠が空くまで待ってやり直す。
 const RATE_LIMIT_WAIT_MS = 61_000;
 const MAX_RETRIES = 5;
+// レシピを全部消すときの、一覧を読み直す回りの数の上限。
+const MAX_DELETE_ROUNDS = 10;
 // 写真の R2 の操作で wrangler を同時に動かす数。ローカルでは、wrangler dev が使う保存先に同時に書くと失敗することがあるので、1 つずつ書く。
 const UPLOAD_CONCURRENCY = { "--local": 1, "--remote": 4 };
 // wrangler の R2 の書き込み・削除と、D1 の写真の行の読み取り・削除が失敗したときに試す回数と、やり直す前に待つ時間（回ごとに延ばす）。
@@ -237,6 +239,7 @@ function loadRecipes() {
 // POST は、登録できた後で応答だけが失われることがあり、やり直すと同じレシピが 2 件できるためである。
 async function api(method, path, body) {
   const retryable = method === "GET" || method === "DELETE";
+  const label = `${method} ${path.split("?")[0]}`;
   for (let attempt = 0; ; attempt += 1) {
     let response;
     try {
@@ -251,17 +254,19 @@ async function api(method, path, body) {
       });
     } catch (error) {
       // fetch の error.message は「fetch failed」だけなので、原因（ECONNRESET など）を添える。
-      const reason = `${error.message}${error.cause ? `（${error.cause.code ?? error.cause.message}）` : ""}`;
+      // 接続を何度か試して失敗すると、cause が AggregateError になり、原因はその errors に入る。
+      const cause = error.cause?.code ?? error.cause?.errors?.[0]?.code ?? error.cause?.message;
+      const reason = `${error.message}${cause ? `（${cause}）` : ""}`;
       if (!retryable || attempt >= MAX_RETRIES) {
-        throw new Error(`${method} ${path.split("?")[0]} に失敗した: ${reason}`);
+        throw new Error(`${label} に失敗した: ${reason}`);
       }
-      warn(`${method} ${path.split("?")[0]} に失敗したので、やり直す（${attempt + 1} 回目）: ${reason}`);
+      warn(`${label} に失敗したので、やり直す（${attempt + 1} 回目）: ${reason}`);
       await sleep(RETRY_WAIT_MS * (attempt + 1));
       continue;
     }
     if (response.status >= 500 && retryable && attempt < MAX_RETRIES) {
       await response.body?.cancel();
-      warn(`${method} ${path.split("?")[0]} が ${response.status} を返したので、やり直す（${attempt + 1} 回目）`);
+      warn(`${label} が ${response.status} を返したので、やり直す（${attempt + 1} 回目）`);
       await sleep(RETRY_WAIT_MS * (attempt + 1));
       continue;
     }
@@ -505,18 +510,25 @@ async function main() {
   }
 
   // 2. 今のレシピを全部消す。消すと一覧が詰まるので、1 ページ目を読み直しながら消す。
-  // 消したはずのレシピが一覧に出続ける（食い違いがある）ときに終わらなくならないよう、
-  // 1 回り分の削除がすべて 404（何も消せなかった）なら止める。
+  // 消したはずのレシピが一覧に出続ける（食い違いがある）ときに終わらなくならないよう、前の回りまでに消そうとした ID が
+  // また一覧に出たら止める。誰かがレシピを足し続けても終わるよう、回りの数にも上限を付ける（80 件は 20 件ずつで 4 回り）。
   let deleted = 0;
-  for (;;) {
+  const attempted = new Set();
+  for (let round = 0; ; round += 1) {
+    if (round >= MAX_DELETE_ROUNDS) {
+      fail("レシピを消し終わらない（入れ直している間に、誰かがレシピを足し続けているかもしれない）");
+    }
     const response = await api("GET", "/api/recipes?page=1");
     await expectStatus(response, 200, "レシピの一覧の取得");
     const { recipes: page } = await response.json();
     if (page.length === 0) {
       break;
     }
-    let progressed = false;
+    if (page.some((recipe) => attempted.has(recipe.id))) {
+      fail("レシピを消しても一覧から無くならない");
+    }
     for (const recipe of page) {
+      attempted.add(recipe.id);
       if (!ID_PATTERN.test(recipe.id)) {
         fail("一覧の ID の形が正しくない");
       }
@@ -527,11 +539,7 @@ async function main() {
       } else {
         await expectStatus(response, 204, "レシピの削除");
         deleted += 1;
-        progressed = true;
       }
-    }
-    if (!progressed) {
-      fail("レシピを消しても一覧から無くならない");
     }
   }
   console.log(`今のレシピ ${deleted} 件を消した`);
