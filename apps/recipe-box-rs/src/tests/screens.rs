@@ -1327,3 +1327,29 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
     assert_eq!(cookies.len(), 1, "{cookies:?}");
     assert!(!cookies[0].contains("Max-Age=0"), "{cookies:?}");
 }
+
+#[tokio::test]
+async fn too_large_photo_form_without_content_length_is_shown_on_the_detail_page() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    // Content-Length の無い本文（chunked）は、読む途中で本文の上限（写真の上限 + 64 KiB）に当たる。
+    let (content_type, body) = photo_form(Some(&jpeg(crate::screen::PHOTO_FORM_MAX_BYTES + 1)));
+    let request = Request::post(format!("{path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header(header::COOKIE, &a)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(
+        response.body.contains(crate::screen::PHOTO_TOO_LARGE),
+        "{}",
+        response.body
+    );
+    // エラーの画面ではなく、詳細の画面に出す。
+    assert!(response.body.contains("<h2>材料</h2>"));
+    assert!(backend.photos.lock().unwrap().is_empty());
+}
