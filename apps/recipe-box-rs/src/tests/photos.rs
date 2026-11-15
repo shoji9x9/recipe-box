@@ -5,6 +5,7 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use serde_json::{Value, json};
+use std::sync::atomic::Ordering;
 
 use super::{
     TestResponse, WORKSPACE_A, WORKSPACE_B, call,
@@ -344,18 +345,14 @@ async fn photo_added_while_deleting_its_recipe_is_removed_from_r2() {
     let path = format!("/api/recipes/{recipe}");
     let response = call(&backend, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::NO_CONTENT);
-    assert!(
-        backend
-            .injected_photo
-            .load(std::sync::atomic::Ordering::Relaxed)
-    );
+    assert!(backend.injected_photo.load(Ordering::Relaxed));
     // 後から追加された写真のデータも、R2 に残さない。
     assert!(backend.objects.lock().unwrap().is_empty());
     assert!(backend.photos.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn failed_r2_delete_keeps_rows_so_it_can_be_retried() {
+async fn failed_first_r2_delete_keeps_rows_so_it_can_be_retried() {
     let (backend, recipe) = setup().await;
     let id = upload(&backend, WORKSPACE_A, &recipe, jpeg(10))
         .await
@@ -367,7 +364,8 @@ async fn failed_r2_delete_keeps_rows_so_it_can_be_retried() {
         broken_r2_delete: true,
         ..backend.clone()
     };
-    // 写真を 1 枚消すときも、レシピを消すときも、R2 を先に消すので、失敗すれば D1 の行が残る。
+    // 写真を 1 枚消すときも、レシピを消すときも、最初に R2 を消すので、そこで失敗すれば D1 の行が残る。
+    // （レシピの D1 を消した後の、2 回目の R2 の削除の失敗は、やり直せない。PR のコメントに書いた。）
     let photo = format!("/api/recipes/{recipe}/photos/{id}");
     let response = call(&broken, Method::DELETE, &photo, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -381,6 +379,9 @@ async fn failed_r2_delete_keeps_rows_so_it_can_be_retried() {
     let response = call(&backend, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::NO_CONTENT);
     assert!(backend.objects.lock().unwrap().is_empty());
+    assert!(backend.photos.lock().unwrap().is_empty());
+    let response = call(&backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

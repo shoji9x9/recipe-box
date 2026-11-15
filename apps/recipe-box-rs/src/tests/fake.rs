@@ -16,7 +16,7 @@ use crate::{
     backend::{
         Backend, BackendError, BackendResult, PhotoInsert, PhotoLimits, RecipePage, WorkspaceLimits,
     },
-    photo::{Photo, PhotoId},
+    photo::{Photo, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
     workspace::WorkspaceId,
 };
@@ -147,6 +147,17 @@ impl FakeBackend {
 
     fn key(workspace: &WorkspaceId, id: &str) -> RecipeKey {
         (workspace.to_string(), id.to_owned())
+    }
+}
+
+/// R2 のキーから、ワークスペースとレシピの ID を取り出す。キーが [`object_key`] の形でなければ panic する。
+fn workspace_and_recipe_of(key: &str) -> (WorkspaceId, RecipeId) {
+    let mut parts = key.split('/').skip(1);
+    let workspace = parts.next().and_then(WorkspaceId::parse);
+    let recipe = parts.next().and_then(RecipeId::parse);
+    match (workspace, recipe) {
+        (Some(workspace), Some(recipe)) => (workspace, recipe),
+        _ => panic!("R2 のキーの形が photo::object_key と違う: {key}"),
     }
 }
 
@@ -467,28 +478,23 @@ impl Backend for FakeBackend {
         if self.broken_r2_delete {
             return ready(Err(BackendError("壊れた R2".into())));
         }
-        let mut objects = self.objects.lock().unwrap();
-        for key in &keys {
-            objects.remove(key);
-        }
-        if self.photo_added_after_first_delete && !self.injected_photo.swap(true, Ordering::Relaxed)
         {
-            // キーは photos/<workspace>/<recipe>/<photo>。同じレシピに、別の写真を足す。
-            let parts: Vec<&str> = keys[0].split('/').collect();
-            let (workspace, recipe) = (parts[1], parts[2]);
+            let mut objects = self.objects.lock().unwrap();
+            for key in &keys {
+                objects.remove(key);
+            }
+        }
+        if self.photo_added_after_first_delete
+            && !keys.is_empty()
+            && !self.injected_photo.swap(true, Ordering::Relaxed)
+        {
+            // 消したキーと同じレシピに、別の写真を足す（キーの形は photo::object_key）。
+            let (workspace, recipe) = workspace_and_recipe_of(&keys[0]);
             let id = "99999999999999999999999999999999";
-            self.photos.lock().unwrap().push((
-                workspace.to_owned(),
-                recipe.to_owned(),
-                Photo {
-                    id: id.to_owned(),
-                    content_type: "image/jpeg".to_owned(),
-                    size: 1,
-                    created_at: self.now_millis(),
-                },
-            ));
+            self.add_photo_row(workspace.as_str(), recipe.as_str(), id, 1);
+            let mut objects = self.objects.lock().unwrap();
             objects.insert(
-                format!("photos/{workspace}/{recipe}/{id}"),
+                object_key(&workspace, &recipe, id),
                 (vec![0xff], "image/jpeg".to_owned()),
             );
             // 一覧に載っていた写真のデータが、消した後に書き込まれた場合（追加の途中の写真）。
