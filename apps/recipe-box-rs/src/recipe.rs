@@ -210,11 +210,7 @@ fn servings_to_int(value: f64) -> Option<i64> {
 
 /// 本文の読み取りの失敗を、API のエラーにする。大きすぎるときだけ 413 にする。
 fn body_error(rejection: &JsonRejection) -> ApiError {
-    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-        ApiError::PayloadTooLarge
-    } else {
-        ApiError::InvalidBody
-    }
+    ApiError::from_body_status(rejection.status())
 }
 
 /// パスの ID を読む。形が正しくない ID のレシピは在りえないので、404 にする。

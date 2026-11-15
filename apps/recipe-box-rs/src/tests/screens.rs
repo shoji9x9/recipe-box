@@ -1210,26 +1210,61 @@ async fn unreadable_photo_form_is_shown_on_the_detail_page() {
 }
 
 #[tokio::test]
-async fn demo_id_used_as_own_workspace_does_not_offer_photo_controls() {
+async fn demo_id_is_never_treated_as_own_workspace() {
     let backend = FakeBackend {
         demo: Some(DEMO.to_owned()),
         ..FakeBackend::default()
     };
     backend.add_workspace(DEMO, NOW);
     let path = create_recipe(&backend, DEMO, "デモのカレー").await;
-    // デモの ID を「ほかの端末の ID」として入れると、自分のワークスペースとして使える。
-    let response = screen_get(&backend, &path, Some(&cookie(DEMO))).await;
+    let recipe = path.rsplit('/').next().unwrap().to_owned();
+    let photo = "11111111111111111111111111111111";
+    backend.add_photo_row(DEMO, &recipe, photo, 3);
+
+    // デモの ID は、「ほかの端末の ID」として入れても、無い ID と同じに断る（デモの ID だと分からないように）。
+    let response = screen_post(&backend, "/workspace/switch", None, &format!("id={DEMO}")).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(response.body.contains("見つかりません"));
+    assert_eq!(set_cookie_named(&response, "__Host-workspace"), None);
+
+    // Cookie を手で書き換えても、デモとして扱う（写真の追加・削除のボタンを出さず、送られても断る）。
+    let demo_cookie = cookie(DEMO);
+    let response = screen_get(&backend, &path, Some(&demo_cookie)).await;
     assert_eq!(response.status, StatusCode::OK);
-    assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
     assert!(
-        response
-            .body
-            .contains("共有のデモでは、写真を追加・削除できません")
+        response.body.contains("共有のデモです"),
+        "{}",
+        response.body
     );
+    assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+    assert!(!response.body.contains("写真を削除"));
+    let response = screen_post(
+        &backend,
+        &format!("{path}/photos/{photo}/delete"),
+        Some(&demo_cookie),
+        "",
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
 }
 
 #[test]
 fn photo_limit_message_matches_max_photo_bytes() {
     // 画面の文（"4,000,000 バイト（約 4 MB）"・"1 枚 4 MB まで"）は定数から作らないので、上限を変えたら文も直す。
-    assert_eq!(crate::photo::MAX_PHOTO_BYTES, 4_000_000);
+    let digits = crate::photo::MAX_PHOTO_BYTES.to_string();
+    let mut grouped = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    assert!(
+        crate::screen::PHOTO_TOO_LARGE.contains(&format!("{grouped} バイト")),
+        "{grouped}"
+    );
+    let megabytes = crate::photo::MAX_PHOTO_BYTES / 1_000_000;
+    let detail = include_str!("../../templates/detail.html");
+    assert!(detail.contains(&format!("1 枚 {megabytes} MB まで")));
 }

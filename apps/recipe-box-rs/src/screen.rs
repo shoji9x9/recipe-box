@@ -232,8 +232,8 @@ impl IntoResponse for ScreenError {
 #[template(path = "error.html")]
 struct ErrorPage {
     layout: Layout,
-    /// 戻り先。`None` なら一覧に戻す。
-    back: Option<(String, &'static str)>,
+    /// 「レシピに戻る」の戻り先。`None` なら「一覧に戻る」にする。
+    recipe_href: Option<String>,
 }
 
 /// エラーの画面。説明は見出しの下の知らせに出す。
@@ -243,7 +243,7 @@ fn error_page(error: &ApiError) -> Response {
         status,
         &ErrorPage {
             layout: Layout::default().with_alert(message),
-            back: None,
+            recipe_href: None,
         },
     )
 }
@@ -445,21 +445,26 @@ pub async fn identify<B: Backend>(
 /// 1. 自分のワークスペースがあり、一時的にデモを見ていなければ、それを使う。
 /// 2. 共有のデモがあれば、それを使う。
 /// 3. デモが無くても、自分のワークスペースがあれば、それを使う（デモを見ている途中でデモが無くなったとき）。
+///
+/// Cookie の ID がデモの ID と同じなら（Cookie を手で書き換えたなど）、自分のワークスペースとして扱わない。
+/// デモでは写真を追加・削除させないなど、デモかどうかで変わる扱いを、ここだけで決めるため。
 async fn resolve<B: Backend>(backend: &B, session: &Session) -> Result<Option<Viewer>, ApiError> {
-    if let Some(id) = &session.own
+    let demo = backend.demo_workspace_id();
+    let own = session.own.as_ref().filter(|id| demo.as_ref() != Some(*id));
+    if let Some(id) = own
         && !session.viewing_demo
     {
         return Ok(Some(Viewer::Own(id.clone())));
     }
-    if let Some(id) = backend.demo_workspace_id()
+    if let Some(id) = demo
         && workspace::touch(backend, &id).await?
     {
         return Ok(Some(Viewer::Demo {
             id,
-            own_available: session.own.is_some(),
+            own_available: own.is_some(),
         }));
     }
-    Ok(session.own.clone().map(Viewer::Own))
+    Ok(own.cloned().map(Viewer::Own))
 }
 
 /// ワークスペースが要る画面で、使うワークスペースを決める。無ければ「はじめる」画面へ移す。
@@ -648,11 +653,7 @@ fn form_page(
 
 /// フォームの本文を読めなかったときの失敗。本文が上限より大きければ API と同じく 413、それ以外は 400。
 fn form_error(rejection: &FormRejection) -> ScreenError {
-    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-        ScreenError::Api(ApiError::PayloadTooLarge)
-    } else {
-        ScreenError::Api(ApiError::InvalidBody)
-    }
+    ScreenError::Api(ApiError::from_body_status(rejection.status()))
 }
 
 /// 登録と更新で共通の処理。入力の誤りとレシピの数の上限は、フォームに出し直す。
@@ -801,8 +802,8 @@ async fn detail_page<B: Backend>(
             layout,
             recipe,
             photos,
-            // 共有のデモでは追加・削除できない。デモの ID を自分のワークスペースとして入れた場合も同じ（photo::add と同じ判定）。
-            photos_editable: backend.demo_workspace_id().as_ref() != Some(viewer.id()),
+            // 共有のデモでは追加・削除できない（デモの ID の Cookie も、resolve がデモとして扱う）。
+            photos_editable: matches!(viewer, Viewer::Own(_)),
             can_add_photo: count < photo::MAX_PHOTOS_PER_RECIPE,
             max_photos: photo::MAX_PHOTOS_PER_RECIPE,
         },
@@ -810,7 +811,7 @@ async fn detail_page<B: Backend>(
 }
 
 /// 写真が大きすぎるときの説明。[`photo::MAX_PHOTO_BYTES`] を変えたら、文も直す（テストで確かめる）。
-const PHOTO_TOO_LARGE: &str = "写真は 1 枚 4,000,000 バイト（約 4 MB）までです";
+pub(crate) const PHOTO_TOO_LARGE: &str = "写真は 1 枚 4,000,000 バイト（約 4 MB）までです";
 
 /// 写真の操作の失敗のうち、詳細の画面に知らせとして出すものの説明。ほかの失敗はエラーの画面にする。
 fn photo_alert(error: &ApiError) -> Option<&'static str> {
@@ -1086,6 +1087,11 @@ pub async fn switch_workspace<B: Backend>(
         "ワークスペースの ID を入力してください"
     } else {
         match WorkspaceId::parse(id) {
+            // 共有のデモの ID は、自分のワークスペースとして使わせない（デモかどうかで扱いが変わるため）。
+            // デモの ID だと分からないよう、無い ID と同じ説明にする。
+            Some(id) if backend.demo_workspace_id().as_ref() == Some(&id) => {
+                "その ID のワークスペースは見つかりません。ID が正しいか、14 日使わずに消えていないかを確かめてください"
+            }
             Some(id) if workspace::touch(&backend, &id).await? => {
                 return Ok(use_workspace(&id, Flash::WorkspaceSwitched));
             }
@@ -1142,7 +1148,7 @@ pub async fn guard_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    guard(&backend, request, next, recipe::MAX_BODY_BYTES).await
+    guard(&backend, request, next, recipe::MAX_BODY_BYTES, false).await
 }
 
 /// 写真を送るフォームの [`guard_writes`]。本文の上限だけが違う（[`PHOTO_FORM_MAX_BYTES`]）。
@@ -1151,15 +1157,16 @@ pub async fn guard_photo_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    guard(&backend, request, next, PHOTO_FORM_MAX_BYTES).await
+    guard(&backend, request, next, PHOTO_FORM_MAX_BYTES, true).await
 }
 
-/// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限。
+/// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限、`photo_form` は写真を送るフォームか。
 async fn guard<B: Backend>(
     backend: &B,
     request: Request,
     next: Next,
     max_body_bytes: usize,
+    photo_form: bool,
 ) -> Response {
     let is_post = request.method() == Method::POST;
     let mut response = if is_post && !same_origin(request.headers()) {
@@ -1168,20 +1175,23 @@ async fn guard<B: Backend>(
             &ErrorPage {
                 layout: Layout::default()
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
-                back: None,
+                recipe_href: None,
             },
         )
     } else if let Err(error) =
         check_write(backend, request.method(), request.headers(), max_body_bytes).await
     {
-        match (&error, photo_recipe_path(request.uri().path())) {
+        let recipe_path = photo_form
+            .then(|| photo_recipe_path(request.uri().path()))
+            .flatten();
+        match (&error, recipe_path) {
             // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
             // よく起きるので、一般の説明ではなく写真の上限を出し、レシピに戻れるようにする。
             (ApiError::PayloadTooLarge, Some(recipe_path)) => render(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 &ErrorPage {
                     layout: Layout::default().with_alert(PHOTO_TOO_LARGE),
-                    back: Some((recipe_path.to_owned(), "レシピに戻る")),
+                    recipe_href: Some(recipe_path.to_owned()),
                 },
             ),
             _ => error_page(&error),
@@ -1217,7 +1227,7 @@ pub async fn guard_check(request: Request, next: Next) -> Response {
             &ErrorPage {
                 layout: Layout::default()
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
-                back: None,
+                recipe_href: None,
             },
         )
     } else if let Err(error) = check_body_size(request.headers(), recipe::MAX_BODY_BYTES) {
