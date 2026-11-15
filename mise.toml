@@ -72,6 +72,10 @@ run = "pnpm exec wrangler d1 migrations apply DB --local"
 description = "起動中のローカルの Worker に API を呼んで確かめる（先に別の端末で mise run dev）"
 run = "scripts/smoke-test.sh"
 
+[tasks.pin]
+description = "ワークスペースに、自動削除と削除から外す印を付ける（管理用。ID は標準入力で渡す。例: mise run pin -- --remote < <ID のファイル>）"
+run = "scripts/pin-workspace.sh"
+
 [tasks.dev]
 description = "ローカルの D1 にマイグレーションを当て、Worker を起動する（http://localhost:8787）"
 dir = "apps/recipe-box-rs"

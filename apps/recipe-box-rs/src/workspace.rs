@@ -171,23 +171,92 @@ pub async fn delete<B: Backend>(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// ワークスペースと、そのレシピ・写真を消す。API と画面の両方から使う。共有のデモは消さない。
+/// ワークスペースと、そのレシピ・写真を消す。API と画面の両方から使う。
 ///
-/// レシピを消すとき（[`crate::recipe::remove`]）と同じ順に消す。
-/// 1. 今ある写真のデータを R2 から消す。ここで失敗しても、D1 の行が残るので、もう一度消せる。
-/// 2. D1 でワークスペース・レシピ・写真の行を 1 つのトランザクションで消し、消した写真を受け取る。
-/// 3. 2 で消した写真のデータを、もう一度すべて R2 から消す。1 の後に追加された写真のデータを残さないため。
+/// 共有のデモと、自動削除から外す印（`pinned`）の付いたワークスペースは消さない。
+/// 印でも断るのは、`DEMO_WORKSPACE_ID` を外した後に、漏れたデモの ID で消されないようにするためである。
+///
+/// レシピを消すとき（[`crate::recipe::remove`]）と同じ順に消す（[`remove_with_photos`]）。
 pub async fn remove<B: Backend>(backend: &B, workspace: &WorkspaceId) -> Result<(), ApiError> {
     if backend.demo_workspace_id().as_ref() == Some(workspace) {
         return Err(ApiError::DemoWorkspaceProtected);
     }
+    // R2 を消す前に確かめる（D1 の削除でも印を確かめるが、それより前に R2 の写真を消してしまうため）。
+    match backend.workspace_pinned(workspace).await? {
+        None => return Err(ApiError::WorkspaceNotFound),
+        Some(true) => return Err(ApiError::DemoWorkspaceProtected),
+        Some(false) => {}
+    }
+    if remove_with_photos(backend, workspace, None).await? {
+        Ok(())
+    } else {
+        Err(ApiError::WorkspaceNotFound)
+    }
+}
+
+/// ワークスペースを、写真のデータごと消す。消さなかったとき（無い・印がある・`last_used_before` より後に使われた）は `false` を返す。
+///
+/// 1. 今ある写真のデータを R2 から消す。ここで失敗しても、D1 の行が残るので、もう一度消せる。
+/// 2. D1 でワークスペース・レシピ・写真の行を 1 つのトランザクションで消し、消した写真を受け取る。
+/// 3. 2 で消した写真のデータを、もう一度すべて R2 から消す。1 の後に追加された写真のデータを残さないため。
+async fn remove_with_photos<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    last_used_before: Option<i64>,
+) -> Result<bool, ApiError> {
     let before = backend.list_workspace_photos(workspace).await?;
     remove_photo_objects(backend, workspace, &before).await?;
-    let deleted = backend
-        .delete_workspace(workspace)
+    let Some(deleted) = backend
+        .delete_workspace(workspace, last_used_before)
         .await?
-        .ok_or(ApiError::WorkspaceNotFound)?;
-    remove_photo_objects(backend, workspace, &deleted).await
+    else {
+        return Ok(false);
+    };
+    remove_photo_objects(backend, workspace, &deleted).await?;
+    Ok(true)
+}
+
+/// 最後に使われてから、自動で消すまでの期間（14 日）。
+pub const UNUSED_DELETE_AFTER_MILLIS: i64 = 14 * DAY_MILLIS;
+
+/// 自動削除の結果。ログに出す。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CleanupSummary {
+    /// 消したワークスペースの数。
+    pub deleted: usize,
+    /// 対象に選んだが、消さなかった数（共有のデモ・選んだ後に使われた・印が付いた）。
+    pub skipped: usize,
+    /// 消すのに失敗した数（理由はログに出す。次の実行でもう一度消す）。
+    pub failed: usize,
+}
+
+/// 定期実行（Cron Trigger）で呼ぶ。14 日使われていないワークスペースを、レシピと写真ごと消す。
+///
+/// 1 つのワークスペースで失敗しても、ほかのワークスペースは消す。
+/// 最後に、1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、前の日までのものを消す。
+pub async fn delete_unused<B: Backend>(backend: &B) -> Result<CleanupSummary, ApiError> {
+    let now = backend.now_millis();
+    let before = now - UNUSED_DELETE_AFTER_MILLIS;
+    let demo = backend.demo_workspace_id();
+    let mut summary = CleanupSummary::default();
+    for id in backend.list_unused_workspaces(before).await? {
+        // 共有のデモは、印を付け忘れていても消さない。
+        if demo.as_ref() == Some(&id) {
+            summary.skipped += 1;
+            continue;
+        }
+        // 選んだ後に使われたワークスペースは、D1 の削除の条件（last_used_before）で消さない。
+        match remove_with_photos(backend, &id, Some(before)).await {
+            Ok(true) => summary.deleted += 1,
+            Ok(false) => summary.skipped += 1,
+            Err(_) => summary.failed += 1,
+        }
+    }
+    // UTC の今日の 0 時より前の記録は、1 日の数に入らない。
+    backend
+        .delete_old_records(now - now.rem_euclid(DAY_MILLIS))
+        .await?;
+    Ok(summary)
 }
 
 /// ワークスペースの写真のデータを R2 から消す。

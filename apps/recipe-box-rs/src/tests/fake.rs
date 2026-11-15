@@ -4,7 +4,7 @@
 //! 本物の SQL と同じく、指定したワークスペースのレシピだけを読み書きする。
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::{Future, ready},
     sync::{
         Arc, Mutex,
@@ -36,6 +36,8 @@ type Objects = HashMap<String, (Vec<u8>, String)>;
 pub struct FakeBackend {
     /// ワークスペースの ID と最終利用日時。
     pub workspaces: Arc<Mutex<HashMap<String, i64>>>,
+    /// 自動削除と削除から外す印（`pinned`）の付いたワークスペースの ID。
+    pub pinned: Arc<Mutex<HashSet<String>>>,
     /// ワークスペースを作った記録（作った日時）。ワークスペースを消しても残す。
     pub workspace_creations: Arc<Mutex<Vec<i64>>>,
     /// レシピ。
@@ -84,6 +86,7 @@ impl Default for FakeBackend {
         Self {
             workspaces: Arc::default(),
             workspace_creations: Arc::default(),
+            pinned: Arc::default(),
             recipes: Arc::default(),
             next_random: Arc::default(),
             now: Arc::new(AtomicI64::new(NOW)),
@@ -234,6 +237,49 @@ impl Backend for FakeBackend {
         }))
     }
 
+    fn workspace_pinned(
+        &self,
+        id: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<bool>>> + Send {
+        ready(self.check().map(|()| {
+            self.workspaces
+                .lock()
+                .unwrap()
+                .contains_key(id.as_str())
+                .then(|| self.pinned.lock().unwrap().contains(id.as_str()))
+        }))
+    }
+
+    fn list_unused_workspaces(
+        &self,
+        before: i64,
+    ) -> impl Future<Output = BackendResult<Vec<WorkspaceId>>> + Send {
+        ready(self.check().map(|()| {
+            let pinned = self.pinned.lock().unwrap();
+            let mut ids: Vec<WorkspaceId> = self
+                .workspaces
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(id, last_used_at)| **last_used_at < before && !pinned.contains(*id))
+                .map(|(id, _)| WorkspaceId::parse(id).unwrap())
+                .collect();
+            // テストで順番を決めるため、ID で並べる（本物の SQL は順番を決めない）。
+            ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            ids
+        }))
+    }
+
+    fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send {
+        ready(self.check().map(|()| {
+            self.photo_uploads.lock().unwrap().retain(|&t| t >= before);
+            self.workspace_creations
+                .lock()
+                .unwrap()
+                .retain(|&t| t >= before);
+        }))
+    }
+
     fn workspace_last_used_at(
         &self,
         id: &WorkspaceId,
@@ -373,9 +419,19 @@ impl Backend for FakeBackend {
     fn delete_workspace(
         &self,
         workspace: &WorkspaceId,
+        last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
         ready(self.check().map(|()| {
-            self.workspaces.lock().unwrap().remove(workspace.as_str())?;
+            // 本物の SQL と同じく、印のあるワークスペースと、last_used_before より後に使われたワークスペースは消さない。
+            let mut workspaces = self.workspaces.lock().unwrap();
+            let last_used_at = *workspaces.get(workspace.as_str())?;
+            if self.pinned.lock().unwrap().contains(workspace.as_str())
+                || last_used_before.is_some_and(|before| last_used_at >= before)
+            {
+                return None;
+            }
+            workspaces.remove(workspace.as_str());
+            drop(workspaces);
             // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
             let removed = self.workspace_photo_keys(workspace);
             self.recipes

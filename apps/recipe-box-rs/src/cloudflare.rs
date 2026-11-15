@@ -115,10 +115,16 @@ fn bucket(env: &Env) -> BackendResult<Bucket> {
         .map_err(|e| backend_error("R2 の binding を取れない", &e))
 }
 
-/// `SELECT id FROM photos` の行。
+/// `SELECT id` の行。
 #[derive(serde::Deserialize)]
-struct PhotoIdRow {
+struct IdRow {
     id: String,
+}
+
+/// `SELECT pinned` の行。
+#[derive(serde::Deserialize)]
+struct PinnedRow {
+    pinned: i64,
 }
 
 /// 写真を保存できなかったときに、どの上限に当たったかを調べるための行。
@@ -254,6 +260,80 @@ impl Backend for CloudflareBackend {
                 .first::<i64>(Some("last_used_at"))
                 .await
                 .map_err(|e| backend_error(action, &e))
+        })
+    }
+
+    fn workspace_pinned(
+        &self,
+        id: &WorkspaceId,
+    ) -> impl Future<Output = BackendResult<Option<bool>>> + Send {
+        let env = self.env.clone();
+        let id = id.to_string();
+        SendFuture::new(async move {
+            let action = "ワークスペースの印を読めない";
+            let db = database(&env)?;
+            // D1（SQLite）は BOOLEAN を 0 と 1 の整数で返すので、整数で受け取る。
+            let row = db
+                .prepare("SELECT pinned FROM workspaces WHERE id = ?")
+                .bind(&[id.into()])
+                .map_err(|e| backend_error(action, &e))?
+                .first::<PinnedRow>(None)
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            Ok(row.map(|row| row.pinned != 0))
+        })
+    }
+
+    fn list_unused_workspaces(
+        &self,
+        before: i64,
+    ) -> impl Future<Output = BackendResult<Vec<WorkspaceId>>> + Send {
+        let env = self.env.clone();
+        let before = SendWrapper::new(int_to_js(before));
+        SendFuture::new(async move {
+            let action = "使われていないワークスペースを読めない";
+            let db = database(&env)?;
+            // 自動削除のクエリなので、全体を対象にする（AGENTS.md）。ワークスペースは多くても 100 個なので、索引は使わない。
+            let rows = db
+                .prepare("SELECT id FROM workspaces WHERE pinned = FALSE AND last_used_at < ?")
+                .bind(&[before.0])
+                .map_err(|e| backend_error(action, &e))?
+                .all()
+                .await
+                .map_err(|e| backend_error(action, &e))?
+                .results::<IdRow>()
+                .map_err(|e| backend_error(action, &e))?;
+            rows.into_iter()
+                .map(|row| {
+                    WorkspaceId::parse(&row.id)
+                        .ok_or_else(|| BackendError(format!("{action}: ID の形が正しくない")))
+                })
+                .collect()
+        })
+    }
+
+    fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send {
+        let env = self.env.clone();
+        let before = SendWrapper::new(int_to_js(before));
+        SendFuture::new(async move {
+            let action = "古い記録を消せない";
+            let db = database(&env)?;
+            // 1 日の数を数えるためだけの記録なので、全体を対象にする（AGENTS.md の、全体の上限を数えるクエリ）。
+            let mut statements = Vec::new();
+            for sql in [
+                "DELETE FROM photo_uploads WHERE created_at < ?",
+                "DELETE FROM workspace_creations WHERE created_at < ?",
+            ] {
+                statements.push(
+                    db.prepare(sql)
+                        .bind(std::slice::from_ref(&before.0))
+                        .map_err(|e| backend_error(action, &e))?,
+                );
+            }
+            db.batch(statements)
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            Ok(())
         })
     }
 
@@ -466,7 +546,7 @@ impl Backend for CloudflareBackend {
                 return Ok(None);
             }
             let ids = photos
-                .results::<PhotoIdRow>()
+                .results::<IdRow>()
                 .map_err(|e| backend_error(action, &e))?
                 .into_iter()
                 .map(|row| row.id)
@@ -498,9 +578,11 @@ impl Backend for CloudflareBackend {
     fn delete_workspace(
         &self,
         workspace: &WorkspaceId,
+        last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
         let env = self.env.clone();
         let workspace = workspace.to_string();
+        let last_used_before = last_used_before.map(int_to_js).map(SendWrapper::new);
         SendFuture::new(async move {
             let action = "ワークスペースを消せない";
             let db = database(&env)?;
@@ -508,11 +590,18 @@ impl Backend for CloudflareBackend {
                 .prepare(WORKSPACE_PHOTOS_SQL)
                 .bind(&[workspace.as_str().into()])
                 .map_err(|e| backend_error(action, &e))?;
-            // レシピと写真の行は ON DELETE CASCADE で一緒に消える。
-            let deleted = db
-                .prepare("DELETE FROM workspaces WHERE id = ?")
-                .bind(&[workspace.as_str().into()])
-                .map_err(|e| backend_error(action, &e))?;
+            // レシピと写真の行は ON DELETE CASCADE で一緒に消える。印の付いたワークスペースは消さない。
+            let deleted = match last_used_before {
+                None => db
+                    .prepare("DELETE FROM workspaces WHERE id = ? AND pinned = FALSE")
+                    .bind(&[workspace.as_str().into()]),
+                Some(before) => db
+                    .prepare(
+                        "DELETE FROM workspaces WHERE id = ? AND pinned = FALSE AND last_used_at < ?",
+                    )
+                    .bind(&[workspace.as_str().into(), before.0]),
+            }
+            .map_err(|e| backend_error(action, &e))?;
             // batch は 1 つのトランザクションなので、読んだ写真と、消した写真の行が一致する。
             let results = db
                 .batch(vec![photos, deleted])
