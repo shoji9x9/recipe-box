@@ -1,10 +1,14 @@
-{#- 削除の確認。JavaScript を使わず、Invoker Commands（commandfor・command）で <dialog> を開閉する。
-    include する前に、次の値を let で決める。
+{#- 削除の確認のダイアログ。JavaScript を使わず、Invoker Commands（commandfor・command）で <dialog> を開閉する。
+    使う側は {% import "delete_dialog.html" as dialog %} で読み、{% call %} で呼ぶ。 #}
+
+{#- 削除の確認のダイアログと、それを開くボタン。
+    引数は、caller の中で使う変数（id など）と重ならないよう、どれも dialog_ で始める。重なると、caller の中でもこちらの値になる。
     - dialog_id: <dialog> の id（ページの中で一意にする）
     - dialog_open: ダイアログを開くボタンの文字
     - dialog_title・dialog_text: ダイアログの見出しと説明
     - dialog_action: 削除を送る先
-    - dialog_fields: 一緒に送る hidden の欄（名前と値の組）。無ければ空にする #}
+    {% call %} の中身（caller）は、削除と一緒に送る hidden の欄にする。無ければ空にする。 #}
+{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action) %}
 <button type="button" class="text danger" commandfor="{{ dialog_id }}" command="show-modal">{{ dialog_open }}</button>
 <dialog id="{{ dialog_id }}" class="confirm" aria-labelledby="{{ dialog_id }}-title">
   <h2 id="{{ dialog_id }}-title">{{ dialog_title }}</h2>
@@ -12,10 +16,20 @@
   <div class="actions">
     <button type="button" commandfor="{{ dialog_id }}" command="close">やめる</button>
     <form method="post" action="{{ dialog_action }}">
-      {%- for (name, value) in dialog_fields %}
-      <input type="hidden" name="{{ name }}" value="{{ value }}">
-      {%- endfor %}
+      {{- caller() }}
       <button type="submit" class="primary danger-fill">削除する</button>
     </form>
   </div>
 </dialog>
+{%- endmacro %}
+
+{#- レシピの削除。一覧と詳細の画面で同じ文言にする。
+    back は、一覧から消したときに戻る検索の条件とページ（詳細の画面では None::<(&str, i64)>）。 #}
+{%- macro recipe_delete_dialog(recipe, back) %}
+{%- call delete_dialog("delete-{}"|format(recipe.id), "削除", "レシピを削除しますか？", "「{}」を削除します。元には戻せません。"|format(recipe.name), "/recipes/{}/delete"|format(recipe.id)) %}
+      {%- if let Some((q, page)) = back %}
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="page" value="{{ page }}">
+      {%- endif %}
+{%- endcall %}
+{%- endmacro %}

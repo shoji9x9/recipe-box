@@ -16,6 +16,7 @@
 | 言語 | Rust |
 | Web フレームワーク | [axum](https://github.com/tokio-rs/axum)（[workers-rs](https://github.com/cloudflare/workers-rs) の `http` 機能で Workers 上で動かす） |
 | 画面 | [askama](https://github.com/askama-rs/askama)（HTML テンプレート）と [htmx](https://htmx.org/) |
+| スタイル | 1 つの CSS ファイル（`apps/recipe-box-rs/public/assets/style.css`）。色・主な余白・幅を変数にし、CSS の入れ子（`&`）で部品ごとにまとめる |
 | 実行環境 | Cloudflare Workers |
 | DB | Cloudflare D1 |
 | 写真の保管先 | Cloudflare R2 |
@@ -24,5 +25,7 @@
 | ツールの版の管理 | [mise](https://mise.jdx.dev/) |
 | Node のパッケージマネージャー | pnpm |
 | git フック | lefthook |
+
+CSS の入れ子に対応したブラウザは、削除の確認に使う Invoker Commands（docs/spec.md）に対応したブラウザより広い。そのため、入れ子を使っても、使えるブラウザは変わらない。
 
 Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった。ただし公式ブログによると、Rust の Worker の開発とデプロイは wrangler に任せている。そのため wrangler を使う。リライト後は Cloudflare 以外で動かす想定なので、`cf` に移すかは検討しない。

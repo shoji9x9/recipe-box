@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "delete_dialog.html" as dialog %}
 {% block title %}レシピの一覧{% endblock %}
 {% block heading %}レシピの一覧{% endblock %}
 {% block head_actions %}
@@ -27,15 +28,7 @@
       <a href="/recipes/{{ recipe.id }}">{{ recipe.name }}</a>
       <span class="servings">{{ recipe.servings }} 人分</span>
       <div class="card-actions">
-        {%- let dialog_id = "delete-{}"|format(recipe.id) %}
-        {%- let dialog_open = "削除" %}
-        {%- let dialog_title = "レシピを削除しますか？" %}
-        {%- let dialog_text = "「{}」を削除します。元には戻せません。"|format(recipe.name) %}
-        {%- let dialog_action = "/recipes/{}/delete"|format(recipe.id) %}
-        {#- 一覧から消したときは、同じ検索の条件とページに戻す。 #}
-        {%- let page_value = page.to_string() %}
-        {%- let dialog_fields = [("q", q.as_str()), ("page", page_value.as_str())] %}
-        {% include "delete_dialog.html" %}
+        {%- call dialog::recipe_delete_dialog(recipe, Some((q.as_str(), page))) %}{% endcall %}
       </div>
     </li>
     {%- endfor %}

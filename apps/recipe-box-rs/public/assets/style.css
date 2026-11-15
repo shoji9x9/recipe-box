@@ -5,7 +5,9 @@
  * 影は 1 段だけにする。余白を広く取り、平らな画面にする。
  * ダークモードは用意しない。
  *
- * 色・余白・幅・角の丸みは、:root の変数を使う。部品の中の要素は、CSS の入れ子（&）で部品の下に書く。
+ * 色・主な余白・ページと部品の幅・ボタンと入力の高さ・角の丸みは、:root の変数を使う。
+ * 部品に固有の大きさ（ページの番号の丸の大きさ、カードの最小の幅、文字の大きさなど）は、その部品の規則に数字で書く。
+ * 部品の中の要素は、CSS の入れ子（&）で部品の下に書く。
  */
 :root {
   color-scheme: light;
@@ -49,9 +51,12 @@
   --width-panel: 560px;
   --width-dialog: 440px;
 
-  /* 高さ（ボタンと入力） */
+  /* ボタンと入力の高さ */
   --control-height: 48px;
   --input-height: 56px;
+  /* ボタンの内側の余白。線のあるボタンは、線の 1px の分だけ減らす */
+  --button-padding-y: 14px;
+  --button-padding-x: var(--space-6);
 
   /* 角の丸み */
   --radius-sm: 8px;
@@ -231,7 +236,7 @@ button {
 /* 白地に黒い線 */
 button,
 .button-link.secondary {
-  padding: 13px 23px;
+  padding: calc(var(--button-padding-y) - 1px) calc(var(--button-padding-x) - 1px);
   border: 1px solid var(--ink);
   color: var(--ink);
   background: var(--canvas);
@@ -245,7 +250,7 @@ button:hover,
 /* 主なもの（コーラル）。.button-link.secondary は詳細度が高いので、ここの指定に負けない */
 button.primary,
 .button-link {
-  padding: 14px var(--space-6);
+  padding: var(--button-padding-y) var(--button-padding-x);
   border: none;
   color: var(--on-primary);
   background: var(--primary);
