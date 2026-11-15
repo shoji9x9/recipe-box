@@ -22,11 +22,12 @@
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
+import { pathPattern, redact as redactWith, shortReason, validateRecipes } from "./seed-lib.mjs";
 
 const run = promisify(execFile);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -35,18 +36,7 @@ const photoDir = join(seedDir, "photos");
 const appDir = join(root, "apps", "recipe-box-rs");
 // 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
 const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
-// ログで . と ~ に置き換える、リポジトリとホームのディレクトリのパス（端末の利用者名が入る）。
-// 後ろがファイル名の文字（英数字・_・-）でないときだけ置き換え、/home/u で /home/u2 を崩さない。
-// 前は問わない（/mnt/home/u のように長いパスの終わりに出ても伏せる。表示が少し崩れても、利用者名を出さないことを優先する）。
-// 絶対パスでないか / だけなら置き換えない（ほかの文字まで置き換えてしまうため）。
-function pathPattern(path) {
-  const trimmed = path.replace(/\/+$/, "");
-  if (!trimmed.startsWith("/")) {
-    return null;
-  }
-  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(String.raw`${escaped}(?![\w-])`, "g");
-}
+// ログで . と ~ に置き換える、リポジトリとホームのディレクトリのパス（端末の利用者名が入る。seed-lib.mjs の pathPattern）。
 const PATHS = [
   [pathPattern(root), "."],
   [pathPattern(homedir()), "~"],
@@ -57,23 +47,12 @@ const BASE_URLS = {
   "--remote": "https://recipe-box.shoji9x9.workers.dev",
 };
 const BUCKET = "recipe-box-photos";
-// やり直すときのログに出す理由の長さ。
-const REASON_LENGTH = 300;
 // seed が使う R2 の操作と、ログでの呼び方。
 const R2_ACTIONS = { put: "R2 への書き込み", delete: "R2 からの削除" };
-// API の決まり（docs/spec.md）。seed のデータが API に断られないよう、入れる前に同じ決まりで確かめる。
-// 値はアプリ（apps/recipe-box-rs/src/recipe.rs・photo.rs）と同じにする。アプリの値を変えたら、ここも直す。
-const MAX_RECIPES = 80;
-const MAX_PHOTOS_PER_RECIPE = 5;
-const MAX_PHOTO_BYTES = 4_000_000;
-// seed は写真の上限を判定する API を通らずに入れるので、ワークスペースとアプリ全体の合計の上限も seed で確かめる。
-const MAX_WORKSPACE_PHOTO_BYTES = 100_000_000;
+// アプリ全体の写真の合計の上限（docs/security.md）。seed は写真の上限を判定する API を通らずに入れるので、seed で確かめる。
 const MAX_TOTAL_PHOTO_BYTES = 5_000_000_000;
 // 写真の行を入れる SQL を、1 回の wrangler にこの数ずつ渡す（コマンドの引数と D1 の SQL の長さの上限に収める）。
 const INSERT_BATCH = 50;
-const MAX_NAME = 100;
-const MAX_INGREDIENTS = 2_000;
-const MAX_STEPS = 5_000;
 // 書き込む API の回数の制限（60 秒に 30 回）で 429 になったら、枠が空くまで待ってやり直す。
 const RATE_LIMIT_WAIT_MS = 61_000;
 const MAX_RETRIES = 5;
@@ -86,7 +65,6 @@ const RETRY_ATTEMPTS = 4;
 const RETRY_WAIT_MS = 5_000;
 
 const ID_PATTERN = /^[0-9a-f]{32}$/;
-const PHOTO_FILE_PATTERN = /^[a-z0-9][a-z0-9-]*\.(jpg|png|webp)$/;
 
 // 失敗の文は、ここで必ず伏せる（redact）。呼ぶ側で伏せ忘れても、ID とパスを出さないためである。
 // 進み具合の表示（console.log）は ID もパスも含まないので、そのまま出す。手で消すキーの表示（shownKey）は、
@@ -119,58 +97,16 @@ if (!ID_PATTERN.test(workspaceId)) {
   fail("ワークスペースの ID の形が正しくない（16 進数の小文字 32 文字）");
 }
 
-// 表示やエラーの文から、デモの ID を伏せる。
-// アカウントの ID（16 進数 32 文字）や D1 のデータベースの ID（UUID の形）も、公開の Actions のログに出さないよう伏せる。
-// 16 進数と - が 32 文字以上並んだ所はすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
-// リポジトリとホームのディレクトリのパスも、. と ~ に置き換える（PATHS）。
+// 表示やエラーの文から、ID の形の値を伏せ、リポジトリとホームのパスを . と ~ に置き換える（seed-lib.mjs の redact）。
 function redact(text) {
-  // 16 進数と - が 32 文字以上並んだ所を、まとめて 1 つの置き換えで伏せる。デモの ID・アカウントの ID（16 進数 32 文字）・
-  // D1 のデータベースの ID（UUID の形、36 文字）が、続けて並んでも伏せられる（置き換えを分けると、順によって一部が残る）。
-  return PATHS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), String(text)).replace(
-    /[0-9a-f-]{32,}/gi,
-    "***",
-  );
+  return redactWith(text, PATHS);
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// 中身の先頭のバイトで形式を決める（アプリと同じ）。
-function photoContentType(bytes) {
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return "image/jpeg";
-  }
-  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  if (bytes.length >= png.length && png.every((b, i) => bytes[i] === b)) {
-    return "image/png";
-  }
-  if (
-    bytes.length >= 12 &&
-    bytes.toString("latin1", 0, 4) === "RIFF" &&
-    bytes.toString("latin1", 8, 12) === "WEBP"
-  ) {
-    return "image/webp";
-  }
-  return null;
-}
-
-// 形式を決めるのに要る、ファイルの先頭の 12 バイトだけを読む。
-function readHead(path) {
-  const fd = openSync(path, "r");
-  try {
-    const head = Buffer.alloc(12);
-    return head.subarray(0, readSync(fd, head, 0, head.length, 0));
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function length(text) {
-  return [...text].length;
-}
-
-// seed/recipes.json を読み、API と同じ決まりで確かめる。写真のファイルも読んでおく。
+// seed/recipes.json を読み、API と同じ決まりで確かめる（seed-lib.mjs の validateRecipes）。
 function loadRecipes() {
   let recipes;
   try {
@@ -178,60 +114,11 @@ function loadRecipes() {
   } catch (error) {
     fail(`seed/recipes.json を読めない: ${error.message}`);
   }
-  if (!Array.isArray(recipes) || recipes.length === 0 || recipes.length > MAX_RECIPES) {
-    fail(`seed/recipes.json は 1 件から ${MAX_RECIPES} 件までの配列にする`);
+  try {
+    return validateRecipes(recipes, photoDir);
+  } catch (error) {
+    fail(error.message);
   }
-  const used = new Set();
-  const parsed = recipes.map((recipe, index) => {
-    const where = `seed/recipes.json の ${index + 1} 件目`;
-    const { name, servings, ingredients = "", steps = "", photos = [] } = recipe ?? {};
-    if (typeof name !== "string" || name.trim() === "" || length(name) > MAX_NAME) {
-      fail(`${where}: name は空でない ${MAX_NAME} 文字までの文字列にする`);
-    }
-    if (!Number.isInteger(servings) || servings < 1 || servings > 100) {
-      fail(`${where}: servings は 1 から 100 までの整数にする`);
-    }
-    if (typeof ingredients !== "string" || length(ingredients) > MAX_INGREDIENTS) {
-      fail(`${where}: ingredients は ${MAX_INGREDIENTS} 文字までの文字列にする`);
-    }
-    if (typeof steps !== "string" || length(steps) > MAX_STEPS) {
-      fail(`${where}: steps は ${MAX_STEPS} 文字までの文字列にする`);
-    }
-    if (!Array.isArray(photos) || photos.length > MAX_PHOTOS_PER_RECIPE) {
-      fail(`${where}: photos は ${MAX_PHOTOS_PER_RECIPE} 枚までの配列にする`);
-    }
-    const files = photos.map((file) => {
-      // ファイル名の形を決め、seed/photos/ の外を読ませない。
-      if (typeof file !== "string" || !PHOTO_FILE_PATTERN.test(file)) {
-        fail(`${where}: 写真のファイル名 ${JSON.stringify(file)} の形が正しくない（英小文字・数字・ハイフンと拡張子）`);
-      }
-      if (used.has(file)) {
-        fail(`${where}: 写真 ${file} を 2 回使っている`);
-      }
-      used.add(file);
-      const path = join(photoDir, file);
-      let size;
-      try {
-        size = statSync(path).size;
-      } catch {
-        fail(`${where}: 写真 seed/photos/${file} が無い`);
-      }
-      if (size === 0 || size > MAX_PHOTO_BYTES) {
-        fail(`${where}: 写真 ${file} は 1 バイトから ${MAX_PHOTO_BYTES} バイトまでにする`);
-      }
-      const contentType = photoContentType(readHead(path));
-      if (contentType === null) {
-        fail(`${where}: 写真 ${file} が JPEG・PNG・WebP のどれでもない`);
-      }
-      return { file, path, size, contentType };
-    });
-    return { body: { name, servings, ingredients, steps }, files };
-  });
-  const total = parsed.flatMap((recipe) => recipe.files).reduce((sum, file) => sum + file.size, 0);
-  if (total > MAX_WORKSPACE_PHOTO_BYTES) {
-    fail(`写真の合計が ${total} バイトで、ワークスペースの上限（${MAX_WORKSPACE_PHOTO_BYTES} バイト）を超える`);
-  }
-  return { recipes: parsed, photoBytes: total };
 }
 
 // 公開 API を呼ぶ。書き込みが回数の制限で 429 になったら、待ってやり直す。
@@ -319,21 +206,6 @@ async function wrangler(...wranglerArgs) {
     const text = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
     throw new Error(`wrangler が失敗した（${detail}）\n${text}`);
   }
-}
-
-// wrangler の失敗の文から、理由を短く選ぶ。wrangler は理由を JSON の "text" か「[ERROR]」の行に書き、
-// API のエラーでは、原因を [code: ...] の付いた行（JSON では notes の "text"）に書く。
-// どれも無ければ、1 行目（wrangler が失敗した、と終了コードなど）と wrangler の出力の最初の行を並べる。
-function shortReason(message) {
-  const lines = message
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-  const found = lines.find((l) => l.includes('"text"')) ?? lines.find((l) => l.includes("[ERROR]"));
-  const used = found === undefined ? lines.slice(0, 2) : [found];
-  const main = used.join(" ");
-  const code = lines.find((l) => !used.includes(l) && l.includes("[code:"));
-  return (code === undefined ? main : `${main} ${code}`).slice(0, REASON_LENGTH);
 }
 
 // wrangler を動かし、失敗したら待ち時間を延ばしながら RETRY_ATTEMPTS 回まで試す。最後の失敗は投げる。
