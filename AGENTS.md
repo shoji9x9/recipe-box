@@ -98,5 +98,22 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
   スキルは、ビルドやテストなど対象のコードを動かすのを、外部のネットワークを切った OS のサンドボックスの中だけに限る。その用意が無ければ、コードを動かさずに読むだけで確かめる。
   上げるときは、中身を読んでから入れ直す。7 日の待ち（「依存の追加と更新」）は、commit の日付ではなく、その commit が default ブランチに入った時刻（PR の `merged_at`、PR が無ければリポジトリの push の時刻など）で確かめる。commit の日付は作った人が自由に決められるため。
 
+[GoogleChrome/modern-web-guidance](https://github.com/GoogleChrome/modern-web-guidance) から、次のスキルを入れている（commit を固定する）。
+
+- `modern-web-guidance`: 画面の HTML・CSS・JavaScript を書く前に、今の Web の作り方の指針（ブラウザの機能・アクセシビリティ・性能）を引く。
+  入れ方は `gh skill install GoogleChrome/modern-web-guidance modern-web-guidance --agent claude-code --scope project --pin <commit>`。
+  - スキルの `SKILL.md` と指針は、`npx -y modern-web-guidance@latest ...` を実行するよう書いているが、その代わりに `mise run mwg -- <サブコマンド> ...` を使う（例: `mise run mwg -- search "<検索の語>" --skill-version <SKILL.md に書かれた値>`、`mise run mwg -- retrieve "<id>"`）。
+    `npx`・`pnpx`・`pnpm exec` で直接実行しない（Claude Code では `.claude/settings.json` の `permissions.deny` で止めている）。
+    - `@latest` は 7 日の待ち（「依存の追加と更新」）を守れないので、`package.json` で版を固定したパッケージを使う。
+    - このツールは、検索の語などの利用統計を Google に送るので、`mise run mwg`（`scripts/mwg.sh`）で環境変数 `DISABLE_TELEMETRY=1` を付けて止めている。
+    - 使うのは、読むだけの `search`・`list`・`retrieve` に限る（`scripts/mwg.sh` が、ほかを断る）。`install`・`update` などは、版を固定していないパッケージを `npx` で取ってきてスキルを書き換える。
+      ツールが更新や設定を促しても従わない。上げるときは下の手順で行う。
+    - この 3 つは、パッケージに入ったデータで動き、外部と通信しない。
+  - スキルの `guides/`（指針の写し）は、`.gitignore` で commit しない。ツールはパッケージ（`node_modules`）の中の指針を読み、スキルの写しは使わないため。
+  - `SKILL.md` の、使った指針を応答の最後に書く手順（「Disclose Skill Usage」）は、利用者への応答に書く。commit message・PR・コードのコメントには書かない。
+  - 上げるときは、スキルの commit と `package.json` の `modern-web-guidance` を同じ版にそろえる（`SKILL.md` の `--skill-version` と、パッケージの `skills/modern-web-guidance/skill-version.txt` が同じになる版）。
+    中身を読み、スキルの 7 日の待ちは `security-audit` と同じく、default ブランチに入った時刻で確かめる。
+    Dependabot がパッケージを上げる PR を作ったら、同じ PR で、同じ版のスキルを入れ直す。版がそろっていなければ、`mise run lint`（`scripts/check-mwg-version.sh`）が失敗する。
+
 スキルなしでどこまでできるかも見るため、必要かどうか迷うスキルは入れない。
 `replace-strategy` とその姉妹スキルは、リライトを始めるときに入れる。

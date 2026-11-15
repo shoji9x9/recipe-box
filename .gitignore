@@ -21,3 +21,5 @@ node_modules/
 
 # Claude Code の git worktree（作業ごとのリポジトリの写し）
 .claude/worktrees/
+# modern-web-guidance のスキルの指針の写し。ツールはパッケージの中の指針を読むので、入れない（AGENTS.md の「スキル」）。
+.claude/skills/modern-web-guidance/guides/

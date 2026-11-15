@@ -15,7 +15,7 @@
 
 ```bash
 mise install    # mise.lock のとおりに Rust・Node・pnpm・各種の検査ツールを入れる
-pnpm install    # wrangler・commitlint・chrome-devtools-mcp を入れ、lefthook の git フックを有効にする
+pnpm install    # wrangler・commitlint・chrome-devtools-mcp・modern-web-guidance などを入れ、lefthook の git フックを有効にする
 ```
 
 ### よく使うコマンド
@@ -28,9 +28,10 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp を入れ、leftho
 | `mise run test` | Rust のテストと、seed のスクリプトの単体テスト（`scripts/seed-lib.test.mjs`）を実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
-| `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck） |
+| `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck）と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
 | `mise run pin -- (--local \| --remote) [--unpin] < <ID のファイル>` | ワークスペースに、自動削除と削除から外す印を付ける（外す）。共有のデモに使う管理用のコマンドで、本番（`--remote`）には wrangler の認証が要る。デモの ID を表示やシェルの履歴に残さないよう、ID は標準入力で渡す |
 | `mise run seed -- (--local \| --remote) < <ID のファイル>` | 共有のデモを、サンプルのレシピと写真（`seed/`）の状態に戻す。ローカル（`--local`）では先に別の端末で `mise run dev` を起動しておく。本番（`--remote`）には wrangler の認証が要る。印（`mise run pin`）の付いたワークスペースにだけ入れる。ID は標準入力で渡す |
+| `mise run mwg -- (search \| list \| retrieve) ...` | Web の作り方の指針（modern-web-guidance）を引く。画面の HTML・CSS・JavaScript を書く前に使う（AGENTS.md の「スキル」）。利用統計を送らず、読むだけのサブコマンドに限る |
 | `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
 
 commit のときは、lefthook が整形・静的解析・gitleaks・commitlint を実行する。
