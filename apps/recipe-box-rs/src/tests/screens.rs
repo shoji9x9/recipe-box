@@ -1314,7 +1314,7 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
         .into_iter()
         .filter(|cookie| cookie.starts_with("__Host-workspace="))
         .collect();
-    // 消えた ID の Cookie を消す Set-Cookie を足して、新しい Cookie を打ち消さない（同じ名前を 2 つ並べない）。
+    // ハンドラーが付けた Cookie には、消えた ID の削除を足さない（新しい Cookie を打ち消さず、同じ名前を 2 つ並べない）。
     assert_eq!(cookies.len(), 1, "{cookies:?}");
     assert!(cookies[0].starts_with(&cookie(WORKSPACE_B)), "{cookies:?}");
 
