@@ -1233,13 +1233,24 @@ pub async fn guard_writes<B: Backend>(
     guard(&backend, request, next, recipe::MAX_BODY_BYTES).await
 }
 
-/// 写真を送るフォームの [`guard_writes`]。本文の上限だけが違う（[`PHOTO_FORM_MAX_BYTES`]）。
+/// 写真を送るフォームの [`guard_writes`]。本文の上限だけが違う。
+///
+/// multipart のフォームは区切りの分を足した [`PHOTO_FORM_MAX_BYTES`]、写真のバイト列そのものは 1 枚の写真の上限にする。
 pub async fn guard_photo_writes<B: Backend>(
     State(backend): State<B>,
     request: Request,
     next: Next,
 ) -> Response {
-    guard(&backend, request, next, PHOTO_FORM_MAX_BYTES).await
+    let content_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    let max_body_bytes = if photo::is_multipart(content_type) {
+        PHOTO_FORM_MAX_BYTES
+    } else {
+        photo::MAX_PHOTO_BYTES
+    };
+    guard(&backend, request, next, max_body_bytes).await
 }
 
 /// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限。

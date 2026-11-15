@@ -95,8 +95,13 @@ pub fn split_photo_body(req: worker::Request) -> worker::Result<HttpRequest> {
     // 本文の無い同じリクエストを作って axum に渡す。workers-rs は本文を読む準備をした時点でストリームを
     // 取り込んでしまう（ほかからは読めなくなる）ので、本文を渡さない。
     // 作れなければ、今までどおり本文ごと axum に渡す（本文を読んでから確かめる）。
-    let Ok(mut http) = bare_request(&req) else {
-        return HttpRequest::try_from(req);
+    let mut http = match bare_request(&req) {
+        Ok(http) => http,
+        Err(error) => {
+            // 写真の追加が、本文を読みためる（CPU 時間の多い）経路に戻ったことを分かるようにする。
+            worker::console_error!("本文の無いリクエストを作れない: {error}");
+            return HttpRequest::try_from(req);
+        }
     };
     http.extensions_mut().insert(RawPhotoBody {
         stream: SendWrapper::new(stream),

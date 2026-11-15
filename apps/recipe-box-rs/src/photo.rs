@@ -16,10 +16,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backend::{Backend, PhotoInsert, PhotoLimits},
+    backend::{Backend, BackendError, PhotoInsert, PhotoLimits},
     error::{ApiError, log_error},
     id,
-    limits::check_body_size,
     recipe::RecipeId,
     stream::{self, PhotoStream, RawPhotoBody},
     workspace::{Workspace, WorkspaceId},
@@ -152,7 +151,9 @@ pub fn is_multipart(content_type: Option<&str>) -> bool {
     content_type.is_some_and(|value| value.to_ascii_lowercase().starts_with("multipart/"))
 }
 
-/// 画面の写真を追加するパス（`/recipes/<id>/photos`）なら、レシピの詳細のパスを返す。
+/// 写真を追加するパス（`/recipes/<id>/photos`）なら、レシピの詳細のパスを返す。
+///
+/// 画面の 413 のエラーの画面と、API と画面のストリームの判定（`/api` を外して使う。[`crate::stream`]）の両方が使う。
 pub fn photo_recipe_path(path: &str) -> Option<&str> {
     let recipe_path = path.strip_suffix("/photos")?;
     let id = recipe_path.strip_prefix("/recipes/")?;
@@ -162,8 +163,8 @@ pub fn photo_recipe_path(path: &str) -> Option<&str> {
 /// 写真のバイト列そのものの本文を読む（API と画面で共通）。
 ///
 /// 本番で、本文が axum に渡らず extension に入っているとき（[`crate::stream`]）は、ストリームのまま扱う。
-/// そうでなければ本文を読む。`Content-Length` が写真の上限を超えていれば、読む前に断る
-/// （画面の本文の上限は multipart の区切りの分だけ大きいので、middleware では止まらない）。
+/// そうでなければ本文を読む。`Content-Length` が写真の上限を超えるものは、middleware が本文を読む前に断っている
+/// （[`crate::limits::limit_photo_writes`]・[`crate::screen::guard_photo_writes`]）。
 pub async fn read_bytes_body(
     raw: Option<Extension<RawPhotoBody>>,
     request: Request,
@@ -171,7 +172,6 @@ pub async fn read_bytes_body(
     if let Some(Extension(raw)) = raw {
         return Ok(PhotoBody::Stream(stream::open(raw).await?));
     }
-    check_body_size(request.headers(), MAX_PHOTO_BYTES)?;
     let bytes = Bytes::from_request(request, &())
         .await
         .map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
@@ -264,7 +264,7 @@ pub async fn create<B: Backend>(
 /// 3. R2 に書き込む。失敗したら、D1 の行を消す（追加の記録は残し、回数に数える）。
 /// 4. 行がまだ在るかを確かめる。書いている間にレシピが消されていれば、R2 のデータを消す。
 ///
-/// 3 と 4 は、送り手との接続が切れても最後まで動かす（[`Backend::run_to_completion`]）。
+/// 2 から 4 は、送り手との接続が切れても最後まで動かす（[`Backend::run_to_completion`]）。
 pub async fn add<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -292,8 +292,37 @@ pub async fn add<B: Backend>(
         // UTC の今日の 0 時。
         since: crate::limits::start_of_utc_day(now),
     };
+    // D1 に行を入れるところからは、接続が切れても最後まで動かす。ストリームの本文は、D1 に行を入れた後に受け取るので、
+    // 途中で切れて後始末（行を消す）が動かないと、読めない行が上限に数えられたまま残ってしまうため。
+    let task = store(
+        backend.clone(),
+        workspace.clone(),
+        recipe.clone(),
+        photo.clone(),
+        limits,
+        body,
+    );
+    let Some(result) = backend.run_to_completion(task).await else {
+        log_error(&BackendError(
+            "写真を追加する処理が、結果を返さずに終わった".into(),
+        ));
+        return Err(ApiError::Internal);
+    };
+    result?;
+    Ok(photo)
+}
+
+/// [`add`] の 2 から 4。
+async fn store<B: Backend>(
+    backend: B,
+    workspace: WorkspaceId,
+    recipe: RecipeId,
+    photo: Photo,
+    limits: PhotoLimits,
+    body: PhotoBody,
+) -> Result<(), ApiError> {
     match backend
-        .insert_photo(workspace, recipe, &photo, &limits)
+        .insert_photo(&workspace, &recipe, &photo, &limits)
         .await?
     {
         PhotoInsert::Inserted => {}
@@ -302,21 +331,15 @@ pub async fn add<B: Backend>(
         PhotoInsert::WorkspaceFull => return Err(ApiError::PhotoStorageLimitReached),
         PhotoInsert::CapacityReached => return Err(ApiError::CapacityReached),
     }
-    // R2 に書くところからは、接続が切れても最後まで動かす。ストリームの本文は、D1 に行を入れた後に受け取るので、
-    // 送る途中で切れると、後始末（行を消す）が動かずに、読めない行が上限に数えられたまま残ってしまうため。
-    let task = write_object(
-        backend.clone(),
-        workspace.clone(),
-        recipe.clone(),
-        PhotoId(photo.id.clone()),
+    write_object(
+        backend,
+        workspace,
+        recipe,
+        PhotoId(photo.id),
         body,
-        photo.content_type.clone(),
-    );
-    backend
-        .run_to_completion(task)
-        .await
-        .unwrap_or(Err(ApiError::Internal))?;
-    Ok(photo)
+        photo.content_type,
+    )
+    .await
 }
 
 /// [`add`] の 3 と 4。R2 に書き込み、失敗したら D1 の行を消す。書いている間に行が消されていれば、R2 のデータを消す。

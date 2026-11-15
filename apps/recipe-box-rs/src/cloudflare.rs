@@ -5,7 +5,7 @@
 //!
 //! SQL は標準の範囲で書き、レシピを扱うクエリは必ず `workspace_id` で絞り込む（AGENTS.md）。
 
-use std::{future::Future, pin::Pin, rc::Rc};
+use std::{future::Future, rc::Rc};
 
 use wasm_bindgen::prelude::wasm_bindgen;
 use worker::{
@@ -816,18 +816,18 @@ impl Backend for CloudflareBackend {
         &self,
         task: impl Future<Output = T> + Send + 'static,
     ) -> impl Future<Output = Option<T>> + Send {
-        let result: Pin<Box<dyn Future<Output = Option<T>> + Send>> = match &self.ctx {
-            Some(ctx) => {
-                let (sender, receiver) = futures_channel::oneshot::channel();
-                ctx.wait_until(async move {
-                    // 待っていた側が先に終わっていれば（接続が切れたとき）、結果は捨てる。
-                    let _ = sender.send(task.await);
-                });
-                Box::pin(async move { receiver.await.ok() })
-            }
-            None => Box::pin(async move { Some(task.await) }),
-        };
-        result
+        let ctx = self.ctx.clone();
+        async move {
+            let Some(ctx) = ctx else {
+                return Some(task.await);
+            };
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            ctx.wait_until(async move {
+                // 待っていた側が先に取り消されていれば（接続が切れたとき）、結果は捨てる。
+                let _ = sender.send(task.await);
+            });
+            receiver.await.ok()
+        }
     }
 
     fn put_object(

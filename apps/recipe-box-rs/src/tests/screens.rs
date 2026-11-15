@@ -1080,16 +1080,20 @@ async fn photo_bytes_can_be_sent_without_multipart() {
     let response = post_raw_photo(&backend, &path, &a, "image/jpeg", Vec::new()).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(response.body.contains("追加する写真を選んでください"));
-    // 画面の本文の上限（multipart の区切りの分だけ大きい）より小さくても、写真の上限を超えれば断る。
-    let response = post_raw_photo(
-        &backend,
-        &path,
-        &a,
-        "image/jpeg",
-        jpeg(crate::photo::MAX_PHOTO_BYTES + 1),
-    )
-    .await;
+    // 画面の本文の上限（multipart の区切りの分だけ大きい）より小さくても、写真の上限を超えれば、本文を読む前に断る。
+    // 本文は空にして `Content-Length` だけを大きくする。本文を読めば「写真を選んでください」の 400 になる。
+    let request = Request::post(format!("{path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header("cf-connecting-ip", "192.0.2.1")
+        .header(header::COOKIE, &a)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CONTENT_LENGTH, crate::photo::MAX_PHOTO_BYTES + 1)
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
     assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(response.body.contains("レシピに戻る"), "{}", response.body);
     assert_eq!(backend.objects.lock().unwrap().len(), 1);
 }
 
