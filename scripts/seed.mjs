@@ -86,7 +86,8 @@ const ID_PATTERN = /^[0-9a-f]{32}$/;
 const PHOTO_FILE_PATTERN = /^[a-z0-9][a-z0-9-]*\.(jpg|png|webp)$/;
 
 // 失敗の文は、ここで必ず伏せる（redact）。呼ぶ側で伏せ忘れても、ID とパスを出さないためである。
-// 進み具合の表示（console.log）と、手で消すキーの表示（shownKey）は、ID もパスも含まないので、そのまま出す。
+// 進み具合の表示（console.log）は ID もパスも含まないので、そのまま出す。手で消すキーの表示（shownKey）は、
+// レシピと写真の ID を見せる必要があるので redact を通さない（デモの ID だけを shownKey が伏せる）。
 function fail(message) {
   console.error(`seed: ${redact(message)}`);
   process.exit(1);
@@ -120,10 +121,15 @@ if (!ID_PATTERN.test(workspaceId)) {
 // 16 進数 32 文字以上の並びはすべて伏せるので、レシピや写真の ID も伏せる（表示したいキーは shownKey で作る）。
 // リポジトリとホームのディレクトリのパスも、. と ~ に置き換える（PATHS）。
 function redact(text) {
-  // デモの ID（16 進数 32 文字）は、下の 32 文字以上の並びを伏せる置き換えで伏せる。
-  return PATHS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), String(text))
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***")
-    .replace(/[0-9a-f]{32,}/gi, "***");
+  let result = PATHS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), String(text));
+  // デモの ID は、ほかの置き換えで一部を取られないよう、最初にそのまま伏せる（ID の形を確かめた後だけ）。
+  if (ID_PATTERN.test(workspaceId)) {
+    result = result.replaceAll(workspaceId, "***");
+  }
+  // 32 文字以上の並びを UUID より先に伏せる（UUID の形の値に続く ID の頭を、UUID の置き換えに取られないため）。
+  return result
+    .replace(/[0-9a-f]{32,}/gi, "***")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "***");
 }
 
 function sleep(ms) {
