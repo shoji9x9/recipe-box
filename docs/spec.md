@@ -77,6 +77,8 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
   デモの ID は、「ほかの端末の ID」として入れても無い ID と同じに断る。Cookie を書き換えて使っても、自分のワークスペースとして扱わずにデモを出し、無い ID と同じく Cookie を消す（デモの ID だと分からないように）。
 - 削除は、レシピも写真もワークスペースも、確認のダイアログ（`<dialog>`）で確かめる。JavaScript は使わず、HTML の Invoker Commands（`commandfor`・`command`）で開閉する。
   ブラウザ標準の `confirm()` はタイトル（「<ホスト> の内容」）を変えられないので使わない。Invoker Commands に対応していない古いブラウザでは、削除のボタンが反応しない。
+  ダイアログは 1 つのテンプレート（`templates/delete_dialog.html`）にまとめ、見出し・説明・送る先だけを変える。
+- CSS は、色・余白・幅を変数にし、CSS の入れ子（`&`）で部品ごとにまとめる。入れ子に対応したブラウザは Invoker Commands に対応したブラウザより広いので、使えるブラウザは変わらない。
 - 画面の応答には、CSP（スクリプトとスタイルは自分のドメインのファイルだけ、インラインは禁止）・`X-Content-Type-Options: nosniff`・`Referrer-Policy: same-origin`・`Cache-Control: no-store` を付ける。
   写真のデータの応答だけは、API と同じ `Cache-Control` と CSP にする（ハンドラーが付けたヘッダーを変えない）。
   htmx は、CSP に合わせて eval とインラインのスタイルを使わない設定にし、閲覧の履歴をブラウザに保存させない。

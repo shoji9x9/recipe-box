@@ -14,18 +14,13 @@
       <li>
         <img src="/recipes/{{ recipe.id }}/photos/{{ photo.id }}" alt="{{ recipe.name }}の写真 {{ loop.index }}" loading="lazy">
         {%- if photos_editable %}
-        {#- 削除の確認。レシピの削除と同じく、Invoker Commands で <dialog> を開閉する。 #}
-        <button type="button" class="text danger" commandfor="delete-photo-{{ photo.id }}" command="show-modal">写真を削除</button>
-        <dialog id="delete-photo-{{ photo.id }}" class="confirm" aria-labelledby="delete-photo-title-{{ photo.id }}">
-          <h2 id="delete-photo-title-{{ photo.id }}">写真を削除しますか？</h2>
-          <p>{{ loop.index }} 枚目の写真を削除します。元には戻せません。</p>
-          <div class="actions">
-            <button type="button" commandfor="delete-photo-{{ photo.id }}" command="close">やめる</button>
-            <form method="post" action="/recipes/{{ recipe.id }}/photos/{{ photo.id }}/delete">
-              <button type="submit" class="primary danger-fill">削除する</button>
-            </form>
-          </div>
-        </dialog>
+        {%- let dialog_id = "delete-photo-{}"|format(photo.id) %}
+        {%- let dialog_open = "写真を削除" %}
+        {%- let dialog_title = "写真を削除しますか？" %}
+        {%- let dialog_text = "{} 枚目の写真を削除します。元には戻せません。"|format(loop.index) %}
+        {%- let dialog_action = "/recipes/{}/photos/{}/delete"|format(recipe.id, photo.id) %}
+        {%- let dialog_fields: &[(&str, &str); 0] = [] %}
+        {% include "delete_dialog.html" %}
         {%- endif %}
       </li>
       {%- endfor %}
@@ -56,7 +51,12 @@
   <div class="actions">
     <a class="button-link" href="/recipes/{{ recipe.id }}/edit">編集する</a>
     <a class="button-link secondary" href="/">一覧に戻る</a>
-    {%- let back = None::<(&str, i64)> %}
+    {%- let dialog_id = "delete-{}"|format(recipe.id) %}
+    {%- let dialog_open = "削除" %}
+    {%- let dialog_title = "レシピを削除しますか？" %}
+    {%- let dialog_text = "「{}」を削除します。元には戻せません。"|format(recipe.name) %}
+    {%- let dialog_action = "/recipes/{}/delete"|format(recipe.id) %}
+    {%- let dialog_fields: &[(&str, &str); 0] = [] %}
     {% include "delete_dialog.html" %}
   </div>
 </article>
