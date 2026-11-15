@@ -3,6 +3,7 @@
 mod fake;
 mod recipes;
 mod routing;
+mod screens;
 mod workspaces;
 
 use axum::{
@@ -24,6 +25,8 @@ pub struct TestResponse {
     pub allow: String,
     /// Location ヘッダー。無ければ空。
     pub location: String,
+    /// すべてのヘッダー。
+    pub headers: axum::http::HeaderMap,
     pub body: String,
 }
 
@@ -48,12 +51,14 @@ pub async fn send(app: Router, request: Request<Body>) -> TestResponse {
     let content_type = header_text(header::CONTENT_TYPE);
     let allow = header_text(header::ALLOW);
     let location = header_text(header::LOCATION);
+    let headers = response.headers().clone();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     TestResponse {
         status,
         content_type,
         allow,
         location,
+        headers,
         body: String::from_utf8(bytes.to_vec()).unwrap(),
     }
 }

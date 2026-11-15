@@ -58,6 +58,11 @@ pub trait Backend: Clone + Send + Sync + 'static {
     /// 今の時刻を UNIX 時間のミリ秒で返す。
     fn now_millis(&self) -> i64;
 
+    /// 共有のデモのワークスペースの ID。設定されていなければ `None`。
+    ///
+    /// ID を知れば誰でも API で書き込めるので、画面には出さない。
+    fn demo_workspace_id(&self) -> Option<WorkspaceId>;
+
     /// ワークスペースを作ってよいかを、作る人を表すキー（IP アドレスなど）ごとの回数で決める。
     fn allow_workspace_creation(
         &self,

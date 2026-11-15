@@ -38,6 +38,8 @@ pub struct FakeBackend {
     pub now: Arc<AtomicI64>,
     /// `true` なら、ワークスペースを作る回数の制限を超えたことにする。
     pub rate_limited: bool,
+    /// 共有のデモのワークスペースの ID。
+    pub demo: Option<String>,
     /// `true` なら、DB が失敗したことにする。
     pub broken: bool,
     /// `true` なら、書き込む API の回数の制限を超えたことにする。
@@ -59,6 +61,7 @@ impl Default for FakeBackend {
             next_random: Arc::default(),
             now: Arc::new(AtomicI64::new(NOW)),
             rate_limited: false,
+            demo: None,
             broken: false,
             write_limited: false,
             rate_limit_keys: Arc::default(),
@@ -111,6 +114,10 @@ impl Backend for FakeBackend {
 
     fn now_millis(&self) -> i64 {
         self.now.load(Ordering::Relaxed)
+    }
+
+    fn demo_workspace_id(&self) -> Option<WorkspaceId> {
+        self.demo.as_deref().and_then(WorkspaceId::parse)
     }
 
     fn allow_workspace_creation(

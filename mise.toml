@@ -55,7 +55,13 @@ run = "cargo test --workspace --locked"
 description = "Worker をビルドする"
 dir = "apps/recipe-box-rs"
 # worker-build は --locked を受け取らないので、先に Cargo.lock が最新かを確かめる。
-run = ["cargo fetch --locked", "worker-build --release"]
+# htmx のコピーは wrangler.toml の [build] の command と同じにする。
+run = [
+  "cargo fetch --locked",
+  "worker-build --release",
+  "mkdir -p public/assets",
+  "cp ../../node_modules/htmx.org/dist/htmx.min.js public/assets/htmx.min.js",
+]
 
 [tasks.migrate]
 description = "ローカルの D1 にマイグレーションを当てる"

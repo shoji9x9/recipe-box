@@ -16,7 +16,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{backend::Backend, error::ApiError, id, workspace::Workspace};
+use crate::{
+    backend::{Backend, RecipePage},
+    error::ApiError,
+    id,
+    workspace::{Workspace, WorkspaceId},
+};
 
 /// 料理名の長さの上限（Unicode のコードポイントの数）。
 pub const MAX_NAME_CHARS: usize = 100;
@@ -112,10 +117,10 @@ pub struct RecipeFields {
 /// 書き方ではなく値で決めると、リライトの後（`Number.isInteger`）と結果がそろう。
 #[derive(Debug, Deserialize)]
 pub struct RecipeInput {
-    name: Option<String>,
-    servings: Option<f64>,
-    ingredients: Option<String>,
-    steps: Option<String>,
+    pub name: Option<String>,
+    pub servings: Option<f64>,
+    pub ingredients: Option<String>,
+    pub steps: Option<String>,
 }
 
 /// 入力の項目を確かめる。正しくなければ、最初に見つかった項目のエラーを返す。
@@ -238,15 +243,30 @@ pub async fn list<B: Backend>(
     workspace: Workspace,
     params: Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Json<RecipeList>, ApiError> {
-    let invalid_q = || ApiError::InvalidField {
-        field: "q",
-        message: "検索の条件（q）が正しくありません",
-    };
     // 名前と値の組の並びとしてはどんなクエリでも読めるので、ここで失敗することは無いはずだが、
     // axum の既定のエラー（JSON でない本文）を返さないよう、q のエラーにする。
-    let Query(params) = params.map_err(|_| invalid_q())?;
-    let pattern = single_param(&params, "q")
-        .map_err(|()| invalid_q())?
+    let Query(params) = params.map_err(|_| invalid_query())?;
+    let (pattern, page) = parse_list_params(&params)?;
+    let result = list_page(&backend, &workspace.id, pattern.as_deref(), page).await?;
+    Ok(Json(RecipeList {
+        recipes: result.recipes,
+        total: result.total,
+        page,
+        per_page: PAGE_SIZE,
+    }))
+}
+
+fn invalid_query() -> ApiError {
+    ApiError::InvalidField {
+        field: "q",
+        message: "検索の条件（q）が正しくありません",
+    }
+}
+
+/// 一覧のクエリから、検索の文字列（空なら `None`）とページの番号を取り出す。API と画面の両方から使う。
+pub fn parse_list_params(params: &[(String, String)]) -> Result<(Option<String>, i64), ApiError> {
+    let pattern = single_param(params, "q")
+        .map_err(|()| invalid_query())?
         .filter(|q| !q.is_empty());
     if pattern.is_some_and(|q| q.chars().count() > MAX_QUERY_CHARS) {
         return Err(ApiError::InvalidField {
@@ -254,28 +274,32 @@ pub async fn list<B: Backend>(
             message: "検索の条件（q）は 100 文字までです",
         });
     }
-    let page = single_param(&params, "page")
+    let page = single_param(params, "page")
         .ok()
         .and_then(parse_page)
         .ok_or(ApiError::InvalidField {
             field: "page",
             message: "ページ（page）は 1 から 2 までの整数です",
         })?;
+    Ok((pattern.map(str::to_owned), page))
+}
+
+/// 一覧の 1 ページ分を読む。`pattern` は検索の文字列（そのままの形。ここで検索に使う形にする）。
+pub async fn list_page<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    pattern: Option<&str>,
+    page: i64,
+) -> Result<RecipePage, ApiError> {
     let query = pattern.map(search_name);
-    let result = backend
+    Ok(backend
         .list_recipes(
-            &workspace.id,
+            workspace,
             query.as_deref(),
             PAGE_SIZE,
             (page - 1) * PAGE_SIZE,
         )
-        .await?;
-    Ok(Json(RecipeList {
-        recipes: result.recipes,
-        total: result.total,
-        page,
-        per_page: PAGE_SIZE,
-    }))
+        .await?)
 }
 
 /// `POST /api/recipes`: レシピを登録し、`201` と登録したレシピを返す。
@@ -286,6 +310,22 @@ pub async fn create<B: Backend>(
 ) -> Result<Response, ApiError> {
     let Json(input) = body.map_err(|rejection| body_error(&rejection))?;
     let fields = validate(input)?;
+    let recipe = insert(&backend, &workspace.id, fields).await?;
+    let location = format!("/api/recipes/{}", recipe.id);
+    Ok((
+        StatusCode::CREATED,
+        [(header::LOCATION, location)],
+        Json(recipe),
+    )
+        .into_response())
+}
+
+/// 確かめた後の項目でレシピを登録し、登録したレシピを返す。API と画面の両方から使う。
+pub async fn insert<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    fields: RecipeFields,
+) -> Result<Recipe, ApiError> {
     let id = RecipeId::from_bytes(backend.random_128());
     let now = backend.now_millis();
     let recipe = Recipe {
@@ -298,18 +338,12 @@ pub async fn create<B: Backend>(
         updated_at: now,
     };
     if !backend
-        .insert_recipe(&workspace.id, &recipe, MAX_RECIPES_PER_WORKSPACE)
+        .insert_recipe(workspace, &recipe, MAX_RECIPES_PER_WORKSPACE)
         .await?
     {
         return Err(ApiError::RecipeLimitReached);
     }
-    let location = format!("/api/recipes/{id}");
-    Ok((
-        StatusCode::CREATED,
-        [(header::LOCATION, location)],
-        Json(recipe),
-    )
-        .into_response())
+    Ok(recipe)
 }
 
 /// `GET /api/recipes/{id}`: レシピを 1 件返す。
@@ -336,22 +370,29 @@ pub async fn update<B: Backend>(
     let id = parse_recipe_id(id)?;
     let Json(input) = body.map_err(|rejection| body_error(&rejection))?;
     let fields = validate(input)?;
+    Ok(Json(replace(&backend, &workspace.id, &id, fields).await?))
+}
+
+/// レシピの中身を置き換え、変えた後のレシピを返す。API と画面の両方から使う。
+pub async fn replace<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    id: &RecipeId,
+    fields: RecipeFields,
+) -> Result<Recipe, ApiError> {
     // 作った日時は変わらないので、更新の前に読んでおき、更新の後には読み直さない。
     // 読み直すと、間に入った別の PUT の内容を返したり、間に入った DELETE で 404 を返したりするため。
     let created_at = backend
-        .get_recipe(&workspace.id, &id)
+        .get_recipe(workspace, id)
         .await?
         .ok_or(ApiError::RecipeNotFound)?
         .created_at;
     let now = backend.now_millis();
     // 読んでから更新するまでの間に消されていれば、更新は 0 行になる。
-    if !backend
-        .update_recipe(&workspace.id, &id, &fields, now)
-        .await?
-    {
+    if !backend.update_recipe(workspace, id, &fields, now).await? {
         return Err(ApiError::RecipeNotFound);
     }
-    Ok(Json(Recipe {
+    Ok(Recipe {
         id: id.to_string(),
         name: fields.name,
         servings: fields.servings,
@@ -359,7 +400,7 @@ pub async fn update<B: Backend>(
         steps: fields.steps,
         created_at,
         updated_at: now,
-    }))
+    })
 }
 
 /// `DELETE /api/recipes/{id}`: レシピを消し、`204` を返す。

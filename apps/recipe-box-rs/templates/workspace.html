@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}ワークスペース{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>ワークスペース</h1>
+  {%- if let Some(message) = error %}
+  <p class="error" role="alert">{{ message }}</p>
+  {%- endif %}
+  {%- if let Some(id) = own_id %}
+  <p>このブラウザで使っているワークスペースの ID です。ほかの端末で同じレシピ帳を使うときは、この ID を入れてください。</p>
+  <p>ID を知っている人は、誰でもこのレシピ帳を読み書きできます。人に教えないでください。</p>
+  <label for="current-id">ワークスペースの ID</label>
+  <input id="current-id" value="{{ id }}" readonly autocomplete="off">
+  <p>14 日使わないと、ワークスペースは自動で消えます。</p>
+  <form method="post" action="/workspace/forget">
+    <button type="submit">このブラウザでの利用をやめる</button>
+  </form>
+  {%- else %}
+  {%- if demo %}
+  <p>今は、誰でも見て編集できる共有のデモを表示しています。</p>
+  {%- else %}
+  <p>まだワークスペースがありません。</p>
+  {%- endif %}
+  <form method="post" action="/workspace">
+    <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
+  </form>
+  {%- endif %}
+  {% include "switch_form.html" %}
+</section>
+{% endblock %}

@@ -30,24 +30,34 @@ pub async fn limit_writes<B: Backend>(
     request: Request,
     next: Next,
 ) -> Response {
-    if !matches!(
-        *request.method(),
-        Method::POST | Method::PUT | Method::DELETE
-    ) {
-        return next.run(request).await;
+    match check_write(&backend, request.method(), request.headers()).await {
+        Ok(()) => next.run(request).await,
+        Err(error) => error.into_response(),
     }
-    match backend.allow_write(&client_key(request.headers())).await {
-        Ok(true) => {}
-        Ok(false) => return ApiError::TooManyRequests.into_response(),
-        Err(error) => return ApiError::from(error).into_response(),
+}
+
+/// [`limit_writes`] の確かめる中身。画面の middleware も使う。読むだけのメソッドなら何もしない。
+///
+/// `Request` の本文は `Sync` でないので、`Request` ではなくメソッドとヘッダーを受け取る
+/// （`await` をまたいで `&Request` を持つと、`Future` が `Send` にならない）。
+pub async fn check_write<B: Backend>(
+    backend: &B,
+    method: &Method,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
+    if !matches!(*method, Method::POST | Method::PUT | Method::DELETE) {
+        return Ok(());
+    }
+    if !backend.allow_write(&client_key(headers)).await? {
+        return Err(ApiError::TooManyRequests);
     }
     // usize に収まらないほど大きい値も、上限を超えたものとして扱う。
-    if declared_length(request.headers()).is_some_and(|length| {
+    if declared_length(headers).is_some_and(|length| {
         usize::try_from(length).map_or(true, |length| length > MAX_BODY_BYTES)
     }) {
-        return ApiError::PayloadTooLarge.into_response();
+        return Err(ApiError::PayloadTooLarge);
     }
-    next.run(request).await
+    Ok(())
 }
 
 /// `Content-Length` の値。無いか、数字だけでなければ `None`。u64 に収まらないほど大きければ `u64::MAX`。

@@ -6,6 +6,8 @@ node_modules/
 
 # worker-build と wrangler が作るファイル
 /apps/*/build/
+# ビルドのときに node_modules からコピーする htmx
+/apps/recipe-box-rs/public/assets/htmx.min.js
 .wrangler/
 
 # ローカル用の秘密情報（wrangler dev が読む）
@@ -13,3 +15,6 @@ node_modules/
 .dev.vars.*
 .env
 .env.*
+
+# スキルの設定のうち、人ごと・このリポジトリ限定の層（本番の URL など、公開しない値を置く）
+.config/skills/shoji9x9/*.local.jsonc

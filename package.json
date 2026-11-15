@@ -11,6 +11,7 @@
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
     "chrome-devtools-mcp": "1.12.0",
+    "htmx.org": "2.0.11",
     "wrangler": "^4.158.0"
   }
 }

@@ -66,7 +66,14 @@ expect 200 "GET /api/health"
 [ "$(cat "$body_file")" = '{"status":"ok"}' ] || fail "/api/health の本文が違う"
 request GET /
 expect 200 "GET /"
-grep -q '<h1>recipe-box</h1>' "$body_file" || fail "/ が期待した HTML を返さない"
+grep -q 'はじめる' "$body_file" || fail "Cookie が無いのに / が「はじめる」画面を返さない"
+# CSS と htmx は静的アセットとして配る（wrangler.toml の [assets] と、ビルドでの htmx のコピーを確かめる）。
+# 画面の動きは単体テスト（src/tests/screens.rs）で確かめるので、ここでは操作しない。
+request GET /assets/style.css
+expect 200 "GET /assets/style.css"
+request GET /assets/htmx.min.js
+expect 200 "GET /assets/htmx.min.js"
+grep -q 'htmx' "$body_file" || fail "/assets/htmx.min.js が htmx でない"
 
 echo "ワークスペースを 2 つ作る"
 request POST /api/workspaces

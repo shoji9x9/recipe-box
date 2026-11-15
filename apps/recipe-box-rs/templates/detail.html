@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ recipe.name }}{% endblock %}
+{% block content %}
+{% include "demo_notice.html" %}
+<article class="detail">
+  <h1>{{ recipe.name }}</h1>
+  <p class="meta">{{ recipe.servings }} 人分</p>
+  <section class="section">
+    <h2>材料</h2>
+    <p class="multiline">{% if recipe.ingredients.is_empty() %}（なし）{% else %}{{ recipe.ingredients }}{% endif %}</p>
+  </section>
+  <section class="section">
+    <h2>手順</h2>
+    <p class="multiline">{% if recipe.steps.is_empty() %}（なし）{% else %}{{ recipe.steps }}{% endif %}</p>
+  </section>
+  <div class="actions">
+    <a class="button-link" href="/recipes/{{ recipe.id }}/edit">編集する</a>
+    <a class="button-link secondary" href="/">一覧に戻る</a>
+    <form method="post" action="/recipes/{{ recipe.id }}/delete" hx-confirm="「{{ recipe.name }}」を削除しますか？">
+      <button type="submit" class="text danger">削除</button>
+    </form>
+  </div>
+</article>
+{% endblock %}

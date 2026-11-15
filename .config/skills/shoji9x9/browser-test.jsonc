@@ -1,0 +1,13 @@
+{
+  "environments": [
+    {
+      "name": "local",
+      "url": "http://localhost:8787",
+      "auth": "none",
+      "pre_commands": [],
+      "start": "mise run dev",
+      "default": true,
+      "forbidden_actions": []
+    }
+  ]
+}
