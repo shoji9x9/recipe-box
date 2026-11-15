@@ -376,6 +376,19 @@ fn remove_cookie(response: &mut Response, name: &str) {
     add_cookie(response, name, "", 0);
 }
 
+/// 応答が、`name` の Cookie を付けるか消すか（`Set-Cookie` にあるか）。
+fn sets_cookie(response: &Response, name: &str) -> bool {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|text| {
+            text.strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with('='))
+        })
+}
+
 /// Cookie の値を読む。無いか、同じ名前が 2 つ以上あれば `None`（どちらを使うか決められないため）。
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut found = None;
@@ -407,8 +420,8 @@ fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
 ///
 /// - ワークスペースの Cookie があれば、在ることを確かめて最終利用日時を更新する。
 ///   無くなっていれば（自動削除など）か、共有のデモの ID なら、どの画面でも Cookie を消す。
-///   消す `Set-Cookie` は、ハンドラーの `Set-Cookie` より前に置く。同じ応答でワークスペースを作った・切り替えたときは、
-///   ブラウザが後ろの `Set-Cookie` を当てるので、新しい Cookie が残る。
+///   ハンドラーが同じ応答で付けた・消した Cookie（ワークスペースを作った・切り替えたときなど）は、そのままにする。
+///   後ろに削除を足すと新しい Cookie を打ち消し、同じ名前の `Set-Cookie` が 2 つ並ぶため。
 /// - 一度だけ出すメッセージがあれば読み、画面を返すときに消す（移動のときは、移動先で読むので残す）。
 pub async fn identify<B: Backend>(
     State(backend): State<B>,
@@ -439,19 +452,10 @@ pub async fn identify<B: Backend>(
     });
     let mut response = next.run(request).await;
     if stale {
-        // ハンドラーの Set-Cookie を一度外し、消す Set-Cookie を先に置いてから戻す。
-        let handler_cookies: Vec<HeaderValue> = response
-            .headers()
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .cloned()
-            .collect();
-        // remove は、その名前の値をすべて外す。
-        response.headers_mut().remove(header::SET_COOKIE);
-        remove_cookie(&mut response, WORKSPACE_COOKIE);
-        remove_cookie(&mut response, DEMO_VIEW_COOKIE);
-        for cookie in handler_cookies {
-            response.headers_mut().append(header::SET_COOKIE, cookie);
+        for name in [WORKSPACE_COOKIE, DEMO_VIEW_COOKIE] {
+            if !sets_cookie(&response, name) {
+                remove_cookie(&mut response, name);
+            }
         }
     }
     if flash.is_some() && !response.status().is_redirection() {

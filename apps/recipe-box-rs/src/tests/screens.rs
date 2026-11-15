@@ -1259,10 +1259,15 @@ async fn demo_id_is_never_treated_as_own_workspace() {
     assert!(!response.body.contains("自分のレシピ帳に戻る"));
     let response = screen_post(&backend, "/workspace/demo", Some(&demo_cookie), "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
-    assert!(
-        !set_cookies(&response)
-            .iter()
-            .any(|cookie| cookie.starts_with("__Host-demo-view=1"))
+    // デモの ID の Cookie を、無い ID と同じく消すだけで、デモを見る印は付けない。
+    let mut cookies = set_cookies(&response);
+    cookies.sort();
+    assert_eq!(
+        cookies,
+        [
+            "__Host-demo-view=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+            "__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+        ]
     );
 }
 
@@ -1309,11 +1314,9 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
         .into_iter()
         .filter(|cookie| cookie.starts_with("__Host-workspace="))
         .collect();
-    // 消えた ID の Cookie を消す Set-Cookie は、新しい Cookie より前に置く（ブラウザは後ろのものを当てる）。
-    assert!(
-        cookies.last().unwrap().starts_with(&cookie(WORKSPACE_B)),
-        "{cookies:?}"
-    );
+    // 消えた ID の Cookie を消す Set-Cookie を足して、新しい Cookie を打ち消さない（同じ名前を 2 つ並べない）。
+    assert_eq!(cookies.len(), 1, "{cookies:?}");
+    assert!(cookies[0].starts_with(&cookie(WORKSPACE_B)), "{cookies:?}");
 
     let response = screen_post(&backend, "/workspace", Some(&gone), "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
@@ -1321,8 +1324,6 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
         .into_iter()
         .filter(|cookie| cookie.starts_with("__Host-workspace="))
         .collect();
-    assert!(
-        !cookies.last().unwrap().contains("Max-Age=0"),
-        "{cookies:?}"
-    );
+    assert_eq!(cookies.len(), 1, "{cookies:?}");
+    assert!(!cookies[0].contains("Max-Age=0"), "{cookies:?}");
 }
