@@ -9,11 +9,26 @@
 (() => {
   const FORM = "form[data-photo-upload]";
 
+  // その写真だけの誤り（読めない・大きすぎる・形式が違う）。ほかの写真は追加できるので、続けて送る。
+  // それ以外の失敗（上限・ワークスペースが無い・回数の制限・サーバーの障害など）は、続けても追加できないので、残りを送らない。
+  const PER_PHOTO_ERRORS = new Set([400, 413, 415]);
+
   // ファイルの欄で複数を選べるようにする。htmx がページを入れ替えたときにも付け直す。
   function enableMultiple(root) {
     for (const input of root.querySelectorAll(`${FORM} input[type="file"]`)) {
       input.multiple = true;
     }
+  }
+
+  function setControlsDisabled(form, disabled) {
+    for (const control of form.querySelectorAll("input, button")) {
+      control.disabled = disabled;
+    }
+  }
+
+  // 追加できなかった写真の一覧を、「ファイル名: 理由」の文にする。
+  function describe(failures) {
+    return failures.map(([name, reason]) => `${name}: ${reason}`);
   }
 
   // 失敗した応答の画面から、知らせ（赤のメッセージ）の文を取り出す。
@@ -31,10 +46,8 @@
     return "追加できませんでした";
   }
 
-  // ワークスペースが無いなど、続けて送っても追加できないときの印。
-  const STOP = Symbol("stop");
-
-  // 1 枚を送り、追加できたら null、できなければ理由の文を返す。続けても追加できなければ STOP を返す。
+  // 1 枚を送る。結果は { added, reason, stop, redirected }。
+  // stop は残りを送らないこと、redirected はサーバーがほかの画面に移らせたこと（ワークスペースが無いなど）。
   async function sendOne(form, file) {
     let response;
     try {
@@ -44,16 +57,16 @@
         headers: { "Content-Type": file.type || "application/octet-stream" },
       });
     } catch {
-      return "通信できませんでした";
+      return { added: false, reason: "通信できませんでした", stop: true, redirected: false };
     }
     if (response.status === 204) {
-      return null;
+      return { added: true, reason: null, stop: false, redirected: false };
     }
-    // ワークスペースが無いとき（303 で最初の画面へ移る）など、エラーの画面でない応答は、残りも送らない。
-    if (response.ok) {
-      return STOP;
+    if (response.redirected) {
+      return { added: false, reason: "追加できませんでした", stop: true, redirected: true };
     }
-    return failureReason(response);
+    const reason = await failureReason(response);
+    return { added: false, reason, stop: !PER_PHOTO_ERRORS.has(response.status), redirected: false };
   }
 
   function message(kind, text, items) {
@@ -90,40 +103,38 @@
       messages.push(message("success", `${added} 枚の写真を追加しました`, []));
     }
     if (failures.length > 0) {
-      messages.push(
-        message(
-          "error",
-          `${failures.length} 枚の写真を追加できませんでした`,
-          failures.map(([name, reason]) => `${name}: ${reason}`),
-        ),
-      );
+      messages.push(message("error", `${failures.length} 枚の写真を追加できませんでした`, describe(failures)));
     }
     head.after(...messages);
   }
 
   // 詳細の画面を読み直して、結果を出す。htmx があれば、ページの移動と同じく本文だけを入れ替える。
-  // 読み直せなければ、今の画面のまま結果を出す（追加した写真は、ページを読み直すと出る）。
-  async function finish(form, detailPath, added, failures) {
+  async function finish(form, detailPath, added, failures, redirected) {
     // 送っている間に、ほかの画面に移っていれば、その画面を入れ替えない。
     if (window.location.pathname !== detailPath) {
       return;
     }
-    // 読み直せなかったときのために、先にフォームを使える状態に戻す（読み直せば、フォームごと入れ替わる）。
-    form.dataset.remaining = String(Math.max(0, Number(form.dataset.remaining) - added));
-    for (const control of form.querySelectorAll("input, button")) {
-      control.disabled = false;
+    // サーバーがほかの画面に移らせたときは、ページごと読み直し、移った先の画面とアドレスをそろえる。
+    if (redirected) {
+      window.location.assign(detailPath);
+      return;
     }
-    const input = form.querySelector('input[type="file"]');
-    if (input) {
-      input.value = "";
-    }
-    setStatus(form, "送り終えました。ページを読み直すと、追加した写真が出ます");
     try {
       if (window.htmx) {
         await window.htmx.ajax("GET", detailPath, { target: "body", swap: "innerHTML" });
       }
     } catch {
       // 今の画面のまま結果を出す。
+    }
+    // 読み直せなかったとき（htmx が無いなど）は、フォームが残っているので、使える状態に戻す。
+    if (form.isConnected) {
+      form.dataset.remaining = String(Math.max(0, Number(form.dataset.remaining) - added));
+      const input = form.querySelector('input[type="file"]');
+      if (input) {
+        input.value = "";
+      }
+      setControlsDisabled(form, false);
+      setStatus(form, added > 0 ? "送り終えました。ページを読み直すと、追加した写真が出ます" : "送り終えました");
     }
     showResults(added, failures);
   }
@@ -165,7 +176,7 @@
     const remaining = Number(form.dataset.remaining);
     if (sending.length > remaining) {
       // 送らずに断る写真があれば、それも一緒に知らせる（選び直すときに除けるように）。
-      const others = failures.map(([name, reason]) => `${name}: ${reason}`).join("。");
+      const others = describe(failures).join("。");
       setStatus(
         form,
         `写真はあと ${remaining} 枚まで追加できます。選んだ写真を減らしてください${others ? `。ほかに、追加できない写真があります（${others}）` : ""}`,
@@ -174,26 +185,26 @@
     }
     // 詳細の画面のパス。フォームの送り先（/recipes/<id>/photos）の親である。
     const detailPath = new URL(form.action).pathname.replace(/\/photos\/?$/, "");
-    for (const control of form.querySelectorAll("input, button")) {
-      control.disabled = true;
-    }
+    setControlsDisabled(form, true);
     let added = 0;
+    let redirected = false;
     for (const [index, file] of sending.entries()) {
       setStatus(form, `写真を送っています（${index + 1} / ${sending.length} 枚目）`);
-      const reason = await sendOne(form, file);
-      if (reason === STOP) {
-        for (const rest of sending.slice(index)) {
-          failures.push([rest.name, "追加できませんでした。ページを読み直してください"]);
+      const result = await sendOne(form, file);
+      if (result.added) {
+        added += 1;
+        continue;
+      }
+      failures.push([file.name, result.reason]);
+      if (result.stop) {
+        for (const rest of sending.slice(index + 1)) {
+          failures.push([rest.name, "前の写真を追加できなかったため、送りませんでした"]);
         }
+        redirected = result.redirected;
         break;
       }
-      if (reason === null) {
-        added += 1;
-      } else {
-        failures.push([file.name, reason]);
-      }
     }
-    await finish(form, detailPath, added, failures);
+    await finish(form, detailPath, added, failures, redirected);
   }
 
   // htmx（hx-boost）より先に受け取るため、捕捉の段階で聞く。
