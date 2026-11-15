@@ -48,6 +48,8 @@ pub fn router<B: Backend>(backend: B) -> Router {
         .method_not_allowed_fallback(api_method_not_allowed);
     Router::new()
         .merge(screen_routes(backend.clone()))
+        // 写真のフォームは本文の上限が違うので、上の画面の上限の外に置く。
+        .merge(screen_photo_routes(backend.clone()))
         .nest("/api", api)
         // 無いパスは、ここでまとめて扱う。`nest` した router の fallback では
         // `/api/`（末尾のスラッシュ）に届かないので、パスを見て分ける。
@@ -130,6 +132,31 @@ fn screen_routes<B: Backend>(backend: B) -> Router<B> {
         .route_layer(middleware::from_fn(screen::security_headers))
         .merge(check_routes)
         .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
+}
+
+/// 画面の写真。middleware は [`screen_routes`] と同じ順に通るが、書き込みの本文の上限が違う
+/// （[`screen::guard_photo_writes`]）。
+fn screen_photo_routes<B: Backend>(backend: B) -> Router<B> {
+    Router::new()
+        .route("/recipes/{id}/photos", post(screen::add_photo::<B>))
+        .route(
+            "/recipes/{id}/photos/{photo_id}",
+            get(screen::photo_file::<B>),
+        )
+        .route(
+            "/recipes/{id}/photos/{photo_id}/delete",
+            post(screen::delete_photo::<B>),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            backend.clone(),
+            screen::identify::<B>,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            backend,
+            screen::guard_photo_writes::<B>,
+        ))
+        .route_layer(middleware::from_fn(screen::security_headers))
+        .layer(DefaultBodyLimit::max(screen::PHOTO_FORM_MAX_BYTES))
 }
 
 /// 画面のフォームを確かめるだけのルート。ワークスペースを読まないので、[`screen::identify`] を通さない。

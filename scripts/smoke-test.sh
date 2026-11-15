@@ -140,35 +140,35 @@ request GET "/api/recipes?q=$(jq -rn --arg q "$long_name" '$q | @uri')" "$worksp
 expect 200 "GET /api/recipes?q=<100 文字の日本語>"
 [ "$(json '.recipes | length')" = 1 ] || fail "100 文字の日本語で検索できない"
 
-echo "ページ分けと、レシピの数の上限（40 件）"
-# 別のワークスペースに、項目の長さも上限いっぱい（材料 2,000 文字・手順 5,000 文字）のレシピを 40 件作る。
+echo "ページ分けと、レシピの数の上限（80 件）"
+# 別のワークスペースに、項目の長さも上限いっぱい（材料 2,000 文字・手順 5,000 文字）のレシピを 80 件作る。
 ingredients="$(printf 'あ%.0s' $(seq 1 2000))"
 steps="$(printf 'い%.0s' $(seq 1 5000))"
-for n in $(seq 1 40); do
+for n in $(seq 1 80); do
   request POST /api/recipes "$workspace_b" \
     "{\"name\":\"料理 $n\",\"servings\":1,\"ingredients\":\"$ingredients\",\"steps\":\"$steps\"}"
   expect 201 "POST /api/recipes（料理 $n）"
   # 並びを確かめるため、作った日時が同じミリ秒にならないよう少し待つ。
   sleep 0.01
 done
-request POST /api/recipes "$workspace_b" '{"name":"41 件目","servings":1}'
-expect 409 "41 件目のレシピ"
-[ "$(json .error)" = recipe_limit_reached ] || fail "41 件目のエラーのコードが recipe_limit_reached でない"
+request POST /api/recipes "$workspace_b" '{"name":"81 件目","servings":1}'
+expect 409 "81 件目のレシピ"
+[ "$(json .error)" = recipe_limit_reached ] || fail "81 件目のエラーのコードが recipe_limit_reached でない"
 request GET /api/recipes "$workspace_b"
 expect 200 "GET /api/recipes（1 ページ目）"
 [ "$(json '.recipes | length')" = 20 ] || fail "1 ページ目が 20 件でない"
-[ "$(json .total)" = 40 ] || fail "総数が 40 でない"
-[ "$(json '.recipes[0].name')" = "料理 40" ] || fail "1 ページ目が新しい順でない"
-request GET '/api/recipes?page=2' "$workspace_b"
-expect 200 "GET /api/recipes?page=2"
-[ "$(json '.recipes | length')" = 20 ] || fail "2 ページ目が 20 件でない"
-[ "$(json '.recipes[19].name')" = "料理 1" ] || fail "2 ページ目の最後が最も古いレシピでない"
+[ "$(json .total)" = 80 ] || fail "総数が 80 でない"
+[ "$(json '.recipes[0].name')" = "料理 80" ] || fail "1 ページ目が新しい順でない"
+request GET '/api/recipes?page=4' "$workspace_b"
+expect 200 "GET /api/recipes?page=4"
+[ "$(json '.recipes | length')" = 20 ] || fail "4 ページ目が 20 件でない"
+[ "$(json '.recipes[19].name')" = "料理 1" ] || fail "4 ページ目の最後が最も古いレシピでない"
 request GET '/api/recipes?q=%E6%96%99%E7%90%86%201&page=1' "$workspace_b"
 expect 200 "GET /api/recipes?q=料理 1"
 [ "$(json .total)" = 11 ] || fail "検索の総数が 11（料理 1・10〜19）でない"
-request GET '/api/recipes?page=3' "$workspace_b"
-expect 400 "page が 3（上限の 2 を超える）"
-[ "$(json .field)" = page ] || fail "page が 3 のエラーの項目が page でない"
+request GET '/api/recipes?page=5' "$workspace_b"
+expect 400 "page が 5（上限の 4 を超える）"
+[ "$(json .field)" = page ] || fail "page が 5 のエラーの項目が page でない"
 
 echo "取得・更新"
 request GET "/api/recipes/$recipe_id" "$workspace_a"

@@ -464,7 +464,7 @@ async fn list_rejects_invalid_page() {
         "1e1",
         "abc",
         "",
-        "3",
+        "5",
         "99999999999999999999",
     ] {
         let path = format!("/api/recipes?page={page}");

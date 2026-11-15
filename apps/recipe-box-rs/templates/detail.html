@@ -4,6 +4,47 @@
 {% block content %}
 <article class="detail">
   <p class="meta">{{ recipe.servings }} 人分</p>
+  <section class="section" aria-labelledby="photos-title">
+    <h2 id="photos-title">写真</h2>
+    {%- if photos.is_empty() %}
+    <p>写真はありません。</p>
+    {%- else %}
+    <ul class="photos">
+      {%- for photo in photos %}
+      <li>
+        <img src="/recipes/{{ recipe.id }}/photos/{{ photo.id }}" alt="{{ recipe.name }}の写真 {{ loop.index }}" loading="lazy">
+        {%- if photos_editable %}
+        {#- 削除の確認。レシピの削除と同じく、Invoker Commands で <dialog> を開閉する。 #}
+        <button type="button" class="text danger" commandfor="delete-photo-{{ photo.id }}" command="show-modal">写真を削除</button>
+        <dialog id="delete-photo-{{ photo.id }}" class="confirm" aria-labelledby="delete-photo-title-{{ photo.id }}">
+          <h2 id="delete-photo-title-{{ photo.id }}">写真を削除しますか？</h2>
+          <p>{{ loop.index }} 枚目の写真を削除します。元には戻せません。</p>
+          <div class="actions">
+            <button type="button" commandfor="delete-photo-{{ photo.id }}" command="close">やめる</button>
+            <form method="post" action="/recipes/{{ recipe.id }}/photos/{{ photo.id }}/delete">
+              <button type="submit" class="primary danger-fill">削除する</button>
+            </form>
+          </div>
+        </dialog>
+        {%- endif %}
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+    {%- if !photos_editable %}
+    <p class="note">共有のデモでは、写真を追加・削除できません。</p>
+    {%- else if can_add_photo %}
+    <form method="post" action="/recipes/{{ recipe.id }}/photos" enctype="multipart/form-data" class="photo-form">
+      <label for="photo">写真を追加（JPEG・PNG・WebP、1 枚 4 MB まで、{{ max_photos }} 枚まで）</label>
+      <div class="row">
+        <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp">
+        <button type="submit">追加する</button>
+      </div>
+    </form>
+    {%- else %}
+    <p class="note">写真は {{ max_photos }} 枚まで付けられます。追加するときは、どれかを削除してください。</p>
+    {%- endif %}
+  </section>
   <section class="section">
     <h2>材料</h2>
     <p class="multiline">{% if recipe.ingredients.is_empty() %}（なし）{% else %}{{ recipe.ingredients }}{% endif %}</p>

@@ -16,6 +16,7 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
 - レシピの詳細
 - レシピの登録と編集のフォーム
 - レシピの削除
+- 写真の追加・表示・削除（レシピの詳細の画面で行う）
 - ワークスペースの ID の表示と切り替え
 
 | パス | 画面・操作 |
@@ -25,6 +26,9 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
 | `GET /recipes/:id` | 詳細 |
 | `GET /recipes/:id/edit`・`POST /recipes/:id` | 編集のフォームと、更新 |
 | `POST /recipes/:id/delete` | 削除（一覧から消したときは、同じ検索とページに戻る） |
+| `POST /recipes/:id/photos` | 写真を追加する（multipart/form-data の `photo` の欄） |
+| `GET /recipes/:id/photos/:photo_id` | 写真のデータ（詳細の画面の `<img>` が読む） |
+| `POST /recipes/:id/photos/:photo_id/delete` | 写真を削除する |
 | `GET /workspace` | ワークスペースの ID の表示と切り替え |
 | `POST /workspace` | ワークスペースを作る（「はじめる」） |
 | `POST /workspace/switch` | 入力した ID のワークスペースに切り替える |
@@ -36,7 +40,7 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
   1. Cookie の ID のワークスペースがあり、一時的にデモを見ていなければ、それを使う。
   2. 無ければ、共有のデモ（「デモ用のデータ」）を使う。デモは誰でも読み書きでき、どの画面にもその旨を出す。デモの ID は画面に出さない。
   3. デモも無ければ、「はじめる」画面を出す。
-  Cookie の ID のワークスペースが無くなっていれば（自動削除など）、どの画面でも Cookie を消す。
+  Cookie の ID のワークスペースが無くなっていれば（自動削除など）、どの画面でも Cookie を消す。ただし、同じ応答でワークスペースを作った・切り替えたときは、新しい Cookie を残す。
 - どのワークスペースを使うかの移り変わりは、次の状態遷移図のとおりである（「ワークスペースの状態」）。
 - 自分のワークスペースを持つ人は、「共有のデモを見る」で一時的にデモに切り替えられる。切り替えの印は 1 時間で切れる Cookie に置き、自分の ID の Cookie は残す。
   デモを見ていることを忘れて、自分のレシピを共有のデモに書かないよう、1 時間で自分のレシピ帳に戻し、デモを見ている間はどの画面にも「自分のレシピ帳に戻る」を出す。
@@ -60,9 +64,18 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
   ただし確かめるだけの `POST /recipes/check` は、書き込みの回数の制限を使わない（送り元と本文の大きさだけを確かめる）。欄から離れるたびに呼ぶので、使うと直している途中で保存が `429` になり、保存も D1 の読み取りもしないので守るものが無いためである。
 - 別のサイトから送られたフォームは、`Origin` が自分のホストと違えば `403` で断る（Cookie の SameSite=Lax に重ねた対策）。
 - htmx で、検索は入力しながら一覧だけを入れ替え、そのほかのリンクとフォームはページ全体を入れ替える（`hx-boost`）。JavaScript が動かなくても、普通のリンクとフォームとして使える。
-- 削除は、確認のダイアログ（`<dialog>`）で確かめる。JavaScript は使わず、HTML の Invoker Commands（`commandfor`・`command`）で開閉する。
+- 写真は、詳細の画面で、追加した順に並べる。追加は普通のフォーム（`multipart/form-data`）で送り、JavaScript が動かなくても使える。
+  上限や形式の誤り（`413`・`415`・`409` など）は、詳細の画面の見出しの下に赤で出す。ファイルを選ばずに送ったときは `400`。
+  写真のフォームの本文の上限は、1 枚の写真の上限（4,000,000 バイト）に multipart の区切りの分（64 KiB）を足したものにし、写真そのものの大きさは API と同じく確かめる。
+  `Content-Length` が本文の上限を超えるとき（スマートフォンの写真でよく起きる）は、本文を読まずに `413` のエラーの画面にし、写真の上限と「レシピに戻る」を出す。
+  `Content-Length` の無い本文（chunked）は、読む途中で上限に当たると、詳細の画面に同じ説明を出す（`413`）。
+  multipart として読めない本文は、詳細の画面に「写真を読めませんでした」と出す（`400`）。
+  レシピの写真が上限（5 枚）に達したら、追加のフォームを出さない。共有のデモでは、追加のフォームと削除のボタンを出さず、送られても `403` で断る。
+  デモの ID は、「ほかの端末の ID」として入れても無い ID と同じに断る。Cookie を書き換えて使っても、自分のワークスペースとして扱わずにデモを出し、無い ID と同じく Cookie を消す（デモの ID だと分からないように）。
+- 削除は、レシピも写真も、確認のダイアログ（`<dialog>`）で確かめる。JavaScript は使わず、HTML の Invoker Commands（`commandfor`・`command`）で開閉する。
   ブラウザ標準の `confirm()` はタイトル（「<ホスト> の内容」）を変えられないので使わない。Invoker Commands に対応していない古いブラウザでは、削除のボタンが反応しない。
 - 画面の応答には、CSP（スクリプトとスタイルは自分のドメインのファイルだけ、インラインは禁止）・`X-Content-Type-Options: nosniff`・`Referrer-Policy: same-origin`・`Cache-Control: no-store` を付ける。
+  写真のデータの応答だけは、API と同じ `Cache-Control` と CSP にする（ハンドラーが付けたヘッダーを変えない）。
   htmx は、CSP に合わせて eval とインラインのスタイルを使わない設定にし、閲覧の履歴をブラウザに保存させない。
 - CSS・htmx・アイコンは、Workers の静的アセット（`apps/recipe-box-rs/public/`）として配る。Worker を起動しないので、Worker のリクエストの数に入らない。
   htmx は pnpm で版を固定して入れ（`package.json`）、ビルドのときに `public/assets/` にコピーする。外部の CDN からは読まない。
@@ -116,7 +129,7 @@ stateDiagram-v2
 
 | Cookie | 中身 | 期間 | 付ける・消すとき |
 | --- | --- | --- | --- |
-| `__Host-workspace` | 自分のワークスペースの ID | 400 日 | 「自分だけのレシピ帳を作る」「ほかの端末の ID を使う」で付ける。「このブラウザでの利用をやめる」で消す。ワークスペースが無くなっていたとき（「ワークスペースを自動で削除する」のほか、DB を作り直したときなど）も、どの画面でも消す |
+| `__Host-workspace` | 自分のワークスペースの ID | 400 日 | 「自分だけのレシピ帳を作る」「ほかの端末の ID を使う」で付ける。「このブラウザでの利用をやめる」で消す。ワークスペースが無くなっていたとき（「ワークスペースを自動で削除する」のほか、DB を作り直したときなど）と、共有のデモの ID のときも、どの画面でも消す（同じ応答で作った・切り替えた新しい Cookie は残す） |
 | `__Host-demo-view` | 一時的にデモを見ている印 | 1 時間 | 「共有のデモを見る」で付ける。「自分のレシピ帳に戻る」と、上の `__Host-workspace` を付ける・消すときに消す |
 | `__Host-flash` | 次の画面に一度だけ出すメッセージの種類 | 60 秒 | 操作が済んだときに付け、次の画面を出すときに消す |
 
@@ -163,7 +176,7 @@ stateDiagram-v2
 | `404` | `photo_not_found` | そのレシピに、その ID の写真が無い（ID の形が正しくないときを含む） |
 | `404` | `not_found` | `/api` で始まるが、定義されていないパス |
 | `405` | `method_not_allowed` | パスが受け付けないメソッド |
-| `409` | `recipe_limit_reached` | ワークスペースのレシピが上限（40 件）に達していて、登録できない |
+| `409` | `recipe_limit_reached` | ワークスペースのレシピが上限（80 件）に達していて、登録できない |
 | `409` | `photo_limit_reached` | レシピの写真が上限（5 枚）に達していて、追加できない |
 | `409` | `photo_storage_limit_reached` | 追加すると、ワークスペースの写真の大きさの合計が上限（100,000,000 バイト）を超える |
 | `413` | `payload_too_large` | 本文が 128 KiB（131,072 バイト）を超える。写真の API では、写真が 4,000,000 バイトを超える。`Content-Length` で超えると分かれば、本文を読まずに断る |
@@ -213,7 +226,7 @@ stateDiagram-v2
 
 検索（`q`）は、料理名にその文字列を含むレシピを返す。ASCII の大文字と小文字は区別しない（ASCII 以外の大文字と小文字は区別する）。
 `%`・`_`・`\` も文字そのものとして探す。URL のクエリの決まりどおり、`+` は空白として読む（`+` そのものを探すときは `%2B`）。空なら絞り込まない。100 文字まで。`q` が 2 つ以上あると `400`（`invalid_field`）を返す。
-一覧は 1 ページ 20 件に分ける。`page` はページの番号で、省くと 1 ページ目。数字だけで書いた 1 から 2 までの整数を受け付け（レシピの数の上限 40 件が 2 ページに収まるため）（`02` は 2 ページ目）、それ以外か `page` が 2 つ以上あると `400`（`invalid_field`）を返す。
+一覧は 1 ページ 20 件に分ける。`page` はページの番号で、省くと 1 ページ目。数字だけで書いた 1 から 4 までの整数を受け付け（レシピの数の上限 80 件が 4 ページに収まるため）（`02` は 2 ページ目）、それ以外か `page` が 2 つ以上あると `400`（`invalid_field`）を返す。
 最後のページより後ろの番号では、空の `recipes` と総数を返す。`total` は条件に当てはまるレシピの総数で、画面はこれと `per_page` からページの数を出す。
 `q` と `page` の両方が正しくなければ、`q` のエラーを返す。
 ページ分けは `LIMIT` と `OFFSET` で行い、索引（`workspace_id`・`created_at`・`id`）の順に読む。`total` を数えるため、一覧を読むたびに、条件に当てはまるレシピをすべて数える。
@@ -242,7 +255,7 @@ stateDiagram-v2
 | `DELETE /api/recipes/:id/photos/:photo_id` | `204`（本文なし） |
 
 - 形式は、本文の先頭のバイト（マジックナンバー）で決める。`Content-Type` ヘッダーは見ない。宣言と中身が違うファイルを、別の形式として配らないためである。
-- 写真のデータを返すときは、`Cache-Control: private, max-age=86400`・`Vary: X-Workspace-Id, Cookie`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; sandbox` を付ける。
+- 写真のデータを返すときは、`Cache-Control: private, max-age=86400`・`Vary: X-Workspace-Id, Cookie`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox` を付ける。
   写真の ID は使い回さず、中身も変わらないので、ブラウザに 1 日残させて R2 の読み取りを減らす。消した写真が残り続けないよう、それより長くはしない。
 - 失敗の理由が 2 つ以上あるときは、次の順に確かめる。
   書き込みの回数（`too_many_requests`）→ `Content-Length`（`payload_too_large`）→ ワークスペース → パスの ID の形（`recipe_not_found`・`photo_not_found`）→ 本文の読み取り（`payload_too_large`）→ デモか（`demo_photos_disabled`）→ 大きさ（`payload_too_large`）→ 形式（`unsupported_photo_type`）→ レシピが在るか（`recipe_not_found`）→ レシピの枚数（`photo_limit_reached`）→ ワークスペースの合計（`photo_storage_limit_reached`）→ アプリ全体の上限（`capacity_reached`）。
@@ -254,7 +267,7 @@ stateDiagram-v2
 - `POST /api/workspaces` が、推測できない 128 ビットの乱数の ID を発行し、`201` と `{"id": "<ID>"}` を返す。ID は 16 進数の小文字 32 文字。
 - 発行の回数は、1 つの IP アドレス（IPv6 は上位 64 ビットの範囲）から 60 秒に 10 回までにする。超えたら `429`（`too_many_requests`）を返す。
   Cloudflare の Rate Limiting は拠点ごとにおおよそで数えるので、厳密な上限ではない（複数の拠点を通れば、拠点の数だけ増えうる）。
-- アプリ全体のワークスペースは 200 個まで、作るのは UTC の 1 日に 20 個までにする。超えたら `503`（`capacity_reached`）を返す。
+- アプリ全体のワークスペースは 100 個まで、作るのは UTC の 1 日に 20 個までにする。超えたら `503`（`capacity_reached`）を返す。
   D1 の行を数えて厳密に判定し、数えることと保存することを 1 つの SQL で行う（[セキュリティ](security.md)の「費用の対策」）。
 - API は `X-Workspace-Id` ヘッダーで、画面は Cookie（HttpOnly・Secure・SameSite=Lax）で ID を受け取る。
   ヘッダーが無ければ `400`（`workspace_id_missing`）、形が正しくないか 2 つ以上あれば `400`（`workspace_id_invalid`）、そのワークスペースが無ければ `404`（`workspace_not_found`）を返す。
