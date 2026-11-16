@@ -9,11 +9,13 @@
 <form method="get" action="/" role="search" class="search">
   <label for="q">料理名で探す</label>
   {#- 入力しながら、一覧（#results）だけを入れ替える。URL も検索の条件に合わせる。
-      日本語の入力の変換中は検索せず、確定してから検索する（search-input は public/assets/search.js が起こす）。 #}
+      日本語の入力の変換中は検索せず、確定してから検索する（search-input は public/assets/search.js が起こす）。
+      件数の文（#results-count）は、一覧の外に置いた読み上げの入れ物（role="status"）で、中身だけを入れ替える（hx-select-oob）。
+      一覧ごと入れ替えると、新しく入った件数の文を、スクリーンリーダーが読み上げないことがあるため。 #}
   {#- guide:start htmx-search #}
   <input id="q" type="search" name="q" value="{{ q }}" placeholder="料理名で探す" autocomplete="off" data-search-input
          hx-get="/" hx-trigger="search-input changed delay:300ms, search"
-         hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true">
+         hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-select-oob="#results-count:innerHTML" hx-push-url="true">
   {#- guide:end htmx-search #}
   {#- 入力を消すボタン。ブラウザが出す ×（Tab で選べない）の代わりに置く。文字があるときだけ出す（CSS）。
       JavaScript が動けば、search.js が欄を空にして検索し、欄にフォーカスを戻す。
@@ -26,11 +28,14 @@
   <button type="submit">探す</button>
 </form>
 <form id="clear-search" method="get" action="/" hidden></form>
+{#- 検索の条件が正しくないときは、件数を出さず、誤りを一覧の場所に出す。 #}
+<p id="results-count" class="count" role="status">
+  {%- if query_error.is_none() %}{{ total }} 件{% if !q.is_empty() %}（「{{ q }}」を含む料理名）{% endif %}{% endif -%}
+</p>
 <section id="results">
   {%- if let Some(error) = query_error %}
   <p class="message error" role="alert">{{ error }}</p>
   {%- else %}
-  <p class="count">{{ total }} 件{% if !q.is_empty() %}（「{{ q }}」を含む料理名）{% endif %}</p>
   {%- if recipes.is_empty() %}
   <p>{% if total == 0 %}レシピがありません。{% else %}このページにはレシピがありません。<a href="{{ first_page_href }}">最初のページへ</a>{% endif %}</p>
   {%- else %}

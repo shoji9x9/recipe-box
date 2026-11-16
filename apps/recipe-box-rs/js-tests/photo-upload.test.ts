@@ -19,9 +19,14 @@ import {
 const EDIT = "/recipes/r1/edit";
 const TOO_LARGE = "写真は 4 MB までです";
 
-/** 失敗の画面（知らせの文を role="alert" に置く）の応答。 */
+/** 知らせ（base.html の #messages の形）。status は成功の知らせ、alert は誤りの知らせの中身。 */
+function messagesHtml(status: string, alert = ""): string {
+  return `<div id="messages" class="messages"><div id="messages-status" role="status">${status}</div><div id="messages-alert" role="alert">${alert}</div></div>`;
+}
+
+/** 失敗の画面（知らせの文を、誤りの知らせの入れ物に置く）の応答。 */
 function page(status: number, alert: string | null, redirected = false): Response {
-  const body = alert === null ? "<main></main>" : `<main><p role="alert"> ${alert} </p></main>`;
+  const body = alert === null ? "<main></main>" : `<main>${messagesHtml("", `<p class="message error"> ${alert} </p>`)}</main>`;
   const response = new Response(status === 204 ? null : body, { status });
   Object.defineProperty(response, "redirected", { value: redirected });
   return response;
@@ -48,16 +53,17 @@ function section(photos: string[], remaining: number): string {
         data-photo-upload data-remaining="${remaining}" data-max-bytes="100" data-too-large="${TOO_LARGE}">
         <input type="file" name="photo">
         <button type="submit">追加</button>
+        <p class="note" role="status" data-photo-status></p>
       </form>
     </section>`;
 }
 
-/** 編集の画面。料理名などのフォームと、知らせ（#messages）と、写真の欄を持つ。 */
-function editPage(message: string, photos: string[], remaining: number): string {
+/** 編集の画面。料理名などのフォームと、知らせ（#messages）と、写真の欄を持つ。message は成功の知らせ、alert は誤りの知らせの中身。 */
+function editPage(message: string, photos: string[], remaining: number, alert = ""): string {
   return `
     <main>
       <div class="page-head"><h1>レシピを編集する</h1></div>
-      <div id="messages" class="messages">${message}</div>
+      ${messagesHtml(message, alert)}
       <form class="recipe-form" method="post" action="/recipes/r1"><input name="name" value="カレー"></form>
       ${section(photos, remaining)}
     </main>`;
@@ -163,7 +169,7 @@ describe("画面の入れ替え", () => {
 
   test("replaceFrom は、写真の欄が無い画面（エラーの画面）なら false を返し、写真の欄を残す", () => {
     const next = new DOMParser().parseFromString(
-      '<main><div id="messages"><p role="alert">見つかりません</p></div></main>',
+      `<main>${messagesHtml("", '<p class="message error">見つかりません</p>')}</main>`,
       "text/html",
     );
     expect(replaceFrom(next, { messages: true })).toBe(false);
@@ -177,7 +183,7 @@ describe("追加の流れ", () => {
 
   beforeEach(() => {
     window.history.replaceState(null, "", EDIT);
-    document.body.innerHTML = editPage('<p class="message success" role="status">前のメッセージ</p>', [], 3);
+    document.body.innerHTML = editPage('<p class="message success">前のメッセージ</p>', [], 3);
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -189,10 +195,11 @@ describe("追加の流れ", () => {
   const form = () => document.querySelector("form[data-photo-upload]") as HTMLFormElement;
   const input = () => document.querySelector('input[type="file"]') as HTMLInputElement;
   const status = () => document.querySelector("[data-photo-status]")?.textContent ?? "";
+  // role は、知らせを入れた入れ物（#messages-status・#messages-alert）のもの。
   const messages = () =>
-    Array.from(document.querySelectorAll("#messages > .message"), (element) => ({
+    Array.from(document.querySelectorAll("#messages .message"), (element) => ({
       kind: element.className,
-      role: element.getAttribute("role"),
+      role: element.parentElement?.getAttribute("role"),
       text: element.querySelector("p")?.textContent ?? element.textContent,
       items: Array.from(element.querySelectorAll("li"), (li) => li.textContent),
     }));
@@ -467,7 +474,7 @@ describe("削除の流れ", () => {
 
   test("エラーの画面が返れば、知らせだけを写し、写真の欄をそのまま使えるようにする", async () => {
     fetchMock.mockResolvedValue(
-      html(429, '<main><div id="messages"><p role="alert">少し待ってください</p></div></main>'),
+      html(429, `<main>${messagesHtml("", '<p class="message error">少し待ってください</p>')}</main>`),
     );
     await remove(deleteForm());
     expect(messageText()).toBe("少し待ってください");
@@ -528,13 +535,37 @@ describe("削除の流れ", () => {
     expect(String(fetchMock.mock.calls[0]?.[1].body)).toBe("back=edit");
   });
 
-  test("知らせは、今ある #messages の中身だけを入れ替える（読み上げのため、要素は同じものを使う）", async () => {
-    const messages = document.getElementById("messages");
+  test("知らせは、今ある入れ物（role の付いた要素）の中身だけを入れ替える（読み上げのため、要素は同じものを使う）", async () => {
+    const status = document.getElementById("messages-status");
+    const alert = document.getElementById("messages-alert");
+    alert?.replaceChildren("前の誤り");
     fetchMock.mockResolvedValue(
-      html(200, editPage('<p class="message success" role="status">写真を削除しました</p>', ["p2"], 4), undefined, true),
+      html(200, editPage('<p class="message success">写真を削除しました</p>', ["p2"], 4), undefined, true),
     );
     await remove(deleteForm());
-    expect(document.getElementById("messages")).toBe(messages);
+    expect(document.getElementById("messages-status")).toBe(status);
+    expect(document.getElementById("messages-alert")).toBe(alert);
+    expect(status?.textContent).toBe("写真を削除しました");
+    // 前の誤りは消す。
+    expect(alert?.textContent).toBe("");
+  });
+
+  test("知らせを写す前に、行き場を失ったフォーカスを写真の欄の見出しに移す（見出しの後に知らせを読み上げる）", async () => {
+    fetchMock.mockResolvedValue(
+      html(200, editPage('<p class="message success">写真を削除しました</p>', ["p2"], 4), undefined, true),
+    );
+    // フォーカスが移った時点の、成功の知らせの中身。
+    let messageAtFocus: string | null = null;
+    document.addEventListener(
+      "focusin",
+      () => {
+        messageAtFocus = document.getElementById("messages-status")?.textContent ?? null;
+      },
+      { once: true },
+    );
+    await remove(deleteForm());
+    expect(document.activeElement?.textContent).toBe("写真");
+    expect(messageAtFocus).toBe("");
     expect(messageText()).toBe("写真を削除しました");
   });
 });

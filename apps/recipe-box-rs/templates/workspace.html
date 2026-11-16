@@ -20,7 +20,7 @@
       <button type="submit">共有のデモを見る（1 時間）</button>
     </form>
     {%- endif %}
-    {%- call dialog::delete_dialog("delete-workspace", "ワークスペースを削除する", "ワークスペースを削除しますか？", "このワークスペースのレシピと写真を、すべて削除します。ほかの端末でも使えなくなります。元には戻せません。", "/workspace/delete") %}
+    {%- call dialog::delete_dialog("delete-workspace", "ワークスペースを削除する", "ワークスペースを削除する", "ワークスペースを削除しますか？", "このワークスペースのレシピと写真を、すべて削除します。ほかの端末でも使えなくなります。元には戻せません。", "/workspace/delete") %}
           {#- 画面に出した ID を送り、別のタブで切り替えた後のワークスペースを消さないようにする。 #}
           <input type="hidden" name="id" value="{{ id }}">
     {%- endcall %}

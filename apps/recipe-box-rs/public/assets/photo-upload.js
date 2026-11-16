@@ -18,6 +18,9 @@ const SECTION = "[data-photo-section]";
 const FORM = "form[data-photo-upload]";
 const SECTION_ID = "photos";
 const MESSAGES_ID = "messages";
+// 知らせの入れ物（templates/base.html）。いつも置いてあり、中身だけを変える。成功は role="status"、誤りは role="alert"。
+const STATUS_ID = "messages-status";
+const ALERT_ID = "messages-alert";
 
 // その写真だけの誤り（読めない・大きすぎる・形式が違う）。ほかの写真は追加できるので、続けて送る。
 // それ以外の失敗（上限・ワークスペースが無い・回数の制限・サーバーの障害など）は、続けても追加できないので、残りを送らない。
@@ -84,7 +87,7 @@ function parsePage(html) {
 export async function failureReason(response) {
   try {
     const text = parsePage(await response.text())
-      .querySelector('[role="alert"]')
+      .getElementById(ALERT_ID)
       ?.textContent?.trim();
     if (text) {
       return text;
@@ -132,6 +135,7 @@ async function sendOne(form, file) {
 }
 
 /**
+ * 知らせの要素。読み上げの役割（role）は、入れる先の入れ物が持つ。
  * @param {"success" | "error"} kind
  * @param {string} text
  * @param {string[]} items
@@ -139,7 +143,6 @@ async function sendOne(form, file) {
 function message(kind, text, items) {
   const element = document.createElement(items.length > 0 ? "div" : "p");
   element.className = `message ${kind}`;
-  element.setAttribute("role", kind === "error" ? "alert" : "status");
   if (items.length === 0) {
     element.textContent = text;
     return element;
@@ -157,23 +160,49 @@ function message(kind, text, items) {
 }
 
 /**
- * 見出しの下の知らせ（#messages）を、送った結果に置き換える。
+ * 見出しの下の知らせを置き換える。入れ物（role="status" と role="alert"）は今あるものを使い、中身だけを変える。
+ * 入れ物ごと入れ替えると、新しく入った入れ物の知らせを、スクリーンリーダーが読み上げないことがあるため。
+ * @param {Node[]} status 成功の知らせ（role="status" に入れる）
+ * @param {Node[]} alert 誤りの知らせ（role="alert" に入れる）
+ */
+function setMessages(status, alert) {
+  document.getElementById(STATUS_ID)?.replaceChildren(...status);
+  document.getElementById(ALERT_ID)?.replaceChildren(...alert);
+}
+
+/**
+ * 見出しの下の知らせを、送った結果に置き換える。
  * @param {number} added
  * @param {Failure[]} failures
  */
 function showResults(added, failures) {
-  const messages = document.getElementById(MESSAGES_ID);
-  if (!messages) {
-    return;
+  setMessages(
+    added > 0 ? [message("success", `${added} 枚の写真を追加しました`, [])] : [],
+    failures.length > 0
+      ? [message("error", `${failures.length} 枚の写真を追加できませんでした`, describeFailures(failures))]
+      : [],
+  );
+}
+
+/**
+ * 読んだ画面の知らせの入れ物（id）の中身を、今の画面に写せる形で返す。入れ物が無ければ空にする。
+ * @param {Document} page
+ * @param {string} id
+ * @returns {Node[]}
+ */
+function importedChildren(page, id) {
+  const region = page.getElementById(id);
+  return region ? Array.from(region.childNodes, (node) => document.importNode(node, true)) : [];
+}
+
+/**
+ * 読んだ画面の知らせ（#messages）を、今の画面の知らせの入れ物に写す。読んだ画面に知らせの場所が無ければ、何もしない。
+ * @param {Document} page
+ */
+function copyMessages(page) {
+  if (page.getElementById(MESSAGES_ID)) {
+    setMessages(importedChildren(page, STATUS_ID), importedChildren(page, ALERT_ID));
   }
-  const items = [];
-  if (added > 0) {
-    items.push(message("success", `${added} 枚の写真を追加しました`, []));
-  }
-  if (failures.length > 0) {
-    items.push(message("error", `${failures.length} 枚の写真を追加できませんでした`, describeFailures(failures)));
-  }
-  messages.replaceChildren(...items);
 }
 
 /**
@@ -185,12 +214,7 @@ function showResults(added, failures) {
  */
 export function replaceFrom(page, options) {
   if (options.messages) {
-    const next = page.getElementById(MESSAGES_ID);
-    // 知らせは、今ある #messages の中身だけを入れ替える。要素ごと入れ替えると、中の role="status" が
-    // 新しく入った要素になり、スクリーンリーダーが読み上げないことがある。
-    if (next) {
-      document.getElementById(MESSAGES_ID)?.replaceChildren(...Array.from(next.childNodes, (node) => document.importNode(node, true)));
-    }
+    copyMessages(page);
   }
   const next = page.getElementById(SECTION_ID);
   const current = document.getElementById(SECTION_ID);
@@ -270,8 +294,9 @@ async function finish(form, editPath, added, failures, redirected) {
     setControlsDisabled(form, false);
     setStatus(form, added > 0 ? "送り終えました。ページを読み直すと、追加した写真が出ます" : "送り終えました");
   }
-  showResults(added, failures);
+  // フォーカスを先に移してから知らせを出す。見出しの読み上げの後に、知らせ（role="status" は割り込まない）が続く。
   restoreFocus();
+  showResults(added, failures);
 }
 
 /**
@@ -422,10 +447,9 @@ export async function remove(form) {
   if (window.location.pathname !== editPath) {
     return;
   }
-  const messages = document.getElementById(MESSAGES_ID);
   if (!response || !page) {
     setControlsDisabled(form, false);
-    messages?.replaceChildren(message("error", "写真を削除できませんでした（通信できませんでした）", []));
+    setMessages([], [message("error", "写真を削除できませんでした（通信できませんでした）", [])]);
     return;
   }
   const landed = response.redirected ? new URL(response.url).pathname : null;
@@ -434,19 +458,23 @@ export async function remove(form) {
     window.location.assign(editPath);
     return;
   }
-  if (replaceFrom(page, { messages: true })) {
+  // 知らせは、フォーカスを移した後に写す（finish と同じ順）。
+  if (replaceFrom(page, { messages: false })) {
     restoreFocus();
+    copyMessages(page);
     return;
   }
   // 写真の欄の無い画面が返った。削除が済んで編集の画面に移らされた（303）のに、その画面を読めなかったときは、
-  // 消した写真を欄から除き、済んだことを知らせる。削除の前に断られた（エラーの画面）ときは、知らせだけを写した。
+  // 消した写真を欄から除き、済んだことを知らせる。削除の前に断られた（エラーの画面）ときは、知らせだけを写す。
   if (landed === editPath) {
     form.closest("li")?.remove();
-    messages?.replaceChildren(message("success", "写真を削除しました。ページを読み直すと、写真の欄が新しくなります", []));
-  } else {
-    setControlsDisabled(form, false);
+    restoreFocus();
+    setMessages([message("success", "写真を削除しました。ページを読み直すと、写真の欄が新しくなります", [])], []);
+    return;
   }
+  setControlsDisabled(form, false);
   restoreFocus();
+  copyMessages(page);
 }
 
 // htmx（hx-boost）より先に受け取るため、捕捉の段階で聞く。htmx に送らせると、ページの本文ごと入れ替わり、
