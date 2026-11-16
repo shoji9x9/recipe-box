@@ -2,6 +2,9 @@ name: Dependabot auto-merge
 
 # Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新だけを、CI が通ったら自動でマージする。
 # major・0.x の依存・GitHub Actions の更新は、ラベルを付けて手で確かめる（dependabot-merge スキル）。
+# GITHUB_TOKEN でマージした push では、ほかの workflow（deploy.yml の push）が動かない。そのため、自動マージを予約したら、
+# マージされるのを待って deploy.yml を workflow_dispatch で起動する（workflow_dispatch はこの制限の例外。
+# https://docs.github.com/en/actions/concepts/security/github_token ）。
 on:
   pull_request:
     branches: [main]
@@ -26,6 +29,9 @@ jobs:
       contents: write # 自動マージを予約する
       pull-requests: write # ラベルを付ける
       issues: write # ラベルを作る
+    # 自動マージを予約できたときだけ、下の deploy-after-merge を動かす。
+    outputs:
+      enabled: ${{ steps.route.outputs.decision == 'automerge' && steps.enable.outcome == 'success' }}
     steps:
       - name: Fetch Dependabot metadata
         id: meta
@@ -83,3 +89,44 @@ jobs:
             --description "Dependabot の PR を手で確かめる（major・0.x・GitHub Actions・自動マージの失敗）" \
             --color "D93F0B" --force
           gh pr edit "$PR_URL" --add-label "dependabot/needs-review"
+
+  # 自動マージを予約した PR がマージされたら、本番へデプロイする（冒頭のコメント）。
+  # 第三者の action（fetch-metadata）を動かす上の job とは分け、actions: write をこの job にだけ与える。
+  # コードを checkout せず、gh で PR の状態を読み、deploy.yml を起動するだけにする。
+  deploy-after-merge:
+    name: Deploy after auto-merge
+    needs: automerge
+    if: needs.automerge.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    # CI が終わって自動マージされるのを待つ。
+    timeout-minutes: 60
+    permissions:
+      pull-requests: read # PR がマージされたかを確かめる
+      actions: write # deploy.yml を workflow_dispatch で起動する（GITHUB_TOKEN のマージでは push の workflow が動かないため）
+    steps:
+      - name: Wait for merge and dispatch deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 55 分（30 秒 × 110 回）まで待つ。timeout-minutes より短くし、時間切れを warning で知らせる。
+          for _ in $(seq 1 110); do
+            # API の一時的な失敗では止めず、次の回に読み直す。
+            state="$(gh pr view "$PR_URL" --json state --jq .state || true)"
+            case "$state" in
+              MERGED)
+                gh workflow run deploy.yml --repo "$REPO" --ref main
+                echo "マージされたので deploy.yml を起動した"
+                exit 0
+                ;;
+              CLOSED)
+                echo "マージされずに閉じられたので、デプロイしない"
+                exit 0
+                ;;
+            esac
+            sleep 30
+          done
+          # ブランチが古く（BEHIND）て止まった PR は、@dependabot rebase で作り直すと、新しい run が待ち直してデプロイする。
+          echo "::warning::55 分待ってもマージされなかったので、この run ではデプロイしない（docs/development.md の「最低限のメンテナンス」）"
