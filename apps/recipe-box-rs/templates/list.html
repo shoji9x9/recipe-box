@@ -10,9 +10,11 @@
   <label for="q">料理名で探す</label>
   {#- 入力しながら、一覧（#results）だけを入れ替える。URL も検索の条件に合わせる。
       日本語の入力の変換中は検索せず、確定してから検索する（search-input は public/assets/search.js が起こす）。 #}
+  {#- guide:start htmx-search #}
   <input id="q" type="search" name="q" value="{{ q }}" placeholder="料理名で探す" autocomplete="off" data-search-input
          hx-get="/" hx-trigger="search-input changed delay:300ms, search"
          hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true">
+  {#- guide:end htmx-search #}
   {#- 入力を消すボタン。ブラウザが出す ×（Tab で選べない）の代わりに置く。文字があるときだけ出す（CSS）。
       JavaScript が動けば、search.js が欄を空にして検索し、欄にフォーカスを戻す。
       動かなければ、下の空のフォーム（clear-search）を送り、絞り込まない一覧に戻る。

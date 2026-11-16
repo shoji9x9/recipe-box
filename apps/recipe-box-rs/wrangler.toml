@@ -16,6 +16,7 @@ command = "worker-build --release && mkdir -p public/assets && cp ../../node_mod
 [assets]
 directory = "public"
 
+# guide:start bindings
 # レシピなどを保存する D1 のデータベース。
 # database_id はアカウントごとの値なので書かない。wrangler は database_name で探す。
 [[d1_databases]]
@@ -49,6 +50,7 @@ simple = { limit = 10, period = 60 }
 name = "WRITE_LIMITER"
 namespace_id = "1002"
 simple = { limit = 30, period = 60 }
+# guide:end bindings
 
 # Workers のログ。tail を開いていない間のエラー（src/error.rs の log_error。ID を伏せてから出す）を、後から見られるようにする。
 # リクエストの記録（invocation logs）は残さない。API の X-Workspace-Id（ワークスペースの ID）が残るかもしれないためである。

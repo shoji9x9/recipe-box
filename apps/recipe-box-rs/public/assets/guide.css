@@ -1,0 +1,111 @@
+/*
+ * アプリの解説（/about）のスタイル。画面と同じ style.css の後に読む。
+ * 解説は mise run guide が作る静的なページで、CSP でインラインのスタイルを禁じているので、ここにまとめる。
+ */
+.guide {
+  & main {
+    max-width: var(--width-content);
+  }
+
+  & article {
+    overflow-wrap: anywhere;
+
+    & h2 {
+      margin-top: var(--space-12);
+      padding-top: var(--space-4);
+      border-top: 1px solid var(--hairline-soft);
+    }
+
+    & h3 {
+      margin: var(--space-8) 0 var(--space-2);
+      font-size: 17px;
+    }
+
+    & h4 {
+      margin: var(--space-6) 0 var(--space-2);
+      font-size: 16px;
+    }
+
+    & li {
+      color: var(--body);
+    }
+
+    & img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: var(--space-4) 0;
+    }
+  }
+
+  /* 幅の広い表とコードは、その部分だけを横に動かす（scripts/guide-lib.ts が tabindex と名前を付ける）。 */
+  & .scroll {
+    overflow-x: auto;
+    max-width: 100%;
+    margin: var(--space-4) 0;
+
+    &:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+  }
+
+  & table {
+    border-collapse: collapse;
+    font-size: 14px;
+
+    & th,
+    & td {
+      padding: var(--space-2) var(--space-3);
+      border: 1px solid var(--hairline);
+      text-align: left;
+      vertical-align: top;
+      min-width: 8em;
+    }
+
+    & th {
+      background: var(--surface-soft);
+    }
+  }
+
+  & pre {
+    padding: var(--space-4);
+    border-radius: var(--radius-sm);
+    background: var(--surface-soft);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  & code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  & :not(pre) > code {
+    padding: 1px var(--space-1);
+    border-radius: 4px;
+    background: var(--surface-strong);
+    overflow-wrap: anywhere;
+  }
+
+  & .toc {
+    padding: var(--space-4) var(--space-6);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+
+    & ol {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    & li {
+      margin: var(--space-1) 0;
+    }
+
+    & .toc-3 {
+      padding-left: var(--space-6);
+      font-size: 14px;
+    }
+  }
+}

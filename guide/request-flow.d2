@@ -1,0 +1,21 @@
+# リクエストが届いてから応答を返すまで。mise run guide が SVG にする（docs/development.md）。
+direction: down
+
+req: リクエスト {shape: oval}
+assets: 静的アセットに当たるか {shape: diamond}
+file: ファイルを返す\n（Worker は動かない） {shape: page}
+fetch: "#[event(fetch)] の入口\n写真のバイト列なら、本文をストリームのまま分けておく"
+router: axum の Router\nパスとメソッドでハンドラーを選ぶ
+mw: middleware\n画面の応答のヘッダー（CSP など）・書き込みの回数・本文の大きさ
+ext: extractor（Workspace）\nX-Workspace-Id か Cookie の ID を確かめ、最終利用日時を更新する
+handler: ハンドラー\n入力を確かめ、Backend を通して読み書きする
+backend: Backend（CloudflareBackend）\nD1・R2・Rate Limiting・乱数・時計
+res: 応答（HTML か JSON） {shape: oval}
+
+req -> assets
+assets -> file: はい
+assets -> fetch: いいえ
+fetch -> router -> mw -> ext -> handler -> backend
+handler -> res
+mw -> res: 断る（429・413）
+ext -> res: 断る（400・404）

@@ -50,11 +50,13 @@ extern "C" {
 
 /// Workers の環境（binding の入れ物）を持つ [`Backend`]。
 #[derive(Clone)]
+// guide:start cloudflare-backend
 pub struct CloudflareBackend {
     env: SendWrapper<Env>,
     /// リクエストの context（`waitUntil` に使う）。定期実行には無い。
     ctx: Option<SendWrapper<Rc<Context>>>,
 }
+// guide:end cloudflare-backend
 
 impl CloudflareBackend {
     /// 定期実行に使う。リクエストが無いので、[`Backend::run_to_completion`] は `task` をそのまま待つ。
@@ -229,6 +231,7 @@ impl Backend for CloudflareBackend {
         SendFuture::new(async move {
             let action = "ワークスペースを保存できない";
             let db = database(&env)?;
+            // guide:start insert-workspace
             // 上限の判定と保存を 1 つの文にして、同時に作られても上限を超えないようにする。
             // FROM の (VALUES (0)) は、1 行だけの表として使う（標準の SQL の書き方）。
             // 全体を数えるので、workspace_id では絞り込まない（AGENTS.md のワークスペースを作るクエリ）。
@@ -255,6 +258,7 @@ impl Backend for CloudflareBackend {
                 .batch(vec![insert, record])
                 .await
                 .map_err(|e| backend_error(action, &e))?;
+            // guide:end insert-workspace
             let Some(inserted) = results.first() else {
                 return Err(BackendError(format!("{action}: batch の結果が無い")));
             };

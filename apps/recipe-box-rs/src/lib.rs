@@ -68,6 +68,7 @@ pub fn router<B: Backend>(backend: B) -> Router {
 /// レシピの API。書き込む API の前に、回数と本文の大きさを確かめる（[`limits::limit_writes`]）。
 ///
 /// `route_layer` にするので、無いパス（404）には効かない。
+// guide:start recipe-routes
 fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
     Router::new()
         .route("/recipes", get(recipe::list::<B>).post(recipe::create::<B>))
@@ -82,6 +83,7 @@ fn recipe_routes<B: Backend>(backend: B) -> Router<B> {
             limits::limit_writes::<B>,
         ))
 }
+// guide:end recipe-routes
 
 /// 写真の API。書き込む API の前に、回数と本文の大きさ（1 枚の写真の上限）を確かめる（[`limits::limit_photo_writes`]）。
 fn photo_routes<B: Backend>(backend: B) -> Router<B> {
@@ -191,6 +193,7 @@ async fn api_method_not_allowed() -> ApiError {
 }
 
 /// Workers がリクエストを受け取るたびに呼ぶ入口。
+// guide:start entry-fetch
 #[event(fetch)]
 async fn fetch(
     req: worker::Request,
@@ -205,8 +208,10 @@ async fn fetch(
         .call(req)
         .await?)
 }
+// guide:end entry-fetch
 
 /// 定期実行（wrangler.toml の Cron Trigger）の入口。使われていないワークスペースを消す（[`workspace::delete_unused`]）。
+// guide:start entry-scheduled
 #[event(scheduled)]
 async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     console_error_panic_hook::set_once();
@@ -218,6 +223,7 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
         worker::console_log!("使われていないワークスペースの自動削除: {summary:?}");
     }
 }
+// guide:end entry-scheduled
 
 async fn health() -> Json<Health> {
     Json(Health { status: "ok" })

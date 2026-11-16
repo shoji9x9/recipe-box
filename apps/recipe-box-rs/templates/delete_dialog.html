@@ -8,6 +8,7 @@
     - dialog_title・dialog_text: ダイアログの見出しと説明
     - dialog_action: 削除を送る先
     {% call %} の中身（caller）は、削除と一緒に送る hidden の欄にする。無ければ空にする。 #}
+{#- guide:start invoker-dialog #}
 {%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action) %}
 <button type="button" class="text danger" commandfor="{{ dialog_id }}" command="show-modal">{{ dialog_open }}</button>
 <dialog id="{{ dialog_id }}" class="confirm" aria-labelledby="{{ dialog_id }}-title">
@@ -22,6 +23,7 @@
   </div>
 </dialog>
 {%- endmacro %}
+{#- guide:end invoker-dialog #}
 
 {#- レシピの削除。一覧と詳細の画面で同じ文言にする。
     back は、一覧から消したときに戻る検索の条件とページ（詳細の画面では None::<(&str, i64)>）。 #}

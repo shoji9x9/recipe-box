@@ -77,6 +77,7 @@ pub struct Workspace {
     pub id: WorkspaceId,
 }
 
+// guide:start workspace-extractor
 impl<B: Backend> FromRequestParts<B> for Workspace {
     type Rejection = ApiError;
 
@@ -99,6 +100,7 @@ impl<B: Backend> FromRequestParts<B> for Workspace {
         Ok(Self { id })
     }
 }
+// guide:end workspace-extractor
 
 /// ワークスペースが在るかを確かめ、在れば最終利用日時を更新する。無ければ `false` を返す。
 ///

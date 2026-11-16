@@ -110,6 +110,7 @@ fn declared_length(headers: &HeaderMap) -> Option<u64> {
 /// - ヘッダーが無いか、IP アドレスとして読めないときは、まとめて `unknown` として数える。
 ///   Cloudflare を通るリクエストには必ずヘッダーが付くので、これに当たるのはローカルでの開発だけである。
 ///   IP アドレスとして読んだ値だけを使うので、キーの長さは限られる。
+// guide:start client-key
 pub fn client_key(headers: &HeaderMap) -> String {
     let ip = headers
         .get(CLIENT_IP_HEADER)
@@ -127,6 +128,7 @@ pub fn client_key(headers: &HeaderMap) -> String {
         None => "unknown".to_owned(),
     }
 }
+// guide:end client-key
 
 #[cfg(test)]
 mod tests {

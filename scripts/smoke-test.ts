@@ -186,6 +186,14 @@ async function main(): Promise<void> {
   await request("GET", "/assets/htmx.min.js");
   expect(200, "GET /assets/htmx.min.js");
   if (!text().includes("htmx")) fail("/assets/htmx.min.js が htmx でない");
+  // 解説（/about）も静的アセットで、Worker が動かないので、CSP などのヘッダーは public/_headers で付ける。
+  const about = await fetch(`${baseUrl}/about/`, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+  await about.body?.cancel();
+  if (about.status !== 200) fail(`GET /about/: 状態コードが 200 でなく ${about.status}`);
+  if (!about.headers.get("content-security-policy")?.startsWith("default-src 'none'")) {
+    fail("/about/ に CSP が付いていない（public/_headers）");
+  }
+  if (about.headers.get("x-content-type-options") !== "nosniff") fail("/about/ に nosniff が付いていない");
 
   console.log("ワークスペースを 2 つ作る");
   await request("POST", "/api/workspaces");

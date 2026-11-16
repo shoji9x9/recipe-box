@@ -1,0 +1,12 @@
+# 静的アセットの応答に付けるヘッダー。静的アセットには Worker が動かないので、画面のヘッダー（src/screen.rs）の代わりにここで付ける。
+# 解説（/about）は mise run guide が作る静的なページで、スクリプトもフォームも使わない。
+# スタイルと画像は自分のドメインのファイルだけにし、インラインを禁じる（画面の CSP と同じ考え方）。
+/about
+  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin
+
+/about/*
+  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin

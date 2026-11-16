@@ -35,6 +35,7 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
 | `POST /workspace/delete` | 自分のワークスペースを、レシピと写真ごと削除する。このブラウザの Cookie も消す |
 | `POST /workspace/demo` | 自分のワークスペースを残したまま、1 時間だけ共有のデモを見る |
 | `POST /workspace/own` | 共有のデモから、自分のワークスペースに戻る |
+| `GET /about/` | このアプリの作りの解説（静的なページ。`/about` は `/about/` に移す）。どの画面にも、ページの下にリンクを出す |
 
 - 画面は、どのワークスペースを使うかを次の順に決める。
   1. Cookie の ID のワークスペースがあり、一時的にデモを見ていなければ、それを使う。
@@ -101,6 +102,7 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
   htmx は、CSP に合わせて eval とインラインのスタイルを使わない設定にし、閲覧の履歴をブラウザに保存させない。
 - CSS・htmx・写真の追加の JavaScript・アイコンは、Workers の静的アセット（`apps/recipe-box-rs/public/`）として配る。Worker を起動しないので、Worker のリクエストの数に入らない。
   htmx は pnpm で版を固定して入れ（`package.json`）、ビルドのときに `public/assets/` にコピーする。外部の CDN からは読まない。
+- 解説（`/about/`）も静的アセットで、`mise run guide` が作る（docs/development.md）。Worker が動かないので、CSP（スタイルと画像は自分のドメインのファイルだけ、スクリプトは使わない）・`X-Content-Type-Options: nosniff`・`Referrer-Policy: same-origin` は `apps/recipe-box-rs/public/_headers` で付ける。
 
 ### ワークスペースの状態
 

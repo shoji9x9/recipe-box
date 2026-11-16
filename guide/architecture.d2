@@ -1,0 +1,32 @@
+# 全体の構成。mise run guide が SVG にする（docs/development.md）。
+direction: down
+
+users: 使う人 {
+  browser: ブラウザ（画面）
+  api_client: API の利用者\n（スモークテスト・seed）
+}
+
+cloudflare: Cloudflare {
+  assets: 静的アセット\n（CSS・JavaScript・解説）
+  worker: Worker\n（Rust・axum を Wasm で動かす）
+  cron: Cron Trigger\n（毎日 UTC 18 時）
+  ratelimit: Rate Limiting
+  d1: D1（SQLite） {shape: cylinder}
+  r2: R2（写真） {shape: cylinder}
+
+  cron -> worker: 自動削除
+  worker -> ratelimit
+  worker -> d1
+  worker -> r2
+}
+
+github: GitHub Actions {
+  deploy: deploy.yml（main に入ったら）
+  seed: seed-demo.yml（毎日 UTC 19 時）
+}
+
+users.browser -> cloudflare.assets: ファイルのパス
+users.browser -> cloudflare.worker: 画面
+users.api_client -> cloudflare.worker: API
+github.deploy -> cloudflare: マイグレーションとデプロイ
+github.seed -> cloudflare: デモを入れ直す
