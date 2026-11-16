@@ -102,10 +102,11 @@ jobs:
       - name: Apply migrations to local D1
         run: mise run migrate
       # ローカルで Worker を起動し、実際の D1 を通して API を確かめる（scripts/smoke-test.ts）。
+      # --test-scheduled で起動し、定期の自動削除（/__scheduled）の本物の SQL も動かして、ログで失敗が無いことを確かめる（SCHEDULED_LOG）。
       - name: Smoke test
         working-directory: apps/recipe-box-rs
         run: |
-          pnpm exec wrangler dev --port 8787 >/tmp/wrangler.log 2>&1 &
+          pnpm exec wrangler dev --port 8787 --test-scheduled >/tmp/wrangler.log 2>&1 &
           trap 'kill %1 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             if curl -fsS http://localhost:8787/api/health >/dev/null 2>&1; then
@@ -113,7 +114,7 @@ jobs:
             fi
             sleep 2
           done
-          if ! CHECK_RATE_LIMIT=1 node ../../scripts/smoke-test.ts http://localhost:8787; then
+          if ! CHECK_RATE_LIMIT=1 SCHEDULED_LOG=/tmp/wrangler.log node ../../scripts/smoke-test.ts http://localhost:8787; then
             echo "--- wrangler のログ ---"
             cat /tmp/wrangler.log
             exit 1

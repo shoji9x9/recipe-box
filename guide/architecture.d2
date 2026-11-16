@@ -15,7 +15,7 @@ cloudflare: Cloudflare {
   class: [group; cloudflare]
   assets: 静的アセット\nCSS・JavaScript・解説 {class: service}
   worker: Worker\nRust・axum を Wasm で動かす {class: app}
-  cron: Cron Trigger\n毎日 UTC 18 時 {class: service}
+  cron: Cron Trigger\n1 時間ごと（毎時 0 分） {class: service}
   ratelimit: Rate Limiting\nIP アドレスごとの回数\n（Cloudflare が数える） {class: service}
   d1: D1\nレシピ・ワークスペース {class: store}
   r2: R2\n写真のデータ {class: store}

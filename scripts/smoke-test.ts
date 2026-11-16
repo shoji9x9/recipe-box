@@ -7,10 +7,15 @@
 // ワークスペースとレシピを作るので、本番には使わない。
 // 環境変数 CHECK_RATE_LIMIT=1 のときだけ、最後に回数の制限を確かめる（CI で使う）。
 // この確認は 60 秒の枠を使い切るので、続けて実行すると最初のワークスペースの作成が 429 になる。
-// 1 回の実行でワークスペースを最大 22 個作りうるので、同じローカルの D1 で同じ日に 2 回以上実行すると、
+// 1 回の実行でワークスペースを最大 23 個（定期の自動削除の確認を含む）作りうるので、同じローカルの D1 で同じ日に 2 回以上実行すると、
 // アプリ全体の 1 日の上限（20 個）に当たることがある。そのときは 503 で止まり、作り直し方を示す。
+// 環境変数 SCHEDULED_LOG に wrangler dev --test-scheduled のログのファイルを渡したときだけ、定期の自動削除を動かして確かめる（CI で使う）。
+// この確認は、wrangler でローカルの D1 を直接書き換える（ワークスペースを古くし、写真の行に印を付ける）。
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { readFileSync, statSync } from "node:fs";
+import { d1Rows } from "./seed-lib.ts";
+import { ID_PATTERN, wrangler } from "./wrangler.ts";
 
 // 応答の本文の形（docs/spec.md の API）。確かめに使う項目だけを書く。
 type Recipe = { id: string; name: string; servings: number; ingredients: string; steps: string };
@@ -168,6 +173,75 @@ function names(): string {
 
 function query(q: string, page?: number): string {
   return `/api/recipes?q=${encodeURIComponent(q)}${page === undefined ? "" : `&page=${page}`}`;
+}
+
+// ローカルの D1 に SQL を流す。ID は形を確かめてから埋め込む（wrangler d1 execute は値を別に渡せない）。
+async function localSql(sql: string): Promise<unknown[]> {
+  const rows = d1Rows(await wrangler("--local", "d1", "execute", "DB", "--json", "--command", sql));
+  if (rows === undefined) fail("wrangler の d1 execute --json の出力の形が、思ったものと違う");
+  return rows;
+}
+
+function checkedId(id: string): string {
+  if (!ID_PATTERN.test(id)) fail("ID の形が違う");
+  return id;
+}
+
+// ログのファイルの、offset バイト目より後に、自動削除の結果の行が出るのを待って返す（src/lib.rs の scheduled）。
+async function waitForCleanupLog(path: string, offset: number): Promise<string> {
+  for (let i = 0; i < 30; i++) {
+    const lines = readFileSync(path).subarray(offset).toString("utf8").split("\n");
+    const line = lines.find((l) => l.includes("自動削除が終わった:") || l.includes("自動削除で失敗があった:"));
+    if (line !== undefined) return line;
+    await sleep(1000);
+  }
+  return fail("定期の自動削除の結果がログに出ない");
+}
+
+// 定期の自動削除（Cron Trigger）を /__scheduled で動かし、本物の D1 と R2 で、使われていないワークスペースの削除と、
+// 書き込み中の印が残った写真の片付けが、失敗せずに動くことを確かめる。
+// kept は、使っているワークスペース（印の残った写真を置く）。古くするワークスペースは、ここで 1 つだけ作る（1 日の作成の上限を使いすぎない）。
+async function checkScheduled(logPath: string, photo: Buffer, keptWorkspace: string): Promise<void> {
+  console.log("定期の自動削除（/__scheduled）");
+  await request("POST", "/api/workspaces");
+  expect(201, "POST /api/workspaces（古くする）");
+  const unused = checkedId(json<{ id: string }>().id);
+  const kept = checkedId(keptWorkspace);
+  const photoIds: string[] = [];
+  const recipeIds: string[] = [];
+  for (const workspace of [unused, kept]) {
+    await request("POST", "/api/recipes", { workspace, json: { name: "定期の削除", servings: 1 } });
+    expect(201, "POST /api/recipes（定期の削除）");
+    const recipe = json<Recipe>().id;
+    recipeIds.push(recipe);
+    await request("POST", `/api/recipes/${recipe}/photos`, { workspace, bytes: photo });
+    expect(201, "POST /api/recipes/{id}/photos（定期の削除）");
+    photoIds.push(checkedId(json<Photo>().id));
+  }
+  const keptPhoto = photoIds[1] ?? fail("写真が無い");
+  // 14 日より前に使われたことにし、写真の行には 1 時間より前の印を付ける（日時は UNIX 時間のミリ秒）。
+  await localSql(
+    `UPDATE workspaces SET last_used_at = 0 WHERE id = '${unused}'; ` +
+      `UPDATE photos SET pending_since = 0 WHERE workspace_id = '${kept}' AND id = '${keptPhoto}'`,
+  );
+  const offset = statSync(logPath).size;
+  // cron の値は、wrangler.toml の [triggers] と同じにする（アプリは値を見ない）。
+  await request("GET", "/__scheduled?cron=0+*+*+*+*");
+  expect(200, "GET /__scheduled");
+  const line = await waitForCleanupLog(logPath, offset);
+  if (!line.includes("自動削除が終わった:")) fail(`定期の自動削除で失敗があった: ${line}`);
+  console.log(`  ${line.trim()}`);
+  // 古くしたワークスペースは、レシピと写真ごと消える。
+  await request("GET", "/api/recipes", { workspace: unused });
+  expect(404, "定期の自動削除で消したワークスペース");
+  if (json<ErrorBody>().error !== "workspace_not_found") fail("自動削除で消したワークスペースのエラーが workspace_not_found でない");
+  const unusedRows = await localSql(`SELECT id FROM photos WHERE workspace_id = '${unused}'`);
+  if (unusedRows.length !== 0) fail("自動削除で消したワークスペースの写真の行が残っている");
+  // 印の残った写真の行は片付けられ、ワークスペースとレシピは残る。
+  await request("GET", `/api/recipes/${recipeIds[1] ?? ""}`, { workspace: kept });
+  expect(200, "印の残った写真のレシピ（自動削除の後）");
+  const keptRows = await localSql(`SELECT id FROM photos WHERE workspace_id = '${kept}'`);
+  if (keptRows.length !== 0) fail("印の残った写真の行が、自動削除で片付けられていない");
 }
 
 async function main(): Promise<void> {
@@ -391,6 +465,11 @@ async function main(): Promise<void> {
   await request("GET", `/api/recipes/${recipeId}`, a);
   expect(404, "B を消した後も、A は使える（消したレシピは 404）");
   if (json<ErrorBody>().error !== "recipe_not_found") fail("B を消したら A まで消えた");
+
+  const scheduledLog = process.env["SCHEDULED_LOG"];
+  if (scheduledLog !== undefined && scheduledLog !== "") {
+    await checkScheduled(scheduledLog, photo, workspaceA);
+  }
 
   // 最後に、回数の制限（Rate Limiting）を確かめる。
   if (process.env["CHECK_RATE_LIMIT"] === "1") {

@@ -379,16 +379,20 @@ async fn failed_first_r2_delete_keeps_rows_so_it_can_be_retried() {
         broken_r2_delete: true,
         ..backend.clone()
     };
-    // 写真を 1 枚消すときも、レシピを消すときも、最初に R2 を消すので、そこで失敗すれば D1 の行が残る。
+    // 写真を 1 枚消すときも、レシピを消すときも、D1 の行を消す前に R2 を消すので、そこで失敗すれば D1 の行が残る。
     // （レシピの D1 を消した後の、2 回目の R2 の削除の失敗は、やり直せない。PR のコメントに書いた。）
+    // 写真を 1 枚消すときは、印を外して元に戻す。
     let photo = format!("/api/recipes/{recipe}/photos/{id}");
     let response = call(&broken, Method::DELETE, &photo, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(listed_photos(&backend, &recipe).await, 1);
+    // レシピを消すときは、写真を隠したまま残す（R2 のデータが一部だけ消えていても、データの無い写真を見せない）。
     let path = format!("/api/recipes/{recipe}");
     let response = call(&broken, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(backend.photos.lock().unwrap().len(), 1);
     assert_eq!(backend.objects.lock().unwrap().len(), 1);
+    assert_eq!(listed_photos(&backend, &recipe).await, 0);
 
     // R2 が直れば、やり直して消せる。
     let response = call(&backend, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
@@ -757,7 +761,7 @@ async fn failed_cleanup_is_reported_and_retried_next_time() {
     let summary = crate::workspace::delete_unused(&broken).await;
     assert_eq!(summary.pending_photos.failed, 1);
     assert!(summary.has_failure());
-    // R2 を消せなければ、行を残し、次の日にもう一度試す。
+    // R2 を消せなければ、行を残し、次の実行でもう一度試す。
     assert_eq!(backend.photos.lock().unwrap().len(), 1);
     let summary = crate::workspace::delete_unused(&backend).await;
     assert_eq!(summary.pending_photos.cleaned, 1);
@@ -839,7 +843,7 @@ async fn failed_row_deletion_in_cleanup_keeps_all_rows_for_the_next_run() {
     assert_eq!(summary.pending_photos.failed, 3);
     assert_eq!(summary.pending_photos.cleaned, 0);
     assert_eq!(backend.photos.lock().unwrap().len(), 3);
-    // 次の日に、もう一度試して片付ける。
+    // 次の実行で、もう一度試して片付ける。
     let summary = crate::workspace::delete_unused(&backend).await;
     assert_eq!(summary.pending_photos.cleaned, 3);
     assert!(backend.photos.lock().unwrap().is_empty());
@@ -882,4 +886,198 @@ async fn cleanup_keeps_rows_whose_mark_changed_after_listing() {
         .unwrap();
     assert_eq!(backend.photos.lock().unwrap().len(), 1);
     assert!(backend.is_pending(id));
+}
+
+// レシピかワークスペースの削除の途中で失敗した場合。写真を先に隠すので、データの無い写真は見えない。
+
+#[tokio::test]
+async fn recipe_whose_row_deletion_failed_hides_its_photos_until_cleanup() {
+    let (backend, recipe) = setup().await;
+    upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    // R2 は消せたが、D1 でレシピを消すのが失敗した。
+    let broken = FakeBackend {
+        broken_owner_delete: true,
+        ..backend.clone()
+    };
+    let path = format!("/api/recipes/{recipe}");
+    let response = call(&broken, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    // レシピは残り、R2 のデータの無い写真は、一覧にも写真の API にも出ない。
+    let response = call(&backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert!(backend.objects.lock().unwrap().is_empty());
+    assert_eq!(listed_photos(&backend, &recipe).await, 0);
+    let id = only_photo_id(&backend);
+    let photo = format!("/api/recipes/{recipe}/photos/{id}");
+    let response = call(&backend, Method::GET, &photo, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    // 隠れた行は、時間がたった後の自動削除が片付ける。
+    pass_cleanup_time(&backend);
+    let summary = crate::workspace::delete_unused(&backend).await;
+    assert_eq!(summary.pending_photos.cleaned, 1);
+    assert!(backend.photos.lock().unwrap().is_empty());
+    // レシピは、もう一度消せる。
+    let response = call(&backend, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn recipe_deleted_again_after_failure_removes_hidden_photos_at_once() {
+    let (backend, recipe) = setup().await;
+    upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    let broken = FakeBackend {
+        broken_owner_delete: true,
+        ..backend.clone()
+    };
+    let path = format!("/api/recipes/{recipe}");
+    let response = call(&broken, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    // 片付けを待たずに消し直しても、隠れた写真の行とデータが残らない。
+    let response = call(&backend, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+    assert!(backend.photos.lock().unwrap().is_empty());
+    assert!(backend.pending_photos.lock().unwrap().is_empty());
+    assert!(backend.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn workspace_whose_row_deletion_failed_hides_its_photos_until_cleanup() {
+    let (backend, recipe) = setup().await;
+    upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    let kept = create_recipe(&backend, WORKSPACE_B).await;
+    upload(&backend, WORKSPACE_B, &kept, jpeg(10)).await;
+    // R2 は消せたが、D1 でワークスペースを消すのが失敗した。
+    let broken = FakeBackend {
+        broken_owner_delete: true,
+        ..backend.clone()
+    };
+    let response = call(
+        &broken,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    // ワークスペースとレシピは残り、データの無い写真は見えない。ほかのワークスペースの写真には触れない。
+    assert!(backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+    assert_eq!(listed_photos(&backend, &recipe).await, 0);
+    {
+        let objects = backend.objects.lock().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert!(objects.keys().all(|key| key.contains(&kept)));
+    }
+    assert_eq!(backend.pending_photos.lock().unwrap().len(), 1);
+    pass_cleanup_time(&backend);
+    let summary = crate::workspace::delete_unused(&backend).await;
+    assert_eq!(summary.pending_photos.cleaned, 1);
+    // ワークスペースは、もう一度消せる。
+    let response = call(
+        &backend,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+    assert!(!backend.workspaces.lock().unwrap().contains_key(WORKSPACE_A));
+}
+
+#[tokio::test]
+async fn delete_task_dropped_by_the_runtime_is_an_internal_error() {
+    let (backend, recipe) = setup().await;
+    let dropped = FakeBackend {
+        task_dropped: true,
+        ..backend.clone()
+    };
+    let path = format!("/api/recipes/{recipe}");
+    let response = call(&dropped, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error_code(&response), "internal_error");
+    let response = call(
+        &dropped,
+        Method::DELETE,
+        "/api/workspaces",
+        Some(WORKSPACE_A),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error_code(&response), "internal_error");
+}
+
+#[tokio::test]
+async fn photo_remarked_by_a_deletion_while_writing_stays_hidden() {
+    let (backend, recipe) = setup().await;
+    // R2 に書いている間に、レシピの削除が始まり、写真の行に印を付け直した（その削除は、まだ終わっていない）。
+    let racing = FakeBackend {
+        photo_rows_remarked_on_put: true,
+        ..backend.clone()
+    };
+    let response = upload(&racing, WORKSPACE_A, &recipe, jpeg(10)).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert_eq!(error_code(&response), "photo_not_found");
+    // 追加の側は、付け直された印を外さず、R2 のデータを消す。削除が途中で失敗しても、データの無い写真は見えない。
+    assert!(backend.objects.lock().unwrap().is_empty());
+    assert_eq!(listed_photos(&backend, &recipe).await, 0);
+    assert_eq!(backend.pending_photos.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn photo_whose_delete_failed_stays_hidden_if_a_deletion_remarked_it() {
+    let (backend, recipe) = setup().await;
+    upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
+    let id = only_photo_id(&backend);
+    // 写真を 1 枚消している間に、レシピの削除が始まって印を付け直し、こちらの R2 の削除は失敗した。
+    let racing = FakeBackend {
+        photo_rows_remarked_on_delete: true,
+        broken_r2_delete: true,
+        ..backend.clone()
+    };
+    let path = format!("/api/recipes/{recipe}/photos/{id}");
+    let response = call(&racing, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    // 付け直された印は外さない（レシピの削除が途中で失敗しても、データの無い写真を見せない）。
+    // 行と R2 のデータは残り、レシピの削除か定期の自動削除が消す。
+    assert!(backend.is_pending(&id));
+    assert_eq!(listed_photos(&backend, &recipe).await, 0);
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+    assert_eq!(backend.objects.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn pending_rows_that_keep_failing_do_not_block_the_others() {
+    let (backend, recipe) = setup().await;
+    // 先頭の 2 つのまとまり（2,000 行）に、消すたびに失敗する行がある。
+    // 本物では、ID の形は先に確かめるので、行ごとに失敗し続けることはまず無いが、選び方を確かめるために作る。
+    for i in 0..5_000 {
+        let id = format!("{i:032x}");
+        backend.add_photo_row(WORKSPACE_A, &recipe, &id, 1);
+        backend.mark_pending(&id, NOW);
+    }
+    let backend = FakeBackend {
+        undeletable_photos: vec![format!("{:032x}", 0), format!("{:032x}", 1_000)],
+        ..backend
+    };
+    pass_cleanup_time(&backend);
+    // 最初の実行が、失敗する 2 つのまとまりから選び始める時刻にする（選び始める位置は、実行の番号 × 2,000 を行の数で割った余り）。
+    let interval = crate::workspace::CLEANUP_INTERVAL_MILLIS;
+    while (backend.now.load(Ordering::Relaxed) / interval * 2_000) % 5_000 != 0 {
+        backend.advance(interval);
+    }
+    let first = crate::workspace::delete_unused(&backend).await;
+    assert_eq!(first.pending_photos.failed, 2_000);
+    // 実行ごとに選び始める位置をずらすので、ほかの行も片付く。
+    for _ in 0..5 {
+        backend.advance(interval);
+        crate::workspace::delete_unused(&backend).await;
+    }
+    // 位置をずらさないと、毎回先頭の 2,000 行（失敗する 2 つのまとまり）だけを選び、後ろの行がずっと残る。
+    // 失敗する行と同じ batch に入った行は、batch ごと残る（1 回の呼び出しで、まとめて消すため。本物でも同じ）。
+    let rows = backend.photos.lock().unwrap();
+    let later = format!("{:032x}", 2_000);
+    assert!(rows.iter().all(|(_, _, p)| p.id < later), "{}", rows.len());
+    assert!(rows.iter().any(|(_, _, p)| p.id == format!("{:032x}", 0)));
 }
