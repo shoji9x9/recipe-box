@@ -14,8 +14,8 @@ vars: {
 
 # 色は、アプリの画面（apps/recipe-box-rs/public/assets/style.css）の文字の色と、役割ごとの淡い色に合わせる。
 classes: {
-  # 要素をまとめる枠の名前の大きさ。中の要素より少しだけ大きくする（既定は大きすぎる）。
-  # 枠の class（group・cloudflare・github）は、どれもこの大きさにする。
+  # 要素をまとめる枠。名前は左上に置き、中の要素より少しだけ大きくする（既定は大きすぎる）。
+  # Cloudflare と GitHub の枠は、これに色の class を重ねる（class: [group; cloudflare]）。
   group: {
     label.near: top-left
     style: {
@@ -38,27 +38,16 @@ classes: {
   }
   # Cloudflare の枠
   cloudflare: {
-    # 枠の名前は左上に置き、上から入る線のラベルと重ねない。
-    label.near: top-left
     style: {
       fill: "#fff6ee"
       stroke: "#f38020"
-      font-color: "#222222"
-      font-size: 18
-      bold: true
-      border-radius: 12
     }
   }
   # GitHub の枠
   github: {
-    label.near: top-left
     style: {
       fill: "#f3f5f8"
       stroke: "#57606a"
-      font-color: "#222222"
-      font-size: 18
-      bold: true
-      border-radius: 12
     }
   }
   # このアプリのコード（Worker）
@@ -99,12 +88,12 @@ classes: {
       font-color: "#222222"
     }
   }
-  # フロー図の分かれ道（はい・いいえで先が分かれる確かめ）
+  # フロー図の分かれ道（はい・いいえで先が分かれる確かめ）。Cloudflare の橙と混ざらないよう、別の色にする。
   decision: {
     shape: diamond
     style: {
-      fill: "#fff6ee"
-      stroke: "#f38020"
+      fill: "#f4f1ff"
+      stroke: "#6b46c1"
       font-color: "#222222"
     }
   }
