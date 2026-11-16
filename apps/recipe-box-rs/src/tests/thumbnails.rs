@@ -8,6 +8,7 @@ use axum::{
 use super::{
     TestResponse, WORKSPACE_A, WORKSPACE_B,
     fake::{FakeBackend, NOW},
+    jpeg,
     screens::{
         DEMO, HOST, backend_with_workspaces, cookie, create_recipe, post_photo, post_raw_photo,
         screen_get, screen_post,
@@ -22,10 +23,9 @@ use crate::{
     workspace::WorkspaceId,
 };
 
-/// 元の写真（JPEG の目印で始まるデータ）を、JavaScript と同じ形で足し、写真の ID を返す。
+/// 元の写真（JPEG として読める 100 バイトのデータ）を、JavaScript と同じ形で足し、写真の ID を返す。
 async fn add_photo(backend: &FakeBackend, recipe_path: &str) -> String {
-    let mut photo = vec![0; 100];
-    photo[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
+    let photo = jpeg(100);
     let response = post_raw_photo(
         backend,
         recipe_path,
@@ -297,14 +297,8 @@ async fn thumbnail_bytes_count_toward_the_workspace_total() {
     .await;
     assert_eq!(response.status, StatusCode::NO_CONTENT, "{}", response.body);
     // 小さな版の分も数えるので、もう 1 バイトも足せない。
-    let response = post_raw_photo(
-        &backend,
-        &path,
-        &cookie(WORKSPACE_A),
-        "image/jpeg",
-        vec![0xff, 0xd8, 0xff],
-    )
-    .await;
+    let response =
+        post_raw_photo(&backend, &path, &cookie(WORKSPACE_A), "image/jpeg", jpeg(4)).await;
     assert_eq!(response.status, StatusCode::CONFLICT);
 }
 
@@ -434,8 +428,7 @@ async fn multipart_photo_has_no_thumbnail_and_demo_cannot_add_one() {
     backend.add_workspace(DEMO, NOW);
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
     // JavaScript の無いフォームでは、写真の ID を返さない（小さな版は作らない）。
-    let mut photo = vec![0; 10];
-    photo[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
+    let photo = jpeg(10);
     let response = post_photo(&backend, &path, Some(&cookie(WORKSPACE_A)), Some(&photo)).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert!(response.headers.get("x-photo-id").is_none());

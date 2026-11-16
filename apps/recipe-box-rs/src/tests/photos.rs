@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
 use super::{
-    TestResponse, WORKSPACE_A, WORKSPACE_B, call,
+    PNG_1X1, TestResponse, WORKSPACE_A, WORKSPACE_B, call,
     fake::{FakeBackend, NOW},
-    send,
+    jpeg, jpeg_with_location, jpeg_with_orientation_only, send,
 };
 use crate::{
     error::ApiError,
@@ -24,13 +24,6 @@ use crate::{
 
 const DEMO: &str = "dddddddddddddddddddddddddddddddd";
 const DAY_MILLIS: i64 = 24 * 60 * 60 * 1000;
-
-/// JPEG の先頭のバイトで始まり、全体で `size` バイトのデータ。
-fn jpeg(size: usize) -> Vec<u8> {
-    let mut bytes = vec![0; size];
-    bytes[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
-    bytes
-}
 
 /// ワークスペース A と B と、A のレシピ 1 件を持つ偽物を作り、レシピの ID を返す。
 async fn setup() -> (FakeBackend, String) {
@@ -84,14 +77,13 @@ fn error_code(response: &TestResponse) -> String {
 #[tokio::test]
 async fn photo_can_be_added_listed_read_and_deleted() {
     let (backend, recipe) = setup().await;
-    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    png.extend_from_slice(b"rest");
+    let png = PNG_1X1.to_vec();
 
     let response = upload(&backend, WORKSPACE_A, &recipe, png.clone()).await;
     assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
     let photo: Value = response.json();
     assert_eq!(photo["content_type"], "image/png");
-    assert_eq!(photo["size"], 12);
+    assert_eq!(photo["size"], 68);
     assert_eq!(photo["created_at"], NOW);
     let id = photo["id"].as_str().unwrap().to_owned();
 
@@ -144,8 +136,8 @@ async fn photo_size_boundary() {
 #[tokio::test]
 async fn only_jpeg_png_and_webp_are_accepted() {
     let (backend, recipe) = setup().await;
-    let mut webp = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
-    webp.extend_from_slice(b"VP8 ");
+    let mut webp = b"RIFF\x0e\x00\x00\x00WEBP".to_vec();
+    webp.extend_from_slice(b"VP8 \x02\x00\x00\x00..");
     let response = upload(&backend, WORKSPACE_A, &recipe, webp).await;
     assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
     assert_eq!(response.json()["content_type"], "image/webp");
@@ -157,6 +149,43 @@ async fn only_jpeg_png_and_webp_are_accepted() {
         assert_eq!(error_code(&response), "unsupported_photo_type");
     }
     assert_eq!(backend.photo_uploads.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn location_is_removed_before_saving() {
+    let (backend, recipe) = setup().await;
+    let original = jpeg_with_location();
+    let response = upload(&backend, WORKSPACE_A, &recipe, original.clone()).await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
+    // 長さは変えないので、大きさは送ったものと同じである。
+    assert_eq!(response.json()["size"], original.len());
+    let id = response.json()["id"].as_str().unwrap().to_owned();
+    let path = format!("/api/recipes/{recipe}/photos/{id}");
+    let response = call(&backend, Method::GET, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.bytes, jpeg_with_orientation_only());
+}
+
+#[tokio::test]
+async fn webp_with_metadata_and_broken_photos_are_rejected_before_saving() {
+    let (backend, recipe) = setup().await;
+    // EXIF の印の付いた WebP。
+    let webp = b"RIFF\x16\0\0\0WEBPVP8X\x0a\0\0\0\x08\0\0\0\0\0\0\0\0\0".to_vec();
+    let response = upload(&backend, WORKSPACE_A, &recipe, webp).await;
+    assert_eq!(response.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(error_code(&response), "unsupported_photo_metadata");
+    // 頭の部分が途中で切れた JPEG と、目印だけの PNG。
+    for bytes in [
+        vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10, 0x00],
+        b"\x89PNG\r\n\x1a\nrest".to_vec(),
+    ] {
+        let response = upload(&backend, WORKSPACE_A, &recipe, bytes).await;
+        assert_eq!(response.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(error_code(&response), "unsupported_photo_type");
+    }
+    // D1 にも R2 にも書かず、1 日の回数にも数えない。
+    assert!(backend.photos.lock().unwrap().is_empty());
+    assert!(backend.photo_uploads.lock().unwrap().is_empty());
+    assert!(backend.objects.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

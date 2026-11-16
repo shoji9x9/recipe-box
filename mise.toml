@@ -53,7 +53,7 @@ run = [
 
 [tasks.typecheck]
 description = "JavaScript と TypeScript の型を確かめる（lint と、commit の前の lefthook から呼ぶ）"
-# 画面の JavaScript（JSDoc の型）とそのテストは tsconfig.json（DOM の型）、スクリプトとそのテストは scripts/tsconfig.json（Node の型）。
+# 画面と Worker の JavaScript（JSDoc の型）とそのテストは tsconfig.json（DOM の型）、スクリプトとそのテストは scripts/tsconfig.json（Node の型）。
 run = [
   "pnpm exec tsc -p tsconfig.json",
   "pnpm exec tsc -p scripts/tsconfig.json",
@@ -64,10 +64,10 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、JavaScript の単体テスト（画面と、seed・pin・解説（guide）・modern-web-guidance のスクリプト）を実行する"
+description = "Rust のテストと、JavaScript の単体テスト（画面と Worker の JavaScript と、seed・pin・解説（guide）・modern-web-guidance のスクリプト）を実行する"
 run = [
   "cargo test --workspace --locked",
-  # 画面（apps/*/js-tests/）とスクリプト（scripts/*.test.ts）。vitest.config.ts。
+  # 画面（apps/*/js-tests/）と Worker（apps/*/js-tests/worker/）とスクリプト（scripts/*.test.ts）。vitest.config.ts。
   "pnpm exec vitest run",
 ]
 

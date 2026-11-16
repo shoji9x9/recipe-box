@@ -1,5 +1,6 @@
 {
-  // 画面の JavaScript（JSDoc の型）と、その単体テスト（TypeScript）の型を、`tsc --noEmit` で確かめる（mise run lint）。
+  // 画面と Worker の中で動く JavaScript（JSDoc の型）と、その単体テスト（TypeScript）の型を、`tsc --noEmit` で確かめる（mise run lint）。
+  // Worker の JavaScript（apps/*/src/*.js）も DOM の型で確かめ、Workers だけにある型は apps/*/src/*.d.ts に書く。
   // 出力はしない。テストは vitest が 1 ファイルずつ変換して動かす。
   // Node のスクリプトのテストは、DOM の代わりに Node の型を使うので、scripts/tsconfig.json で確かめる（共通の設定はここから引き継ぐ）。
   "compilerOptions": {
@@ -31,9 +32,12 @@
     // 依存のパッケージの .d.ts は確かめない（依存の型の誤りで lint が落ちないように）。
     "skipLibCheck": true
   },
-  // 画面の JavaScript・テスト・vitest と commitlint の設定。htmx.min.js はビルドで写す配布物なので除く。
+  // 画面と Worker の JavaScript・テスト・vitest と commitlint の設定。htmx.min.js はビルドで写す配布物なので除く。
   "include": [
     "apps/*/public/assets/**/*.js",
+    // Worker の中で動く JavaScript（wasm-bindgen が呼ぶ。src/photo-stream.js）。
+    "apps/*/src/**/*.js",
+    "apps/*/src/**/*.d.ts",
     "apps/*/js-tests/**/*.ts",
     "vitest.config.ts",
     "commitlint.config.ts"

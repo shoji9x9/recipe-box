@@ -20,6 +20,40 @@ use tower::ServiceExt;
 use self::fake::FakeBackend;
 use crate::router;
 
+/// JPEG として読める最小の頭（SOI と SOS の印）で始まり、全体で `size` バイトのデータ（4 より短ければ頭の途中まで）。
+/// 写真の追加は頭の部分を読む（[`crate::metadata`]）ので、目印だけでは足りない。
+pub fn jpeg(size: usize) -> Vec<u8> {
+    const HEAD: [u8; 4] = [0xff, 0xd8, 0xff, 0xda];
+    let mut bytes = vec![0; size];
+    let n = size.min(HEAD.len());
+    bytes[..n].copy_from_slice(&HEAD[..n]);
+    bytes
+}
+
+/// 1 × 1 の透明な PNG（68 バイト）。
+pub const PNG_1X1: &[u8] = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0b\x49\x44\x41\x54\x78\x9c\x63\x60\x00\x02\x00\x00\x05\x00\x01\x7a\x5e\xab\x3f\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82";
+
+/// 位置情報に見立てた文字（`GPS-SECRET`）と向き（6）を持つ Exif の付いた JPEG。
+pub fn jpeg_with_location() -> Vec<u8> {
+    let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0".to_vec();
+    // IFD0: 向き（0x0112、SHORT、1 つ、6）の 1 項目。次の IFD は無い。
+    exif.extend_from_slice(&[1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+    exif.extend_from_slice(b"GPS-SECRET");
+    let mut bytes = vec![0xff, 0xd8, 0xff, 0xe1];
+    bytes.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+    bytes.extend_from_slice(&exif);
+    bytes.extend_from_slice(&[0xff, 0xda, 0, 2, 0x12, 0x34]);
+    bytes
+}
+
+/// 向きだけを残した [`jpeg_with_location`]（長さは同じ）。
+pub fn jpeg_with_orientation_only() -> Vec<u8> {
+    let mut bytes = jpeg_with_location();
+    let secret = bytes.windows(10).position(|w| w == b"GPS-SECRET").unwrap();
+    bytes[secret..secret + 10].fill(0);
+    bytes
+}
+
 /// 応答の状態コード・ヘッダーの一部・本文。
 pub struct TestResponse {
     pub status: StatusCode,

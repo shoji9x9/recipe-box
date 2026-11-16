@@ -11,7 +11,7 @@ d1: D1 {class: store}
 r2: R2 {class: store}
 
 client -> worker: 写真のバイト列（Content-Length 付き）
-worker -> worker: 先頭のバイトで形式を決める\n大きさは Content-Length で決める
+worker -> worker: 頭の部分で形式を決め、位置情報などを\n0 で埋める（壊れていれば 415）\n大きさは Content-Length で決める
 worker -> d1: 上限を数えて、行（書き込みの終わっていない印付き）と\n追加の記録を入れる（batch。1 つのトランザクション）
 d1 -> worker: 入れた（上限に達していれば入れない → 409・413・503）
 worker -> r2: 本文をストリームのまま書く（waitUntil で最後まで）

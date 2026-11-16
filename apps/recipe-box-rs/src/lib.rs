@@ -7,6 +7,7 @@ mod cloudflare;
 mod error;
 mod id;
 mod limits;
+mod metadata;
 mod photo;
 mod recipe;
 mod screen;
