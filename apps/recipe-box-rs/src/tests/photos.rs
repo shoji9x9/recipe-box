@@ -1040,14 +1040,18 @@ async fn photo_whose_delete_failed_stays_hidden_if_a_deletion_remarked_it() {
     let response = call(&racing, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
     assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
     // 付け直された印は外さない（レシピの削除が途中で失敗しても、データの無い写真を見せない）。
+    // 行と R2 のデータは残り、レシピの削除か定期の自動削除が消す。
     assert!(backend.is_pending(&id));
     assert_eq!(listed_photos(&backend, &recipe).await, 0);
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+    assert_eq!(backend.objects.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
 async fn pending_rows_that_keep_failing_do_not_block_the_others() {
     let (backend, recipe) = setup().await;
-    // 1 回に片付ける 2 つのまとまり（2,000 行）の、それぞれの先頭の行が、消すたびに失敗する。
+    // 先頭の 2 つのまとまり（2,000 行）に、消すたびに失敗する行がある。
+    // 本物では、ID の形は先に確かめるので、行ごとに失敗し続けることはまず無いが、選び方を確かめるために作る。
     for i in 0..5_000 {
         let id = format!("{i:032x}");
         backend.add_photo_row(WORKSPACE_A, &recipe, &id, 1);
@@ -1058,13 +1062,20 @@ async fn pending_rows_that_keep_failing_do_not_block_the_others() {
         ..backend
     };
     pass_cleanup_time(&backend);
+    // 最初の実行が、失敗する 2 つのまとまりから選び始める時刻にする（選び始める位置は、実行の番号 × 2,000 を行の数で割った余り）。
+    let interval = crate::workspace::CLEANUP_INTERVAL_MILLIS;
+    while (backend.now.load(Ordering::Relaxed) / interval * 2_000) % 5_000 != 0 {
+        backend.advance(interval);
+    }
+    let first = crate::workspace::delete_unused(&backend).await;
+    assert_eq!(first.pending_photos.failed, 2_000);
     // 実行ごとに選び始める位置をずらすので、ほかの行も片付く。
-    for _ in 0..6 {
+    for _ in 0..5 {
+        backend.advance(interval);
         crate::workspace::delete_unused(&backend).await;
-        backend.advance(crate::workspace::CLEANUP_INTERVAL_MILLIS);
     }
     // 位置をずらさないと、毎回先頭の 2,000 行（失敗する 2 つのまとまり）だけを選び、後ろの行がずっと残る。
-    // 失敗する行と同じ batch に入った行は、batch ごと残る（1 回の呼び出しで、まとめて消すため）。
+    // 失敗する行と同じ batch に入った行は、batch ごと残る（1 回の呼び出しで、まとめて消すため。本物でも同じ）。
     let rows = backend.photos.lock().unwrap();
     let later = format!("{:032x}", 2_000);
     assert!(rows.iter().all(|(_, _, p)| p.id < later), "{}", rows.len());

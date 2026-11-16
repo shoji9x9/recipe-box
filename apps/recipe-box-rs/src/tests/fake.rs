@@ -275,8 +275,10 @@ impl FakeBackend {
     /// すべての写真の行に、今より 1 ミリ秒後の日時で印を付け直す（別のリクエストのレシピかワークスペースの削除をまねる）。
     fn remark_all_photos(&self) {
         let at = self.now_millis() + 1;
+        // ほかのメソッドと同じく、photos を先に、pending_photos を後に取る（取る順を逆にすると、互いに待ちうる）。
+        let photos = self.photos.lock().unwrap();
         let mut pending = self.pending_photos.lock().unwrap();
-        for (_, _, photo) in self.photos.lock().unwrap().iter() {
+        for (_, _, photo) in photos.iter() {
             pending.insert(photo.id.clone(), at);
         }
     }
