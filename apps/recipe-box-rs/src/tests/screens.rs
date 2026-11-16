@@ -1198,6 +1198,53 @@ async fn photo_errors_are_shown_on_the_detail_page() {
     assert!(backend.photos.lock().unwrap().is_empty());
 }
 
+/// 一覧の検索は、日本語の変換中に検索しないよう、`public/assets/search.js` が起こす search-input で検索する。
+#[tokio::test]
+async fn search_waits_for_the_ime_to_commit() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let response = screen_get(&backend, "/", Some(&a)).await;
+    assert!(
+        response
+            .body
+            .contains(r#"<script src="/assets/search.js" type="module"></script>"#)
+    );
+    assert!(response.body.contains(" data-search-input"));
+    assert!(
+        response
+            .body
+            .contains(r#"hx-trigger="search-input changed delay:300ms, search""#)
+    );
+}
+
+/// 入力を消すボタンは、Tab で選べる本物のボタンにする（ブラウザが出す × は Tab で選べない）。
+/// JavaScript が動かなければ、空のフォームを送って、絞り込まない一覧に戻る。
+#[tokio::test]
+async fn search_has_a_focusable_clear_button() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let response = screen_get(&backend, "/?q=%E3%82%AB%E3%83%AC%E3%83%BC", Some(&a)).await;
+    // × は文字でなく、ボタンの中の SVG の図形だけで描き、読み上げない（名前はボタンの aria-label）。
+    let start = r#"<button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す">"#;
+    let button = response
+        .body
+        .split_once(start)
+        .and_then(|(_, rest)| rest.split_once("</button>"))
+        .map(|(inner, _)| inner.trim())
+        .expect("入力を消すボタンが無い");
+    assert!(
+        button
+            .starts_with(r#"<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">"#),
+        "{button}"
+    );
+    assert!(button.ends_with("</svg>"), "{button}");
+    assert!(
+        response
+            .body
+            .contains(r#"<form id="clear-search" method="get" action="/" hidden></form>"#)
+    );
+}
+
 /// 画面の JavaScript（`public/assets/photo-upload.js`）が、送る前に確かめるための値。
 #[tokio::test]
 async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
