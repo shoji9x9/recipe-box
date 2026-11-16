@@ -81,6 +81,10 @@ pub struct FakeBackend {
     pub photo_rows_vanish_on_put: bool,
     /// `true` なら、R2 に書き込んでいる間に、別のリクエスト（レシピかワークスペースの削除）が、すべての写真の行に印を付け直したことにする。
     pub photo_rows_remarked_on_put: bool,
+    /// `true` なら、R2 の削除の直前に、別のリクエスト（レシピかワークスペースの削除）が、すべての写真の行に印を付け直したことにする。
+    pub photo_rows_remarked_on_delete: bool,
+    /// これらの写真の行を含む batch（`delete_photos`）は失敗させる（片付けで失敗し続ける行）。
+    pub undeletable_photos: Vec<String>,
     /// `true` なら、R2 の削除が失敗したことにする。
     pub broken_r2_delete: bool,
     /// `true` なら、最初の R2 の削除の直後に、別のリクエストが同じレシピに写真を 1 枚追加し（D1 の行と R2 のデータ）、
@@ -136,6 +140,8 @@ impl Default for FakeBackend {
             task_dropped: false,
             photo_rows_vanish_on_put: false,
             photo_rows_remarked_on_put: false,
+            photo_rows_remarked_on_delete: false,
+            undeletable_photos: Vec::new(),
             broken_r2_delete: false,
             photo_added_after_first_delete: false,
             workspace_vanishes_on_delete: false,
@@ -264,6 +270,15 @@ impl FakeBackend {
                 id: p.id.clone(),
             })
             .collect()
+    }
+
+    /// すべての写真の行に、今より 1 ミリ秒後の日時で印を付け直す（別のリクエストのレシピかワークスペースの削除をまねる）。
+    fn remark_all_photos(&self) {
+        let at = self.now_millis() + 1;
+        let mut pending = self.pending_photos.lock().unwrap();
+        for (_, _, photo) in self.photos.lock().unwrap().iter() {
+            pending.insert(photo.id.clone(), at);
+        }
     }
 
     /// 「今」の時刻を `millis` だけ進める。
@@ -872,7 +887,11 @@ impl Backend for FakeBackend {
         if let Err(error) = self.count_d1() {
             return ready(Err(error));
         }
-        if self.broken_photo_delete {
+        if self.broken_photo_delete
+            || photos
+                .iter()
+                .any(|(_, _, id)| self.undeletable_photos.iter().any(|u| u == id.as_str()))
+        {
             return ready(Err(BackendError("壊れた DB（写真の削除）".into())));
         }
         ready(self.check_broken().map(|()| {
@@ -925,11 +944,7 @@ impl Backend for FakeBackend {
             self.photos.lock().unwrap().clear();
         }
         if self.photo_rows_remarked_on_put {
-            let at = self.now_millis() + 1;
-            let mut pending = self.pending_photos.lock().unwrap();
-            for (_, _, photo) in self.photos.lock().unwrap().iter() {
-                pending.insert(photo.id.clone(), at);
-            }
+            self.remark_all_photos();
         }
         ready(if self.broken_r2_put {
             Err(BackendError("壊れた R2".into()))
@@ -957,6 +972,9 @@ impl Backend for FakeBackend {
     fn delete_objects(&self, keys: Vec<String>) -> impl Future<Output = BackendResult<()>> + Send {
         if let Err(error) = self.count_r2() {
             return ready(Err(error));
+        }
+        if self.photo_rows_remarked_on_delete {
+            self.remark_all_photos();
         }
         if self.broken_r2_delete {
             return ready(Err(BackendError("壊れた R2".into())));

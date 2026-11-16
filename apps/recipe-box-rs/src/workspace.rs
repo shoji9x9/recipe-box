@@ -392,3 +392,45 @@ async fn remove_photo_objects<B: Backend>(
         .collect::<Result<_, ApiError>>()?;
     photo::delete_objects(backend, keys).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CLEANUP_INTERVAL_MILLIS, pick_for_run};
+
+    #[test]
+    fn picks_everything_when_it_fits() {
+        assert_eq!(pick_for_run(vec![1, 2, 3], 0, 3), (vec![1, 2, 3], 0));
+        assert_eq!(
+            pick_for_run(vec![1, 2], 5 * CLEANUP_INTERVAL_MILLIS, 3),
+            (vec![1, 2], 0)
+        );
+        assert_eq!(pick_for_run(Vec::<i32>::new(), 0, 0), (vec![], 0));
+    }
+
+    #[test]
+    fn start_moves_by_count_each_run_and_wraps_around() {
+        let items: Vec<i32> = (0..5).collect();
+        let run = |n: i64| pick_for_run(items.clone(), n * CLEANUP_INTERVAL_MILLIS, 2);
+        assert_eq!(run(0), (vec![0, 1], 3));
+        assert_eq!(run(1), (vec![2, 3], 3));
+        // 最後まで行けば、先頭に戻って続ける。
+        assert_eq!(run(2), (vec![4, 0], 3));
+        assert_eq!(run(3), (vec![1, 2], 3));
+        // 同じ実行の間（1 時間の中）は、同じものを選ぶ。
+        assert_eq!(
+            pick_for_run(
+                items.clone(),
+                CLEANUP_INTERVAL_MILLIS + CLEANUP_INTERVAL_MILLIS - 1,
+                2
+            ),
+            run(1)
+        );
+    }
+
+    #[test]
+    fn zero_count_and_negative_time_are_handled() {
+        assert_eq!(pick_for_run(vec![1, 2], 0, 0), (vec![], 2));
+        // 時計が 1970 年より前を指しても、先頭から選ぶ（失敗しない）。
+        assert_eq!(pick_for_run(vec![1, 2, 3], -1, 2), (vec![1, 2], 1));
+    }
+}
