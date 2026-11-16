@@ -235,7 +235,7 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 | JavaScript のテスト（vitest） | 画面の JavaScript と、Node のスクリプト（seed など） | `mise run test` |
 | スモークテスト（[scripts/smoke-test.ts](repo:scripts/smoke-test.ts)） | ローカルの Worker に API を呼び、本物に近い D1・R2・Rate Limiting を通して確かめる | `mise run smoke`（CI でも動く） |
 
-スモークテストは API だけを使うので、リライトの後の新しいアプリにも、そのまま当てられます。
+スモークテストの確かめのうち、API だけを使うものは、リライトの後の新しいアプリにも、そのまま当てられます。画面と静的アセットの確かめは今の作りに頼るので、新しいアプリには `API_ONLY=1` を付けて外します（[docs/development.md の「テスト」](repo:docs/development.md#テスト)）。
 
 ## 特徴的な機能
 
@@ -334,5 +334,5 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 | 静的アセット | Workers の静的アセット（Worker を起動しない） | [画面](repo:docs/spec.md#画面) | CSS・htmx・アイコンの配り方と、CSP（外部の CDN から読まない） |
 | ID と乱数 | Web Crypto で 128 ビットの乱数 | [ワークスペースによるデータの分離](repo:docs/spec.md#ワークスペースによるデータの分離) | ID の形と長さを保つ（デモの ID を見分けられないことを含む） |
 | ログと監視 | Workers のログ・`wrangler tail` | [ログ](repo:docs/security.md#ログ) | ワークスペースの ID をログに残さない |
-| テスト | `Backend` トレイトの偽物・スモークテスト | [API](repo:docs/spec.md#api) | 同じ API に当てるスモークテストは、そのまま新しいアプリにも使える |
+| テスト | `Backend` トレイトの偽物・スモークテスト | [API](repo:docs/spec.md#api) | 同じ API に当てるスモークテストは、`API_ONLY=1` を付けて新しいアプリにも使える |
 | 開発のツールと依存の管理 | mise・pnpm・cargo-deny・7 日の待ち | [サプライチェーン攻撃の対策](repo:docs/security.md#サプライチェーン攻撃の対策) | TypeScript の側の監査の道具 |

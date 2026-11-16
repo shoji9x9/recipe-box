@@ -27,6 +27,12 @@
   アカウントが要るのは、本番に触る操作（デプロイ・`mise run pin -- --remote`・`mise run seed -- --remote`・本番の `wrangler tail`）だけである。
   ただし、wrangler は、何も指定しなければ利用統計を Cloudflare に送る。止めるときは、環境変数 `WRANGLER_SEND_METRICS=false` を付けて実行する。
 
+### 同じ API で確かめる
+
+基準の環境と新しい側の両方に、同じスモークテスト（`scripts/smoke-test.ts`）を当てて、API が同じに動くかを確かめられる。
+新しい側には `API_ONLY=1` を付けて当てる。今の作りに頼る確かめ（画面の文字・静的アセット・`public/_headers`）を外し、API（[spec.md](spec.md) の「API」）だけを確かめる。
+定期の自動削除の確かめ（`SCHEDULED_LOG`）も、wrangler でローカルの D1 の表を書き換え、ログの文を読むので、新しい側には付けない（[development.md](development.md) の「テスト」）。
+
 ### ローカルと本番で違うもの
 
 | もの | ローカル（基準の環境） | 本番 |
