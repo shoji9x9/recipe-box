@@ -12,6 +12,11 @@
 //!
 //! 使うのは本番（wasm）だけである。テストでは本文をバイト列として読む経路（[`crate::photo::PhotoBody::Bytes`]）を通る。
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use axum::http::{Method, header};
 use wasm_bindgen::prelude::wasm_bindgen;
 use worker::{
@@ -44,6 +49,10 @@ extern "C" {
     #[wasm_bindgen(js_name = discardPhoto)]
     fn discard_photo(state: &JsValue);
 
+    /// reader を付けていない本文を、読まずに取り消す。
+    #[wasm_bindgen(js_name = cancelBody)]
+    fn cancel_body(body: &web_sys::ReadableStream);
+
     /// reader を外し、`head`（書き換えた頭）・状態の `rest`・`body` の残りを続けて流す、長さ `length` のストリームを返す。
     /// 残りは JavaScript を通さず、組み込みの `pipeTo` で流す。R2 が読み始めるまでは、何も流れない。
     #[wasm_bindgen(catch, js_name = joinPhoto)]
@@ -58,12 +67,28 @@ extern "C" {
 /// ストリームのまま扱う写真の本文。[`split_photo_body`] がリクエストの extension に入れる。
 ///
 /// extension は `Clone`・`Send`・`Sync` が要る。Workers は 1 つのスレッドで動くので `SendWrapper` で包む。
-/// 複製しても同じ JS のストリームを指し、読むのは 1 回だけである。
+/// 複製しても同じ JS のストリームを指し、読むのは 1 回だけである（[`open`]）。
 #[derive(Clone)]
 pub struct RawPhotoBody {
-    stream: SendWrapper<web_sys::ReadableStream>,
+    body: Arc<UnreadBody>,
     /// `Content-Length` の値。
     length: usize,
+}
+
+/// まだ読み始めていない本文。[`open`] より前に断ったとき（ワークスペースやレシピが無い・回数の制限など）は、
+/// リクエストと一緒に捨てられるときに取り消す（[`PhotoStream`] の [`Drop`] と同じ理由）。
+struct UnreadBody {
+    stream: SendWrapper<web_sys::ReadableStream>,
+    /// [`open`] が読み始めたか。
+    opened: AtomicBool,
+}
+
+impl Drop for UnreadBody {
+    fn drop(&mut self) {
+        if !self.opened.load(Ordering::Relaxed) {
+            cancel_body(&self.stream);
+        }
+    }
 }
 
 /// 頭の部分を読み終えた写真の本文。
@@ -106,6 +131,11 @@ impl Drop for PhotoStream {
     }
 }
 
+/// R2 に渡したが読まれなかったストリームを取り消す。書き込みが失敗し、本文の残りも取り消される（`src/photo-stream.js`）。
+pub fn cancel_readable(readable: &web_sys::ReadableStream) {
+    cancel_body(readable);
+}
+
 /// Workers のリクエストを axum に渡す形にする。写真のバイト列をそのまま送るリクエストだけは、
 /// 本文を axum に渡さず、[`RawPhotoBody`] として extension に入れる。
 ///
@@ -132,7 +162,10 @@ pub fn split_photo_body(req: worker::Request) -> worker::Result<HttpRequest> {
         }
     };
     http.extensions_mut().insert(RawPhotoBody {
-        stream: SendWrapper::new(stream),
+        body: Arc::new(UnreadBody {
+            stream: SendWrapper::new(stream),
+            opened: AtomicBool::new(false),
+        }),
         length,
     });
     Ok(http)
@@ -180,8 +213,13 @@ const READ_BYTES: usize = 64 * 1024;
 /// （デモか・大きさを先に確かめる。[`crate::photo::add`]）。
 pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
     let length = raw.length;
+    // 複製した extension から 2 回読ませない。
+    if raw.body.opened.swap(true, Ordering::Relaxed) {
+        return Err(ApiError::InvalidBody);
+    }
+    let body = raw.body.stream.clone();
+    let state = photo_reader(&body).map_err(|_| ApiError::InvalidBody)?;
     let read = async {
-        let state = photo_reader(&raw.stream)?;
         let mut head = Vec::new();
         let format = loop {
             match metadata::inspect(&head, length) {
@@ -210,17 +248,19 @@ pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
         if head.len() > length {
             return Err(JsValue::from_str("本文が Content-Length より長い"));
         }
-        Ok::<_, JsValue>((state, head, format))
+        Ok::<_, JsValue>((head, format))
     };
     // 本文を読めないのは、送る途中で切れたときなど。multipart を読めないときと同じに扱う。
-    let (state, head, format) = SendFuture::new(read)
-        .await
-        .map_err(|_| ApiError::InvalidBody)?;
+    // 読み終えずに断るので、本文の残りを取り消す。
+    let Ok((head, format)) = SendFuture::new(read).await else {
+        discard_photo(&state);
+        return Err(ApiError::InvalidBody);
+    };
     Ok(PhotoStream {
         length,
         format,
         head,
-        body: raw.stream,
+        body,
         state: Some(SendWrapper::new(state)),
     })
 }

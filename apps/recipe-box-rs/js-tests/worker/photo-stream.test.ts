@@ -1,8 +1,8 @@
 // src/photo-stream.js（Worker の中で写真の本文を流す JavaScript）の単体テスト（mise run test）。
-// Workers の FixedLengthStream の代わりに、長さを確かめる TransformStream を置く。
+// Workers に近い Node の環境で動かし（vitest.config.ts の worker）、Workers の FixedLengthStream の代わりに、長さを確かめる TransformStream を置く。
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { discardPhoto, joinPhoto, photoReader, readAtLeast } from "../src/photo-stream.js";
+import { cancelBody, discardPhoto, joinPhoto, photoReader, readAtLeast } from "../../src/photo-stream.js";
 
 /** 塊を順に流す本文。取り消されたかを `cancelled` で見る。 */
 function body(chunks: number[][]): { stream: ReadableStream<Uint8Array>; cancelled: () => boolean } {
@@ -94,12 +94,47 @@ describe("joinPhoto", () => {
     expect(await readAll(joinPhoto(stream, state, new Uint8Array([9, 9]), 4))).toEqual([9, 9, 3, 4]);
   });
 
+  test("読む側（R2）が取り消すと、本文の残りも取り消す", async () => {
+    const source = body([[1, 2], [3, 4], [5, 6]]);
+    const state = photoReader(source.stream);
+    await readAtLeast(state, 2, 2);
+    const joined = joinPhoto(source.stream, state, new Uint8Array([1, 2]), 6);
+    await joined.cancel(new Error("R2 が失敗した"));
+    await vi.waitFor(() => expect(source.cancelled()).toBe(true));
+  });
+
+  test("ストリームを作れなければ、本文を取り消して失敗する", async () => {
+    vi.stubGlobal(
+      "FixedLengthStream",
+      class {
+        constructor() {
+          throw new Error("作れない");
+        }
+      },
+    );
+    const source = body([[1, 2], [3, 4]]);
+    const state = photoReader(source.stream);
+    await readAtLeast(state, 2, 2);
+    expect(() => joinPhoto(source.stream, state, new Uint8Array([1, 2]), 4)).toThrow("作れない");
+    await vi.waitFor(() => expect(source.cancelled()).toBe(true));
+  });
+
   test("本文が宣言した長さより短ければ、読む側が失敗する", async () => {
     const { stream } = body([[1, 2], [3]]);
     const state = photoReader(stream);
     await readAtLeast(state, 2, 2);
     await expect(readAll(joinPhoto(stream, state, new Uint8Array([1, 2]), 10))).rejects.toThrow("長さが違う");
   });
+});
+
+test("cancelBody は reader の付いていない本文を取り消し、付いていれば何もしない", async () => {
+  const free = body([[1]]);
+  cancelBody(free.stream);
+  await vi.waitFor(() => expect(free.cancelled()).toBe(true));
+  const locked = body([[1]]);
+  photoReader(locked.stream);
+  expect(() => cancelBody(locked.stream)).not.toThrow();
+  expect(locked.cancelled()).toBe(false);
 });
 
 test("discardPhoto は本文を取り消す", async () => {

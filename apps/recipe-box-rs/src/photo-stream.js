@@ -74,6 +74,15 @@ export function discardPhoto(state) {
 }
 
 /**
+ * 読まない本文を取り消す。読まずに応答を返すと、送り手がまだ送っている間に接続が切れることがあるため。
+ * 取り消せない（reader が付いているなど）ときは何もしない。
+ * @param {ReadableStream<Uint8Array>} body
+ */
+export function cancelBody(body) {
+  body.cancel().catch(() => {});
+}
+
+/**
  * reader を外し、`head`（書き換えた頭）・`rest`・本文の残りを続けて流す、長さ `length` のストリームを返す。
  * 本文の残りは JavaScript を通さず、組み込みの pipeTo で流す。読む側（R2）が読み始めるまでは、何も流れない。
  * 長さが実際の本文と違えば、FixedLengthStream が失敗し、読む側も失敗する。
@@ -85,9 +94,15 @@ export function discardPhoto(state) {
  */
 export function joinPhoto(body, state, head, length) {
   state.reader.releaseLock();
-  /** @type {{ readable: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Array> }} */
-  // FixedLengthStream は Workers の組み込み（型は DOM に無い）。
-  const { readable, writable } = new (/** @type {any} */ (globalThis).FixedLengthStream)(length);
+  /** @type {FixedLengthStream} */
+  let fixed;
+  try {
+    fixed = new FixedLengthStream(length);
+  } catch (error) {
+    cancelBody(body);
+    throw error;
+  }
+  const { readable, writable } = fixed;
   const writer = writable.getWriter();
   const rest = state.rest;
   writer
@@ -97,8 +112,10 @@ export function joinPhoto(body, state, head, length) {
       writer.releaseLock();
       return body.pipeTo(writable);
     })
-    .catch((/** @type {unknown} */ error) => {
-      body.cancel(error).catch(() => {});
+    // 読む側（R2）が失敗するか取り消すと、書き込みか pipeTo が失敗する。本文の残りを取り消す
+    // （pipeTo の途中なら pipeTo が取り消すので、ここでは何もしない）。
+    .catch(() => {
+      cancelBody(body);
     });
   return readable;
 }

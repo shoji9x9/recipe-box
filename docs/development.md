@@ -25,7 +25,7 @@ pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-
 | `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
 | `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
 | `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 と R2（をまねたもの）を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う。`API_ONLY=1` を付けると、API だけを確かめる（下の「テスト」） |
-| `mise run test` | Rust のテストと、JavaScript の単体テスト（vitest。画面とスクリプト。下の「テスト」）を実行する |
+| `mise run test` | Rust のテストと、JavaScript の単体テスト（vitest。画面と Worker の JavaScript とスクリプト。下の「テスト」）を実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
 | `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck・JavaScript とテストの型の確認（`tsc`））と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
@@ -43,7 +43,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | --- | --- | --- |
 | Rust | 外から呼ぶ API と画面は `apps/recipe-box-rs/src/tests/`。モジュールの中だけの関数は、そのファイルの `#[cfg(test)] mod tests` | `cargo test` |
 | 画面の JavaScript（`apps/<app>/public/assets/`） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。happy-dom の DOM で動かす |
-| Worker の中で動く JavaScript（`apps/<app>/src/*.js`。Rust から wasm-bindgen で呼ぶ） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。Workers だけにある機能（`FixedLengthStream` など）は、テストで代わりのものを置く |
+| Worker の中で動く JavaScript（`apps/<app>/src/*.js`。Rust から wasm-bindgen で呼ぶ） | `apps/<app>/js-tests/worker/<名前>.test.ts` | vitest。DOM の無い Node のまま動かす。Workers だけにある機能（`FixedLengthStream` など）は、テストで代わりのものを置き、型は `apps/<app>/src/*.d.ts` に書く |
 | スクリプト（`scripts/` の TypeScript とシェルスクリプト） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす（シェルスクリプトは、子のプロセスとして動かして確かめる） |
 
 - JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
@@ -78,7 +78,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `apps/recipe-box-rs/` | リライト前の Rust の Worker |
 | `apps/recipe-box-rs/migrations/` | D1 のマイグレーション（テーブルを作る・変える SQL） |
 | `apps/recipe-box-rs/public/` | Workers の静的アセット（CSS・画面の JavaScript・アイコン）。ここに置いたファイルは誰でも取れるので、テストなどを置かない |
-| `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（上の「テスト」） |
+| `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（上の「テスト」）。`worker/` の下は Worker の中で動く JavaScript（`src/*.js`）の単体テスト |
 | `scripts/seed.ts` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
 | `scripts/seed-lib.ts` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
 | `guide/` | アプリの解説（`/about/`）の元の文章（`about.md`）と図の元（`*.d2`。`_style.d2` は図に共通する設定） |
