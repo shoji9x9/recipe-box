@@ -75,13 +75,14 @@ impl CloudflareBackend {
         }
     }
 
-    /// 写真の行の、書き込みか削除が終わっていない印を `pending` にする。印が既にその値か、行が無ければ `false` を返す。
+    /// 写真の行の、書き込みか削除が終わっていない印を付ける（`since` が日時）か外す（`None`）。
+    /// 付けるときは印の無い行に、外すときは印の付いた行にだけ効く。効いた行が無ければ `false` を返す。
     fn set_photo_pending(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
-        pending: bool,
+        since: Option<i64>,
         action: &'static str,
     ) -> impl Future<Output = BackendResult<bool>> + Send + use<> {
         let env = self.env.clone();
@@ -90,19 +91,34 @@ impl CloudflareBackend {
             recipe.to_string(),
             id.as_str().to_owned(),
         ];
+        let since = since.map(int_to_js).map(SendWrapper::new);
         SendFuture::new(async move {
             let db = database(&env)?;
-            let mut binds = vec![JsValue::from(pending)];
-            binds.extend(values.map(JsValue::from));
-            binds.push(JsValue::from(!pending));
-            let result = run(
-                &db,
-                "UPDATE photos SET pending = ? \
-                 WHERE workspace_id = ? AND recipe_id = ? AND id = ? AND pending = ?",
-                &binds,
-                action,
-            )
-            .await?;
+            let ids = values.map(JsValue::from);
+            let result = match since {
+                Some(since) => {
+                    let mut binds = vec![since.0];
+                    binds.extend(ids);
+                    run(
+                        &db,
+                        "UPDATE photos SET pending_since = ? \
+                         WHERE workspace_id = ? AND recipe_id = ? AND id = ? AND pending_since IS NULL",
+                        &binds,
+                        action,
+                    )
+                    .await?
+                }
+                None => {
+                    run(
+                        &db,
+                        "UPDATE photos SET pending_since = NULL \
+                         WHERE workspace_id = ? AND recipe_id = ? AND id = ? AND pending_since IS NOT NULL",
+                        &ids,
+                        action,
+                    )
+                    .await?
+                }
+            };
             Ok(changed_rows(&result, action)? > 0)
         })
     }
@@ -143,9 +159,9 @@ struct ListedRow {
 /// どちらの副問い合わせも、主キー（`workspace_id`・`recipe_id`・`id`）の先頭の 2 列で写真を絞る（1 レシピ 5 枚まで）。
 /// 書き込みか削除が終わっていない印の付いた写真は、写真の一覧と同じく除く。
 const FIRST_PHOTO_COLUMN: &str = "(SELECT MIN(p.id) FROM photos p \
-     WHERE p.workspace_id = recipes.workspace_id AND p.recipe_id = recipes.id AND p.pending = FALSE \
+     WHERE p.workspace_id = recipes.workspace_id AND p.recipe_id = recipes.id AND p.pending_since IS NULL \
      AND p.created_at = (SELECT MIN(q.created_at) FROM photos q \
-     WHERE q.workspace_id = recipes.workspace_id AND q.recipe_id = recipes.id AND q.pending = FALSE)) \
+     WHERE q.workspace_id = recipes.workspace_id AND q.recipe_id = recipes.id AND q.pending_since IS NULL)) \
      AS first_photo_id";
 
 /// `SELECT COUNT(*) AS total` の行。
@@ -724,14 +740,15 @@ impl Backend for CloudflareBackend {
             let r = || JsValue::from(recipe.as_str());
             let size = || int_to_js(photo.size);
             // 上限の判定と保存を 1 つの文にして、同時に追加されても上限を超えないようにする。
-            // 行は、R2 への書き込みが終わっていない印を付けて入れる。上限は、印の付いた行も数える。
+            // 行は、R2 への書き込みが終わっていない印（日時）を付けて入れる。上限は、印の付いた行も数える。
             // アプリ全体の合計と 1 日の回数は、全体を数えるので workspace_id では絞り込まない（AGENTS.md の全体の上限のクエリ）。
             // 読む行の少ない条件から並べる。SQL は評価の順を保証しないが、SQLite は AND を左から評価し、
             // 偽になれば後ろを評価しないので、断る試行で photos の全体を読む（アプリ全体の合計を求める）回数を減らせる。
             let insert = db
                 .prepare(
-                    "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at, pending) \
-                     SELECT ?, ?, ?, ?, ?, ?, TRUE FROM (VALUES (0)) AS one \
+                    "INSERT INTO photos \
+                     (workspace_id, recipe_id, id, content_type, size, created_at, pending_since) \
+                     SELECT ?, ?, ?, ?, ?, ?, ? FROM (VALUES (0)) AS one \
                      WHERE EXISTS (SELECT 1 FROM recipes WHERE workspace_id = ? AND id = ?) \
                      AND (SELECT COUNT(*) FROM photos WHERE workspace_id = ? AND recipe_id = ?) < ? \
                      AND (SELECT COUNT(*) FROM photo_uploads WHERE created_at >= ?) < ? \
@@ -744,6 +761,7 @@ impl Backend for CloudflareBackend {
                     photo.id.as_str().into(),
                     photo.content_type.as_str().into(),
                     size(),
+                    int_to_js(photo.created_at),
                     int_to_js(photo.created_at),
                     w(),
                     r(),
@@ -812,7 +830,7 @@ impl Backend for CloudflareBackend {
         recipe: &RecipeId,
         id: &PhotoId,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        self.set_photo_pending(workspace, recipe, id, false, "写真の書き込みを終えられない")
+        self.set_photo_pending(workspace, recipe, id, None, "写真の印を外せない")
     }
 
     fn hide_photo(
@@ -820,8 +838,9 @@ impl Backend for CloudflareBackend {
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
+        now: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        self.set_photo_pending(workspace, recipe, id, true, "写真を隠せない")
+        self.set_photo_pending(workspace, recipe, id, Some(now), "写真を隠せない")
     }
 
     fn list_pending_photos(
@@ -834,17 +853,39 @@ impl Backend for CloudflareBackend {
             let action = "片付ける写真を選べない";
             let db = database(&env)?;
             // 自動削除のクエリなので、ワークスペースでは絞り込まない（AGENTS.md の「SQL」）。
-            db.prepare(
-                "SELECT workspace_id, recipe_id, id FROM photos \
-                 WHERE pending = TRUE AND created_at < ?",
-            )
-            .bind(&[before.0])
-            .map_err(|e| backend_error(action, &e))?
-            .all()
-            .await
-            .map_err(|e| backend_error(action, &e))?
-            .results::<PendingPhoto>()
-            .map_err(|e| backend_error(action, &e))
+            db.prepare("SELECT workspace_id, recipe_id, id FROM photos WHERE pending_since < ?")
+                .bind(&[before.0])
+                .map_err(|e| backend_error(action, &e))?
+                .all()
+                .await
+                .map_err(|e| backend_error(action, &e))?
+                .results::<PendingPhoto>()
+                .map_err(|e| backend_error(action, &e))
+        })
+    }
+
+    fn list_recipe_photo_ids(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
+        let env = self.env.clone();
+        let values = [workspace.to_string(), recipe.to_string()];
+        SendFuture::new(async move {
+            let action = "レシピの写真を読めない";
+            let db = database(&env)?;
+            Ok(db
+                .prepare("SELECT id FROM photos WHERE workspace_id = ? AND recipe_id = ?")
+                .bind(&values.map(JsValue::from))
+                .map_err(|e| backend_error(action, &e))?
+                .all()
+                .await
+                .map_err(|e| backend_error(action, &e))?
+                .results::<IdRow>()
+                .map_err(|e| backend_error(action, &e))?
+                .into_iter()
+                .map(|row| row.id)
+                .collect())
         })
     }
 
@@ -861,7 +902,7 @@ impl Backend for CloudflareBackend {
             let db = database(&env)?;
             db.prepare(format!(
                 "SELECT {PHOTO_COLUMNS} FROM photos WHERE workspace_id = ? AND recipe_id = ? \
-                 AND pending = FALSE ORDER BY created_at, id"
+                 AND pending_since IS NULL ORDER BY created_at, id"
             ))
             .bind(&[workspace.into(), recipe.into()])
             .map_err(|e| backend_error(action, &e))?
@@ -890,7 +931,7 @@ impl Backend for CloudflareBackend {
             let db = database(&env)?;
             db.prepare(format!(
                 "SELECT {PHOTO_COLUMNS} FROM photos WHERE workspace_id = ? AND recipe_id = ? AND id = ? \
-                 AND pending = FALSE"
+                 AND pending_since IS NULL"
             ))
             .bind(&values.map(JsValue::from))
             .map_err(|e| backend_error(action, &e))?

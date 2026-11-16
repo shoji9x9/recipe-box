@@ -451,7 +451,8 @@ pub async fn delete<B: Backend>(
 ///
 /// 先に行に印を付けて隠し、R2 を消してから D1 の行を消す。
 /// D1 の行を先に消して R2 の削除が失敗すると、合計に数えられないデータが R2 に残るため。
-/// R2 か D1 の削除が失敗しても、行は隠れたまま残り、毎日の自動削除が片付ける（[`clean_pending`]）。
+/// R2 の削除が失敗したら、印を外して元に戻す（利用者がもう一度消せるように）。
+/// D1 の削除が失敗したら（R2 のデータはもう無い）、行は隠れたまま残り、毎日の自動削除が片付ける（[`clean_pending`]）。
 pub async fn remove<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -459,18 +460,28 @@ pub async fn remove<B: Backend>(
     photo: &PhotoId,
 ) -> Result<(), ApiError> {
     deny_demo(backend, workspace)?;
-    if !backend.hide_photo(workspace, recipe, photo).await? {
+    if !backend
+        .hide_photo(workspace, recipe, photo, backend.now_millis())
+        .await?
+    {
         return Err(ApiError::PhotoNotFound);
     }
-    backend
-        .delete_objects(vec![object_key(workspace, recipe, photo.as_str())])
-        .await?;
+    let key = object_key(workspace, recipe, photo.as_str());
+    if let Err(error) = backend.delete_objects(vec![key]).await {
+        log_error(&error);
+        // 元に戻せなければ、隠れたまま残り、自動削除が片付ける。
+        if let Err(restore) = backend.finish_photo(workspace, recipe, photo).await {
+            log_error(&restore);
+        }
+        return Err(ApiError::Internal);
+    }
     backend.delete_photo(workspace, recipe, photo).await?;
     Ok(())
 }
 
-/// 書き込みか削除が終わっていない印が付いたまま、この時間より長く残った写真の行を、自動削除が片付ける（1 時間）。
-/// 追加の途中の行（`waitUntil` で 30 秒まで動く）を片付けないよう、十分に長くする。
+/// 書き込みか削除が終わっていない印を付けてから、この時間より長く残った写真の行を、自動削除が片付ける（1 時間）。
+/// 追加と削除の途中の行（後始末は `waitUntil` で 30 秒まで動く）を片付けないよう、十分に長くする。
+/// 写真の本文を 1 時間より長く送り続けると、追加の途中で片付けられ、その写真は `404`（`photo_not_found`）になる。
 pub const PENDING_CLEANUP_AFTER_MILLIS: i64 = 60 * 60 * 1_000;
 
 /// 印の付いた写真の行を片付けた結果。
@@ -487,7 +498,8 @@ pub struct PendingCleanup {
 /// 定期実行（自動削除）で呼ぶ。書き込みか削除の途中で失敗して、印が付いたまま残った写真の行を、R2 のデータと一緒に消す。
 ///
 /// R2 を先に消す（[`remove`] と同じ理由）。R2 にデータが無くても（書く前に失敗した）、R2 の削除は失敗しない。
-/// 1 つの行で失敗しても、ほかの行は片付ける。失敗した行は、次の日にもう一度試す。
+/// R2 のデータは、1 回の削除で消せる数ずつまとめて消し、消せた分の行を 1 つずつ消す。
+/// 失敗した行は残し、次の日にもう一度試す。
 pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup {
     let mut summary = PendingCleanup::default();
     let rows = match backend
@@ -501,6 +513,7 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
             return summary;
         }
     };
+    let mut targets = Vec::new();
     for row in rows {
         let ids = (
             WorkspaceId::parse(&row.workspace_id),
@@ -515,17 +528,27 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
             summary.failed += 1;
             continue;
         };
-        let key = object_key(&workspace, &recipe, photo.as_str());
+        targets.push((workspace, recipe, photo));
+    }
+    // 1,000 は usize に収まる。
+    let per_delete = usize::try_from(MAX_KEYS_PER_DELETE).unwrap_or(1);
+    for chunk in targets.chunks(per_delete) {
+        let keys = chunk
+            .iter()
+            .map(|(workspace, recipe, photo)| object_key(workspace, recipe, photo.as_str()))
+            .collect();
         // 失敗の理由は、BackendError を ApiError に変えるところでログに出している。
-        if delete_objects(backend, vec![key]).await.is_err() {
-            summary.failed += 1;
+        if delete_objects(backend, keys).await.is_err() {
+            summary.failed += chunk.len();
             continue;
         }
-        match backend.delete_photo(&workspace, &recipe, &photo).await {
-            Ok(_) => summary.cleaned += 1,
-            Err(error) => {
-                log_error(&error);
-                summary.failed += 1;
+        for (workspace, recipe, photo) in chunk {
+            match backend.delete_photo(workspace, recipe, photo).await {
+                Ok(_) => summary.cleaned += 1,
+                Err(error) => {
+                    log_error(&error);
+                    summary.failed += 1;
+                }
             }
         }
     }
@@ -555,7 +578,7 @@ const _: () = assert!(
 
 /// 写真のデータを、キーで R2 から消す。キーが無ければ R2 を呼ばない。
 ///
-/// キーは、1 つのワークスペースの写真のものだけを渡す（1 回で消せる数に収まるように）。
+/// キーは、1 回で消せる数（1,000）までを渡す（1 つのワークスペースの写真は、それに収まる）。
 pub async fn delete_objects<B: Backend>(backend: &B, keys: Vec<String>) -> Result<(), ApiError> {
     if keys.is_empty() {
         return Ok(());

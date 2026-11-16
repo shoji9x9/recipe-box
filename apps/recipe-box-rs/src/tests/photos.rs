@@ -702,7 +702,7 @@ async fn pending_rows_count_toward_limits_until_cleaned_up() {
     for i in 0..MAX_PHOTOS_PER_RECIPE {
         let id = format!("{i:032x}");
         backend.add_photo_row(WORKSPACE_A, &recipe, &id, 1);
-        backend.pending_photos.lock().unwrap().insert(id);
+        backend.mark_pending(&id, NOW);
     }
     let response = upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
     assert_eq!(response.status, StatusCode::CONFLICT);
@@ -722,11 +722,7 @@ async fn recent_pending_rows_are_not_cleaned_up() {
     let (backend, recipe) = setup().await;
     // 追加の途中かもしれない行（印を付けてから 1 時間たっていない）は片付けない。
     backend.add_photo_row(WORKSPACE_A, &recipe, "0123456789abcdef0123456789abcdef", 1);
-    backend
-        .pending_photos
-        .lock()
-        .unwrap()
-        .insert("0123456789abcdef0123456789abcdef".to_owned());
+    backend.mark_pending("0123456789abcdef0123456789abcdef", NOW);
     backend.advance(crate::photo::PENDING_CLEANUP_AFTER_MILLIS);
     let summary = crate::workspace::delete_unused(&backend).await;
     assert_eq!(summary.pending_photos.cleaned, 0);
@@ -737,11 +733,7 @@ async fn recent_pending_rows_are_not_cleaned_up() {
 async fn failed_cleanup_is_reported_and_retried_next_time() {
     let (backend, recipe) = setup().await;
     backend.add_photo_row(WORKSPACE_A, &recipe, "0123456789abcdef0123456789abcdef", 1);
-    backend
-        .pending_photos
-        .lock()
-        .unwrap()
-        .insert("0123456789abcdef0123456789abcdef".to_owned());
+    backend.mark_pending("0123456789abcdef0123456789abcdef", NOW);
     pass_cleanup_time(&backend);
     let broken = FakeBackend {
         broken_r2_delete: true,
@@ -755,4 +747,61 @@ async fn failed_cleanup_is_reported_and_retried_next_time() {
     let summary = crate::workspace::delete_unused(&backend).await;
     assert_eq!(summary.pending_photos.cleaned, 1);
     assert!(backend.photos.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn photo_whose_r2_delete_failed_stays_visible_and_can_be_deleted_again() {
+    let (backend, recipe) = setup().await;
+    let id = upload(&backend, WORKSPACE_A, &recipe, jpeg(10))
+        .await
+        .json()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let broken = FakeBackend {
+        broken_r2_delete: true,
+        ..backend.clone()
+    };
+    let path = format!("/api/recipes/{recipe}/photos/{id}");
+    let response = call(&broken, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    // R2 のデータが残っているので、印を外して元に戻し、もう一度消せるようにする。
+    assert!(!backend.is_pending(&id));
+    assert_eq!(listed_photos(&backend, &recipe).await, 1);
+    let response = call(&backend, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+    assert!(backend.objects.lock().unwrap().is_empty());
+    assert!(backend.photos.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_counts_time_from_when_the_row_was_marked() {
+    let (backend, recipe) = setup().await;
+    // 何日も前に追加した写真を、今まさに消している（印を付けたのは今）。
+    let id = "0123456789abcdef0123456789abcdef";
+    backend.add_photo_row_at(WORKSPACE_A, &recipe, id, 1, NOW - 3 * DAY_MILLIS);
+    backend.mark_pending(id, NOW);
+    let summary = crate::workspace::delete_unused(&backend).await;
+    assert_eq!(summary.pending_photos.cleaned, 0);
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn deleting_a_recipe_removes_the_data_of_its_pending_photos() {
+    let (backend, recipe) = setup().await;
+    // R2 には書けたが、印を外せなかった写真（画面と API には出ない）。
+    let broken = FakeBackend {
+        broken_photo_pending: true,
+        ..backend.clone()
+    };
+    let response = upload(&broken, WORKSPACE_A, &recipe, jpeg(10)).await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(backend.objects.lock().unwrap().len(), 1);
+    // レシピを消すと、印の付いた写真の行とデータも消える。
+    let path = format!("/api/recipes/{recipe}");
+    let response = call(&backend, Method::DELETE, &path, Some(WORKSPACE_A), None).await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+    assert!(backend.objects.lock().unwrap().is_empty());
+    assert!(backend.photos.lock().unwrap().is_empty());
+    assert!(backend.pending_photos.lock().unwrap().is_empty());
 }

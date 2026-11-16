@@ -62,8 +62,9 @@ pub struct FakeBackend {
     pub last_used_writes: Arc<AtomicUsize>,
     /// 写真の行。ワークスペースの ID・レシピの ID・写真の情報。
     pub photos: Arc<Mutex<Vec<(String, String, Photo)>>>,
-    /// 書き込みか削除が終わっていない印（`pending`）の付いた写真の ID（写真の ID は乱数なので、ID だけで見分ける）。
-    pub pending_photos: Arc<Mutex<HashSet<String>>>,
+    /// 書き込みか削除が終わっていない印（`pending_since`）の付いた写真の ID と、印を付けた日時
+    /// （写真の ID は乱数なので、ID だけで見分ける。行を消すときは、印も消す）。
+    pub pending_photos: Arc<Mutex<HashMap<String, i64>>>,
     /// `true` なら、写真の印を外す・付けるのが失敗したことにする（D1 の失敗）。
     pub broken_photo_pending: bool,
     /// `true` なら、写真の行を消すのが失敗したことにする（D1 の失敗）。
@@ -170,7 +171,23 @@ impl FakeBackend {
 
     /// 写真の行に、書き込みか削除が終わっていない印が付いているか。
     pub fn is_pending(&self, id: &str) -> bool {
-        self.pending_photos.lock().unwrap().contains(id)
+        self.pending_photos.lock().unwrap().contains_key(id)
+    }
+
+    /// 写真の行に、日時 `since` の印を付ける（途中で残った行を作るテストで使う）。
+    pub fn mark_pending(&self, id: &str, since: i64) {
+        self.pending_photos
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), since);
+    }
+
+    /// 消した写真の行の印を消す（本物では、印は行の列なので、行と一緒に消える）。
+    fn forget_pending<'a>(&self, ids: impl IntoIterator<Item = &'a String>) {
+        let mut pending = self.pending_photos.lock().unwrap();
+        for id in ids {
+            pending.remove(id);
+        }
     }
 
     /// 写真の行に、印が付いていないか（見せる写真か）。
@@ -178,13 +195,13 @@ impl FakeBackend {
         !self.is_pending(&photo.id)
     }
 
-    /// 写真の印を `pending` にする。印が既にその値か、行が無ければ `false` を返す。
+    /// 写真の印を付ける（`since` が日時）か外す（`None`）。付けるときは印の無い行に、外すときは印の付いた行にだけ効く。
     fn set_pending(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
-        pending: bool,
+        since: Option<i64>,
     ) -> BackendResult<bool> {
         self.check()?;
         if self.broken_photo_pending {
@@ -196,11 +213,14 @@ impl FakeBackend {
         if !exists {
             return Ok(false);
         }
-        let mut set = self.pending_photos.lock().unwrap();
-        Ok(if pending {
-            set.insert(id.as_str().to_owned())
-        } else {
-            set.remove(id.as_str())
+        let mut pending = self.pending_photos.lock().unwrap();
+        Ok(match since {
+            Some(since) if !pending.contains_key(id.as_str()) => {
+                pending.insert(id.as_str().to_owned(), since);
+                true
+            }
+            Some(_) => false,
+            None => pending.remove(id.as_str()).is_some(),
         })
     }
 
@@ -501,6 +521,7 @@ impl Backend for FakeBackend {
                 .map(|(_, _, p)| p.id.clone())
                 .collect();
             photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
+            self.forget_pending(&removed);
             Some(removed)
         }))
     }
@@ -538,6 +559,7 @@ impl Backend for FakeBackend {
                 .lock()
                 .unwrap()
                 .retain(|(w, _, _)| w != workspace.as_str());
+            self.forget_pending(removed.iter().map(|key| &key.id));
             // 別のリクエストが先に（同じように）消していたなら、この削除では何も消えていない。
             if self.workspace_vanishes_on_delete {
                 return None;
@@ -588,9 +610,25 @@ impl Backend for FakeBackend {
             }
             photos.push((workspace.to_string(), recipe.to_string(), photo.clone()));
             // 本物と同じく、R2 への書き込みが終わっていない印を付けて入れる。
-            self.pending_photos.lock().unwrap().insert(photo.id.clone());
+            self.mark_pending(&photo.id, photo.created_at);
             uploads.push(photo.created_at);
             PhotoInsert::Inserted
+        }))
+    }
+
+    fn list_recipe_photo_ids(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
+        ready(self.check().map(|()| {
+            self.photos
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
+                .map(|(_, _, p)| p.id.clone())
+                .collect()
         }))
     }
 
@@ -648,7 +686,11 @@ impl Backend for FakeBackend {
             photos.retain(|(w, r, p)| {
                 !(w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str())
             });
-            photos.len() < before
+            let deleted = photos.len() < before;
+            if deleted {
+                self.forget_pending([&id.as_str().to_owned()]);
+            }
+            deleted
         }))
     }
 
@@ -658,7 +700,7 @@ impl Backend for FakeBackend {
         recipe: &RecipeId,
         id: &PhotoId,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        ready(self.set_pending(workspace, recipe, id, false))
+        ready(self.set_pending(workspace, recipe, id, None))
     }
 
     fn hide_photo(
@@ -666,8 +708,9 @@ impl Backend for FakeBackend {
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
+        now: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        ready(self.set_pending(workspace, recipe, id, true))
+        ready(self.set_pending(workspace, recipe, id, Some(now)))
     }
 
     fn list_pending_photos(
@@ -679,7 +722,13 @@ impl Backend for FakeBackend {
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(_, _, p)| self.is_pending(&p.id) && p.created_at < before)
+                .filter(|(_, _, p)| {
+                    self.pending_photos
+                        .lock()
+                        .unwrap()
+                        .get(&p.id)
+                        .is_some_and(|&since| since < before)
+                })
                 .map(|(w, r, p)| PendingPhoto {
                     workspace_id: w.clone(),
                     recipe_id: r.clone(),

@@ -66,7 +66,7 @@ pub struct PhotoKey {
     pub id: String,
 }
 
-/// 書き込みか削除が終わっていない印（`pending`）の付いた写真の行（自動削除が片付ける）。
+/// 書き込みか削除が終わっていない印（`pending_since`）の付いた写真の行（自動削除が片付ける）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PendingPhoto {
     pub workspace_id: String,
@@ -245,7 +245,8 @@ pub trait Backend: Clone + Send + Sync + 'static {
 
     /// 写真の行と、追加の記録を保存する。`limits` のどれかに当たれば保存せず、その理由を返す。
     /// 上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えないようにする。
-    /// 行は、R2 への書き込みが終わっていない印（`pending`）を付けて入れる（[`Backend::finish_photo`] で外す）。
+    /// 行は、R2 への書き込みが終わっていない印（`pending_since`。日時は `photo.created_at`）を付けて入れる
+    /// （[`Backend::finish_photo`] で外す）。
     /// 上限は、印の付いた行も数える。
     fn insert_photo(
         &self,
@@ -255,7 +256,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
         limits: &PhotoLimits,
     ) -> impl Future<Output = BackendResult<PhotoInsert>> + Send;
 
-    /// 写真の行の、書き込みが終わっていない印を外し、見せる写真にする。行が無ければ（書いている間に消された）`false` を返す。
+    /// 写真の行の、書き込みか削除が終わっていない印を外し、見せる写真にする。印の付いた行が無ければ `false` を返す。
     fn finish_photo(
         &self,
         workspace: &WorkspaceId,
@@ -263,15 +264,17 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &PhotoId,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
 
-    /// 印の無い写真の行に、削除が終わっていない印を付けて隠す（写真の削除の始め）。印の無い行が無ければ `false` を返す。
+    /// 印の無い写真の行に、削除が終わっていない印（日時は `now`）を付けて隠す（写真の削除の始め）。
+    /// 印の無い行が無ければ `false` を返す。
     fn hide_photo(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
+        now: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
 
-    /// 印が付いたまま、追加した日時が `before` より前の写真の行を返す（自動削除の対象）。
+    /// 印を付けた日時が `before` より前の写真の行を返す（自動削除の対象）。
     /// ID の形は確かめない（呼び出し側が確かめ、正しくない行を失敗に数える）。
     fn list_pending_photos(
         &self,
@@ -284,6 +287,13 @@ pub trait Backend: Clone + Send + Sync + 'static {
         workspace: &WorkspaceId,
         recipe: &RecipeId,
     ) -> impl Future<Output = BackendResult<Vec<Photo>>> + Send;
+
+    /// レシピの写真の行の ID を、印の有無にかかわらず返す（レシピを消すときに、R2 のデータを消すため）。
+    fn list_recipe_photo_ids(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send;
 
     /// 写真の行を 1 件返す。無いか、印が付いていれば `None` を返す。
     fn get_photo(
