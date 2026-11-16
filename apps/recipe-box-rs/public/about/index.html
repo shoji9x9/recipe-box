@@ -151,7 +151,7 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
 <p><code>wrangler</code> は、Workers の開発とデプロイの道具です。<code>wrangler dev</code>（<code>mise run dev</code>）は、Workers の実行環境（workerd）と、D1・R2・Rate Limiting をまねたもの（Miniflare）を手元で動かします。
 Cloudflare のアカウントは要りません。データは <code>apps/recipe-box-rs/.wrangler/state</code> に置かれます。
 手順は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/development.md">docs/development.md</a> にあります。</p>
-<p>main に入った変更は、GitHub Actions の <code>deploy.yml</code> が本番にデプロイします。D1 と R2 のバケットが無ければ作り、D1 にマイグレーションを当ててから、Worker を入れ替え、本番が応答するかを読むだけのリクエストで確かめます。
+<p>main に入った変更は、GitHub Actions の <code>deploy.yml</code> が本番にデプロイします。D1 と R2 のバケットが無ければ作り、D1 にマイグレーションを当ててから、Worker を入れ替え、本番が応答するかを GET のリクエストで確かめます。
 失敗したときの戻し方は、<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/development.md#%E3%83%87%E3%83%97%E3%83%AD%E3%82%A4%E3%81%8C%E5%A4%B1%E6%95%97%E3%81%97%E3%81%9F%E3%81%A8%E3%81%8D">docs/development.md の「デプロイが失敗したとき」</a>にあります。
 ローカルと本番で動きが違うもの（Cron Trigger の起動のしかた、回数の制限の数え方など）は、<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E3%83%AA%E3%83%A9%E3%82%A4%E3%83%88%E3%81%AE%E6%AF%94%E8%BC%83%E3%81%AE%E5%9F%BA%E6%BA%96">docs/architecture.md の「リライトの比較の基準」</a>に表があります。</p>
 <h3 id="運用ログwrangler-tailmetrics">運用（ログ・wrangler tail・Metrics）</h3>

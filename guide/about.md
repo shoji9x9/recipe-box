@@ -78,7 +78,7 @@ Worker は、リクエストの入口（`fetch`）とは別の入口（`schedule
 Cloudflare のアカウントは要りません。データは `apps/recipe-box-rs/.wrangler/state` に置かれます。
 手順は [docs/development.md](repo:docs/development.md) にあります。
 
-main に入った変更は、GitHub Actions の `deploy.yml` が本番にデプロイします。D1 と R2 のバケットが無ければ作り、D1 にマイグレーションを当ててから、Worker を入れ替え、本番が応答するかを読むだけのリクエストで確かめます。
+main に入った変更は、GitHub Actions の `deploy.yml` が本番にデプロイします。D1 と R2 のバケットが無ければ作り、D1 にマイグレーションを当ててから、Worker を入れ替え、本番が応答するかを GET のリクエストで確かめます。
 失敗したときの戻し方は、[docs/development.md の「デプロイが失敗したとき」](repo:docs/development.md#デプロイが失敗したとき)にあります。
 ローカルと本番で動きが違うもの（Cron Trigger の起動のしかた、回数の制限の数え方など）は、[docs/architecture.md の「リライトの比較の基準」](repo:docs/architecture.md#リライトの比較の基準)に表があります。
 

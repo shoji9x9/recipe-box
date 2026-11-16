@@ -35,6 +35,10 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          # .claude/skills/ は外から入れたスキル（AGENTS.md の「スキル」）で、ここでは直さないので解析しない。
+          config: |
+            paths-ignore:
+              - .claude/skills
       - uses: github/codeql-action/analyze@v4.39.3
         with:
           category: /language:${{ matrix.language }}

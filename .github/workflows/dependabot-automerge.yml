@@ -113,7 +113,8 @@ jobs:
           set -euo pipefail
           # 55 分（30 秒 × 110 回）まで待つ。timeout-minutes より短くし、時間切れを warning で知らせる。
           for _ in $(seq 1 110); do
-            state="$(gh pr view "$PR_URL" --json state --jq .state)"
+            # API の一時的な失敗では止めず、次の回に読み直す。
+            state="$(gh pr view "$PR_URL" --json state --jq .state || true)"
             case "$state" in
               MERGED)
                 gh workflow run deploy.yml --repo "$REPO" --ref main
@@ -127,4 +128,5 @@ jobs:
             esac
             sleep 30
           done
-          echo "::warning::55 分待ってもマージされなかったので、デプロイしない（マージされたら Actions の画面から deploy.yml を手で動かす）"
+          # ブランチが古く（BEHIND）て止まった PR は、@dependabot rebase で作り直すと、新しい run が待ち直してデプロイする。
+          echo "::warning::55 分待ってもマージされなかったので、この run ではデプロイしない（docs/development.md の「最低限のメンテナンス」）"

@@ -111,7 +111,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `codeql.yml` | Rust のコード・JavaScript と TypeScript・workflow を CodeQL で解析する |
 | `claude-review.yml` | PR を Claude Code でレビューする |
 | `seed-demo.yml` | 毎日 UTC の 19 時（日本時間の 4 時）に、共有のデモを seed で入れ直す（手でも実行できる） |
-| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。D1 と R2 のバケットが無ければ作り、先に D1 にマイグレーションを当てる。デプロイの後に、本番の API・トップの画面・静的アセットが 200 を返すかを、読むだけのリクエストで確かめる |
+| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。D1 と R2 のバケットが無ければ作り、先に D1 にマイグレーションを当てる。デプロイの後に、本番の API・トップの画面・静的アセットが 200 を返すかを、GET で確かめる |
 | `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする。GITHUB_TOKEN でのマージでは `deploy.yml` の push が動かないので、マージされるのを待って `deploy.yml` を起動する |
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
 
@@ -187,7 +187,7 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
 - Dependabot の PR と、`outdated.yml` が作る mise のツールの Issue を見る。
 - 自動でマージされない PR（ラベル `dependabot/needs-review`）は、`dependabot-merge` スキルで確かめてマージする。挙動が変わる更新なら、`fix(deps):` にして文書も直す（AGENTS.md の「ブランチと PR」）。
 - `modern-web-guidance` のパッケージを上げる PR では、同じ PR で、同じ版のスキルを入れ直す（AGENTS.md の「スキル」）。
-- main が先に進んで、ブランチが古い（BEHIND）まま止まった Dependabot の PR は、PR に `@dependabot rebase` とコメントして作り直させる（main は、ブランチが最新であることを必須にしている）。
+- main が先に進んで、ブランチが古い（BEHIND）まま止まった Dependabot の PR は、PR に `@dependabot rebase` とコメントして作り直させる（main は、ブランチが最新であることを必須にしている）。作り直すと、マージを待ってデプロイする job（`dependabot-automerge.yml`）も待ち直す。
 
 ### 毎月
 
