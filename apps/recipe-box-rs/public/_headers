@@ -13,7 +13,7 @@
   Referrer-Policy: same-origin
 
 # 解説の図（mise run guide が D2 で作る SVG）。図を押すと SVG をそのまま開くので、SVG の中のスクリプトを動かさない。
-# D2 は、図の中にスタイル（<style>）とフォント（data: の URL）を入れるので、それだけを許す。
+# D2 は、図の中にスタイル（<style>）を入れるので、それだけを許す。フォントは埋め込まず（mise run guide が取り除く）、OS のフォントで描くので、font-src は許さない。
 /assets/guide/*
-  Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff

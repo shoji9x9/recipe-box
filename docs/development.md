@@ -51,7 +51,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 - スモークテスト（`scripts/smoke-test.ts`、`mise run smoke`）は、起動した Worker に HTTP で API を呼び、本物に近い D1・R2・Rate Limiting を通して確かめる。値と応答の形は `docs/spec.md` を正にする。
   確かめるものは、次の 2 つに分かれる。リライトの後の新しいアプリには、`API_ONLY=1` を付け、`SCHEDULED_LOG` を付けずに当てる（`docs/architecture.md` の「リライトの比較の基準」）。
   - API（`docs/spec.md` の「API」）だけで確かめるもの。いつも確かめる。回数の制限は `CHECK_RATE_LIMIT=1` のときだけ確かめる。
-  - 今の作りに頼るもの。画面と静的アセット（`/` の文字・`/assets/` のファイル・`/about` の `public/_headers`）は、`API_ONLY=1` のときは確かめない。
+  - 今の作りに頼るもの。画面と静的アセット（`/` の文字・`/assets/` のファイル・`/about` と `/assets/guide/` の `public/_headers`）は、`API_ONLY=1` のときは確かめない。
     定期の自動削除（`SCHEDULED_LOG` のときだけ。wrangler でローカルの D1 の表を書き換え、ログの文を読む）も、今の作りに頼る。
   - ワークスペースを作る数が 1 日の作成の上限（docs/security.md の「費用の対策」）に近づかないよう、確かめる項目を足すときは、作ったワークスペースを使い回す。
 
@@ -94,9 +94,10 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 アプリの作りの解説（`/about/`）は、元の文章（`guide/about.md`）と図の元（`guide/*.d2`）から `mise run guide` で作る。作ったもの（`apps/recipe-box-rs/public/about/index.html` と `apps/recipe-box-rs/public/assets/guide/*.svg`）も commit する。手で直さない。
 
 - Markdown は markdown-it（`package.json` で版を固定）で HTML にし、図は D2（`mise.toml` で版を固定）で SVG にする。どちらも外部と通信しない。
-  - D2 は文字を英字だけのフォントで描くので、日本語の形が英字とそろうよう、生成が SVG のフォントの指定を書き換える（ゴシックを候補に足し、太字は太さを書く。`scripts/guide-lib.ts` の `fontFallback`）。
-    D2 の版を上げて出力の形が変わると、生成が失敗する。そのときは、新しい出力に合わせて `fontFallback` を直す。
-    D2 が埋め込むフォントは `THIRD_PARTY_NOTICES.md` に書いている。版を上げて埋め込むフォント（版・著作権の表示を含む）が変わったら、そこも直す。
+  - D2 は SVG にフォント（英字だけを持つ Source Sans Pro）を埋め込むが、生成がそれを取り除き、文字を OS のフォント（画面の文字と同じ並び。日本語はゴシック）で描くように書き換える（太字は太さを書く。`scripts/guide-lib.ts` の `systemFonts`）。
+    第三者のフォントを配らないためと、英字と日本語の形をそろえるためである。
+    D2 の版を上げて出力の形が変わると、生成が失敗する（フォントを埋め込んだままの図は作らない）。そのときは、新しい出力に合わせて `systemFonts` を直す。
+    D2 は文字の幅を埋め込みのフォントで測って図を描くので、OS のフォントでは英字が少し広くなることがある。図を変えたら、文字が枠からはみ出していないかを目で確かめる。
   - 線の文字は斜体にしない（日本語は斜めにならず、英字とそろわない）。各図の元の `...@_style` の次に `(** -> **)[*].style.italic: false` を書く（読み込んだ設定の glob は、読み込んだ先の図に効かないため）。
 - コードと設定は、写して貼らない。`guide/about.md` に `<!-- code: <パス>#<名前> -->` と書き、引用する範囲をそのファイルのコメントの `guide:start <名前>` と `guide:end <名前>` で囲む。印が無いと、生成が失敗する。
   印のあるコードを動かしたり消したりするときは、印も一緒に動かし、`mise run guide` で作り直す。
