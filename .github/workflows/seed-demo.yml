@@ -6,7 +6,7 @@ name: Reset demo
 on:
   # GitHub は、公開リポジトリで 60 日活動が無いと schedule を止める。止まったら Actions の画面で有効にし直す（docs/development.md）。
   schedule:
-    - cron: "0 19 * * *" # 毎日 4:00（日本時間）。使われていないワークスペースの自動削除（3:00）の後
+    - cron: "0 19 * * *" # 毎日 4:00（日本時間）
   workflow_dispatch: {}
 
 permissions: {}

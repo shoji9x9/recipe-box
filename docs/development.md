@@ -120,7 +120,10 @@ main は、ブランチルールで PR を通さない変更と強制 push を�
 D1 のデータベース（`recipe-box`）は、無ければ `deploy.yml` が作る。`wrangler.toml` にはアカウントごとの `database_id` を書かず、wrangler に名前で探させる。
 写真を置く R2 のバケット（`recipe-box-photos`）も、無ければ `deploy.yml` が作る。ローカル（`mise run dev`）では、wrangler が R2 をまねたものを `.wrangler/state` に作る。
 
-使われていないワークスペースの自動削除は、Cron Trigger（`wrangler.toml` の `[triggers]`）で毎日動く。ローカルで確かめるときは、`apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動し、`curl "http://localhost:8787/__scheduled?cron=0+18+*+*+*"` で呼ぶ。
+使われていないワークスペースの自動削除は、Cron Trigger（`wrangler.toml` の `[triggers]`）で 1 時間ごとに動く。ローカルで確かめるときは、`apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動し、`curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"` で呼ぶ。
+結果は起動した端末のログに、「使われていないワークスペースの自動削除が終わった」か「使われていないワークスペースの自動削除で失敗があった」で始まる行で出る。
+CI は、`wrangler dev --test-scheduled` のログを `SCHEDULED_LOG` で smoke に渡し、ワークスペースを古くして写真の行に印を付けてから（wrangler でローカルの D1 を書き換える）`/__scheduled` を呼び、失敗が無く、消えることを確かめる。
+手元で同じことをするときは、`wrangler dev --test-scheduled` の出力をファイルに書き、`SCHEDULED_LOG=<そのファイル> mise run smoke` を実行する。
 
 共有のデモをローカルで試すときは、`mise run dev` を起動した後で、ワークスペースを作って ID をファイルに書き（`curl -s -X POST http://localhost:8787/api/workspaces | jq -r .id > <ID のファイル>`）、`apps/recipe-box-rs/.dev.vars` に `DEMO_WORKSPACE_ID=<ID>` と書いて `mise run dev` を起動し直す。
 その後、`mise run pin -- --local < <ID のファイル>` で印を付け、`mise run seed -- --local < <ID のファイル>` でサンプルを入れる。
@@ -276,5 +279,5 @@ mise run dev                     # ビルドし、ローカルの D1 にマイ�
 - 動いていることは、別の端末で `mise run smoke` を実行して確かめる。smoke はワークスペース・レシピ・写真を作り、回数の制限と 1 日の作成の上限の数も使う。
   そのため、確かめた後は、比べ始める前に Worker を止め、`.wrangler/state` を消してから起動し直す。
 - 定期実行（使われていないワークスペースの自動削除）を比べるときは、`mise run dev` の代わりに、`mise run migrate` の後で `apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動する。
-  `curl "http://localhost:8787/__scheduled?cron=0+18+*+*+*"` で 1 回動き、結果を起動した端末のログ（「使われていないワークスペースの自動削除」）に出す。
+  `curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"` で 1 回動き、結果を起動した端末のログ（「使われていないワークスペースの自動削除」）に出す。
 - 共有のデモのデータを入れるときは、上の「CI と CD」の、共有のデモをローカルで試す手順に従う。

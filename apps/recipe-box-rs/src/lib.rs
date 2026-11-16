@@ -222,10 +222,11 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     console_error_panic_hook::set_once();
     let summary = workspace::delete_unused(&CloudflareBackend::new(env)).await;
     // 失敗の理由は、失敗したところでログに出している（error::log_error）。
+    // CI のスモークテスト（scripts/smoke-test.ts）は、この 2 つの文でログを見分ける。
     if summary.has_failure() {
-        worker::console_error!("使われていないワークスペースの自動削除: {summary:?}");
+        worker::console_error!("使われていないワークスペースの自動削除で失敗があった: {summary:?}");
     } else {
-        worker::console_log!("使われていないワークスペースの自動削除: {summary:?}");
+        worker::console_log!("使われていないワークスペースの自動削除が終わった: {summary:?}");
     }
 }
 // guide:end entry-scheduled
