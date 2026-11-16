@@ -62,7 +62,7 @@
 <p>このページは、元の文章（<a href="https://github.com/shoji9x9/recipe-box/blob/main/guide/about.md">guide/about.md</a>）から <code>mise run guide</code> で作ります。引用するコードは、作るたびにリポジトリのファイルから取り出すので、コードと食い違いません。</p>
 <h2 id="全体の構成">全体の構成</h2>
 <p><a href="/assets/guide/architecture.svg"><img src="/assets/guide/architecture.svg" alt="全体の構成。ブラウザと API の利用者が Cloudflare の Worker と静的アセットにアクセスし、Worker が D1・R2・Rate Limiting を使う。Cron Trigger が毎日 Worker を呼ぶ。GitHub Actions がデプロイとデモの入れ直しをする"></a></p>
-<p>図の見方: 枠は、まとまり（使う人・Cloudflare・GitHub Actions）です。円柱はデータを置くところ（D1・R2）です。四角は、灰色が使う人と GitHub Actions のジョブ、橙が Cloudflare の機能、赤（画面のボタンと同じ色）がこのアプリのコード（Worker）です。</p>
+<p>図の見方: 枠は、まとまり（使う人・Cloudflare・GitHub Actions）で、名前は枠の左上の外に書きます。円柱はデータを置くところ（D1・R2）です。四角は、灰色が使う人と GitHub Actions のジョブ、橙が Cloudflare の機能、赤（画面のボタンと同じ色）がこのアプリのコード（Worker）です。</p>
 <ul>
 <li>画面（HTML）と API（JSON）を、同じ 1 つの Worker が返します。画面は API を呼ばず、Worker の中で同じ処理を使います。</li>
 <li>CSS・JavaScript・このページなどのファイルは、Workers の静的アセットとして配ります。Worker は動きません。</li>
@@ -333,8 +333,8 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 そこで、写真のバイト列をそのまま送る追加では、本文を読みためず、形式を決めるための先頭の数バイトだけを読み、残りはストリームのまま R2 に流します。
 測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> に、仕組みは <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a> と <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
 <h3 id="リクエストの流れ">リクエストの流れ</h3>
-<p><a href="/assets/guide/request-flow.svg"><img src="/assets/guide/request-flow.svg" alt="リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口に進む。ルートが無ければ 404 か 405、middleware の確かめを通らなければ 429・413・403 で断る。通ればワークスペースを決め（API で ID が誤っていれば 400 か 404 で断る）、ハンドラーが入力を確かめて D1・R2 を読み書きし、応答を返す。入力の誤りや上限でも断る"></a></p>
-<p>図の見方: 楕円は始まりと終わり、紫のひし形は「はい」と「いいえ」で先が分かれる確かめ、赤の四角はこのアプリのコードの処理です。赤の破線は、途中で断る応答を返す流れです。</p>
+<p><a href="/assets/guide/request-flow.svg"><img src="/assets/guide/request-flow.svg" alt="リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口に進む。ルートが無ければ 404 か 405、middleware の確かめを通らなければ 429・413・403 で断る。通ればワークスペースを決め（API で ID が誤っていれば 400 か 404 で断る）、ハンドラーが入力と上限を確かめ（通らなければ断る）、D1・R2 を読み書きして応答を返す"></a></p>
+<p>図の見方: 楕円は始まりと終わりです。紫のひし形は「はい」と「いいえ」で先が分かれる確かめで、断る応答は必ずひし形から出ます。赤の四角はこのアプリのコードの処理で、四角からは断りません。赤の破線は断る応答を返す流れで、色の見分けにくい人や白黒の印刷でも通常の流れと区別できるよう、色に加えて破線にしています。</p>
 <ul>
 <li>静的アセットに当たるパスは、Worker を通りません。</li>
 <li>画面の応答には、middleware が CSP などのヘッダーを付けます（図では省いています）。</li>

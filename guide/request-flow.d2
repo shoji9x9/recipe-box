@@ -1,7 +1,9 @@
 # リクエストが届いてから応答を返すまで。mise run guide が SVG にする（docs/development.md の「解説」）。
 # 形の使い分け（解説の本文の「図の見方」と合わせる）:
-#   楕円（terminal）: 始まりと終わり。ひし形（decision）: はい・いいえで先が分かれる確かめ。
-#   四角（app）: このアプリのコードの処理。赤の破線（reject）: 途中で断る応答を返す流れ。
+#   楕円（terminal）: 始まりと終わり。
+#   ひし形（decision）: はい・いいえで先が分かれるところ。断る応答は、必ずひし形から出る。
+#   四角（app）: このアプリのコードの処理。四角からは断る流れを出さない。
+#   赤の破線（reject）: 断る応答を返す流れ。色だけに頼らず、白黒でも通常の流れと見分けられるよう破線にする。
 ...@_style
 
 direction: down
@@ -12,8 +14,9 @@ file: ファイルを返す\n（Worker は動かない） {class: terminal}
 fetch: "Worker の入口（#[event(fetch)]）\n写真のバイト列なら、本文をストリームのまま分けておく" {class: app}
 router: パスとメソッドに合う\nルートがあるか\n（axum の Router） {class: decision}
 mw: "middleware の確かめを通るか\n書き込みの回数・本文の大きさ\n画面の書き込みは送り元（Origin）も" {class: decision}
-ws: "ワークスペースを決める\nAPI: X-Workspace-Id の ID（extractor）\n画面: Cookie の ID か、無ければ共有のデモ\n在れば最終利用日時を更新する（1 時間に 1 回）" {class: app}
-handler: ハンドラー\n入力を確かめ、Backend を通して D1・R2 を読み書きする {class: app}
+ws: "ワークスペースが決まるか\nAPI: X-Workspace-Id の ID（extractor）\n画面: Cookie の ID か、無ければ共有のデモ\n（決まれば最終利用日時を更新する）" {class: decision}
+check: "ハンドラーの確かめを通るか\n入力の形と長さ・レシピや写真の有無・上限\n（上限は D1 に書くときに数える）" {class: decision}
+work: "D1・R2 を読み書きし、応答を作る\n（Backend を通す）" {class: app}
 res: 応答を返す\n（HTML か JSON） {class: terminal}
 reject: 断る応答を返す {class: terminal}
 
@@ -23,9 +26,10 @@ assets -> fetch: いいえ
 fetch -> router
 router -> mw: はい
 mw -> ws: はい
-ws -> handler
-handler -> res
+ws -> check: はい
+check -> work: はい
+work -> res
 router -> reject: いいえ（404・405） {class: reject}
 mw -> reject: いいえ（429・413・403） {class: reject}
-ws -> reject: API の ID の誤り（400・404） {class: reject}
-handler -> reject: 入力の誤り・上限（4xx・503） {class: reject}
+ws -> reject: いいえ（API だけ。400・404） {class: reject}
+check -> reject: いいえ（400・404・409・413・422・429・503） {class: reject}
