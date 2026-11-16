@@ -967,6 +967,45 @@ impl Backend for CloudflareBackend {
         })
     }
 
+    fn delete_photos(
+        &self,
+        photos: &[(WorkspaceId, RecipeId, PhotoId)],
+    ) -> impl Future<Output = BackendResult<()>> + Send {
+        let env = self.env.clone();
+        let rows: Vec<[String; 3]> = photos
+            .iter()
+            .map(|(workspace, recipe, id)| {
+                [
+                    workspace.to_string(),
+                    recipe.to_string(),
+                    id.as_str().to_owned(),
+                ]
+            })
+            .collect();
+        SendFuture::new(async move {
+            let action = "写真の行をまとめて消せない";
+            if rows.is_empty() {
+                return Ok(());
+            }
+            let db = database(&env)?;
+            let statements = rows
+                .into_iter()
+                .map(|values| {
+                    db.prepare(
+                        "DELETE FROM photos WHERE workspace_id = ? AND recipe_id = ? AND id = ?",
+                    )
+                    .bind(&values.map(JsValue::from))
+                    .map_err(|e| backend_error(action, &e))
+                })
+                .collect::<BackendResult<Vec<_>>>()?;
+            // batch は 1 回の呼び出しで、1 つのトランザクションとして実行される。
+            db.batch(statements)
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            Ok(())
+        })
+    }
+
     fn run_to_completion<T: Send + 'static>(
         &self,
         task: impl Future<Output = T> + Send + 'static,

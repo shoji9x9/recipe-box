@@ -303,6 +303,13 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &PhotoId,
     ) -> impl Future<Output = BackendResult<Option<Photo>>> + Send;
 
+    /// 写真の行をまとめて、印の有無にかかわらず消す（自動削除の片付けに使う）。無い行は無視する。追加の記録は消さない。
+    /// 1 回の呼び出しの 1 つのトランザクションで消す。失敗したら、どの行も消えない。
+    fn delete_photos(
+        &self,
+        photos: &[(WorkspaceId, RecipeId, PhotoId)],
+    ) -> impl Future<Output = BackendResult<()>> + Send;
+
     /// 写真の行を、印の有無にかかわらず消す。行が無ければ `false` を返す。追加の記録は消さない。
     fn delete_photo(
         &self,

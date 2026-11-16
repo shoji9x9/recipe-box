@@ -805,3 +805,28 @@ async fn deleting_a_recipe_removes_the_data_of_its_pending_photos() {
     assert!(backend.photos.lock().unwrap().is_empty());
     assert!(backend.pending_photos.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn failed_row_deletion_in_cleanup_keeps_all_rows_for_the_next_run() {
+    let (backend, recipe) = setup().await;
+    for i in 0..3 {
+        let id = format!("{i:032x}");
+        backend.add_photo_row(WORKSPACE_A, &recipe, &id, 1);
+        backend.mark_pending(&id, NOW);
+    }
+    pass_cleanup_time(&backend);
+    // R2 は消せたが、D1 の行をまとめて消すのが失敗した。まとめて消すので、どの行も消えない。
+    let broken = FakeBackend {
+        broken_photo_delete: true,
+        ..backend.clone()
+    };
+    let summary = crate::workspace::delete_unused(&broken).await;
+    assert_eq!(summary.pending_photos.failed, 3);
+    assert_eq!(summary.pending_photos.cleaned, 0);
+    assert_eq!(backend.photos.lock().unwrap().len(), 3);
+    // 次の日に、もう一度試して片付ける。
+    let summary = crate::workspace::delete_unused(&backend).await;
+    assert_eq!(summary.pending_photos.cleaned, 3);
+    assert!(backend.photos.lock().unwrap().is_empty());
+    assert!(backend.pending_photos.lock().unwrap().is_empty());
+}

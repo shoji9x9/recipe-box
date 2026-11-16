@@ -498,7 +498,9 @@ pub struct PendingCleanup {
 /// 定期実行（自動削除）で呼ぶ。書き込みか削除の途中で失敗して、印が付いたまま残った写真の行を、R2 のデータと一緒に消す。
 ///
 /// R2 を先に消す（[`remove`] と同じ理由）。R2 にデータが無くても（書く前に失敗した）、R2 の削除は失敗しない。
-/// R2 のデータは、1 回の削除で消せる数ずつまとめて消し、消せた分の行を 1 つずつ消す。
+/// R2 のデータを 1 回の削除で消せる数（1,000）ずつまとめて消し、消せた分の行を D1 の batch でまとめて消す。
+/// 呼び出しは、選ぶ 1 回と、1,000 行ごとに R2 と D1 の 1 回ずつで、行の数によらない
+/// （無料のプランでは、cron の 1 回の実行の呼び出し（subrequest）の数に上限がある）。
 /// 失敗した行は残し、次の日にもう一度試す。
 pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup {
     let mut summary = PendingCleanup::default();
@@ -542,13 +544,12 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
             summary.failed += chunk.len();
             continue;
         }
-        for (workspace, recipe, photo) in chunk {
-            match backend.delete_photo(workspace, recipe, photo).await {
-                Ok(_) => summary.cleaned += 1,
-                Err(error) => {
-                    log_error(&error);
-                    summary.failed += 1;
-                }
+        // 行は、R2 のデータを消せた分をまとめて消す（1 回の呼び出し。cron の 1 回の実行の呼び出しの数に上限があるため）。
+        match backend.delete_photos(chunk).await {
+            Ok(()) => summary.cleaned += chunk.len(),
+            Err(error) => {
+                log_error(&error);
+                summary.failed += chunk.len();
             }
         }
     }

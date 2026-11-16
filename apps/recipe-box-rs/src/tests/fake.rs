@@ -738,6 +738,30 @@ impl Backend for FakeBackend {
         }))
     }
 
+    fn delete_photos(
+        &self,
+        photos: &[(WorkspaceId, RecipeId, PhotoId)],
+    ) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.broken_photo_delete {
+            return ready(Err(BackendError("壊れた DB（写真の削除）".into())));
+        }
+        ready(self.check().map(|()| {
+            // 本物の batch と同じく、まとめて消す（途中で失敗して一部だけが消えることは無い）。
+            let mut rows = self.photos.lock().unwrap();
+            rows.retain(|(w, r, p)| {
+                !photos.iter().any(|(workspace, recipe, id)| {
+                    w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
+                })
+            });
+            drop(rows);
+            let ids: Vec<String> = photos
+                .iter()
+                .map(|(_, _, id)| id.as_str().to_owned())
+                .collect();
+            self.forget_pending(&ids);
+        }))
+    }
+
     // 偽物には接続が無いので、そのまま待つ。
     async fn run_to_completion<T: Send + 'static>(
         &self,
