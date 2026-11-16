@@ -216,7 +216,9 @@ fn body_error(rejection: &JsonRejection) -> ApiError {
 
 /// パスの ID を読む。形が正しくない ID のレシピは在りえないので、404 にする。
 /// パーセントエンコーディングを外すと UTF-8 にならない ID（`%ff` など）も、axum の既定の 400 ではなく 404 にする。
-fn parse_recipe_id(path: Result<Path<String>, PathRejection>) -> Result<RecipeId, ApiError> {
+pub(crate) fn parse_recipe_id(
+    path: Result<Path<String>, PathRejection>,
+) -> Result<RecipeId, ApiError> {
     let Path(value) = path.map_err(|_| ApiError::RecipeNotFound)?;
     RecipeId::parse(&value).ok_or(ApiError::RecipeNotFound)
 }
