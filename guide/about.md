@@ -47,8 +47,8 @@ Worker のリクエストの数に入らないので、費用がかかりませ�
 ### D1
 
 SQLite を元にしたデータベースです。ワークスペース・レシピ・写真の行（大きさなど）を置きます。
-SQL は標準の範囲で書き、リライトの後に PostgreSQL へ移しても差が出ないようにしています（[AGENTS.md の「SQL」](repo:AGENTS.md)）。
-例外は、ページ分けの `LIMIT ? OFFSET ?` と、料理名の部分一致の `instr` だけです。
+SQL は標準の範囲で書き、リライトで別の DB（PostgreSQL など）へ移しても差が出にくいようにしています（[AGENTS.md の「SQL」](repo:AGENTS.md)）。
+標準から外れるのは、ページ分けの `LIMIT ? OFFSET ?` と、料理名の部分一致の `instr` です。
 
 D1 は、複数の文を `batch` で 1 つのトランザクションとして実行できます。上限を数えることと保存することを 1 つにまとめ、同時に作られても上限を超えないようにしています（[費用の対策](#費用の対策)）。
 テーブルを作る SQL は、番号を付けたマイグレーションのファイル（[apps/recipe-box-rs/migrations/](repo:apps/recipe-box-rs/migrations)）です。デプロイでは、コードを入れ替える前にマイグレーションを当てるので、マイグレーションは表や列を足すだけにします。
@@ -313,7 +313,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 | フロントエンドの言語・フレームワーク | askama で HTML を作り、htmx で一部を入れ替える | [画面](repo:docs/spec.md#画面) | 画面は JavaScript が動かなくても使える仕様である。ブラウザだけで画面を組み立てる SPA にすると守れないので、サーバーで HTML を返すか、段階的な強化（progressive enhancement）にするかを決める |
 | バックエンドの言語・フレームワーク | Rust・axum・workers-rs | [API](repo:docs/spec.md#api) | 画面と API の両方を返す。API はリライトの前後で同じに保つ（スモークテストに使う） |
 | 実行環境（ホスティング） | Cloudflare Workers | [費用の対策](repo:docs/security.md#費用の対策) | Cloudflare のまま動かすか、ほかのプラットフォームに移すか。1 回の CPU 時間・本文の大きさの上限など、プラットフォームの制約で作りが変わる |
-| DB とクエリの書き方 | D1（SQLite）、標準の SQL、`LIMIT ? OFFSET ?`、`instr` | [テーブル](repo:docs/spec.md#テーブル) | どの DB にするか。SQL は標準の範囲なので、移すときに書き換えるのは例外の `LIMIT ? OFFSET ?` と `instr`（PostgreSQL なら `strpos`）だけである。`LOWER` を使わずアプリで作る `search_name` の決まりを保つ。マイグレーションは足すだけにする |
+| DB とクエリの書き方 | D1（SQLite）、標準の SQL、`LIMIT ? OFFSET ?`、`instr` | [テーブル](repo:docs/spec.md#テーブル) | どの DB にするか。SQL は標準の範囲で書いているが、標準から外れる `LIMIT ? OFFSET ?` と `instr`（PostgreSQL なら `strpos`）は、選んだ DB で確かめる。ほかに、上限の判定で条件を左から評価する前提（[費用の対策](repo:docs/security.md#費用の対策)）と、batch のトランザクションの意味も DB で変わる。`LOWER` を使わずアプリで作る `search_name` の決まりを保つ。マイグレーションは足すだけにする |
 | トランザクション | D1 の batch で、数えることと保存することを 1 つにまとめる | [ワークスペースによるデータの分離](repo:docs/spec.md#ワークスペースによるデータの分離) | 上限の判定（同時に追加されても超えない）を、どの分離レベル・ロックで守るか |
 | 写真の保管 | R2。D1 に行を入れて上限を判定してから R2 に書く | [写真](repo:docs/spec.md#写真) | オブジェクトストレージ（R2・S3 など）に置くか、DB に置くか。どちらでも API の仕様は変えない。置き場の料金と制限が変わるので、大きさの上限・合計の上限を見直す（費用の対策を作り直す） |
 | 写真の受け取り | multipart のふつうのフォームと、API はバイト列そのもの。`Content-Length` で先に断る | [写真の API](repo:docs/spec.md#写真の-api) | 本文の上限、形式を先頭のバイトで決めること |

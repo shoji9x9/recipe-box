@@ -2,18 +2,16 @@
  * アプリの解説（/about）のスタイル。画面と同じ style.css の後に読む。
  * 解説は mise run guide が作る静的なページで、CSP でインラインのスタイルを禁じているので、ここにまとめる。
  *
- * 色は画面の変数（style.css の :root）を使い、解説だけで使う淡い色をここで足す。
- * 図（guide/_style.d2）と同じ役割の色にそろえる（Cloudflare は橙、このアプリは画面の主色、データは青）。
+ * 色は画面の変数（style.css の :root）を使い、解説だけで使う色をここで足す。
+ * 主色の淡い色（--guide-accent-soft）は、図（guide/_style.d2）のこのアプリの要素（app）の塗りと同じにする。
  */
 .guide {
   --guide-accent-soft: #fff0f3;
-  --guide-cloudflare: #f38020;
-  --guide-cloudflare-soft: #fff6ee;
-  --guide-store-soft: #eef4ff;
   --guide-code-bg: #1f2328;
   --guide-code-ink: #e6edf3;
-  /* 上に固定したヘッダーの高さ。目次を、その下に固定する */
-  --guide-header-height: 66px;
+  /* 目次を固定する、ページの上からの位置。上に固定したヘッダー（style.css。70〜80px ほど）より下にする。
+     ヘッダーの高さを変えたら、style.css の scroll-padding-top と一緒に直す。 */
+  --guide-toc-top: 96px;
 
   background: var(--surface-soft);
 }
@@ -70,8 +68,8 @@
 
   @media (min-width: 960px) {
     position: sticky;
-    top: calc(var(--guide-header-height) + var(--space-4));
-    max-block-size: calc(100vh - var(--guide-header-height) - var(--space-8));
+    top: var(--guide-toc-top);
+    max-block-size: calc(100vh - var(--guide-toc-top) - var(--space-4));
     overflow-y: auto;
   }
 
@@ -279,8 +277,8 @@
   overflow-wrap: anywhere;
 }
 
-/* 引用するコードの前の「<ファイル> から:」の行 */
-.guide article p:has(+ pre) {
+/* 引用するコードの前の「<ファイル> から:」の行（scripts/guide-lib.ts が cite のクラスを付ける） */
+.guide article p.cite {
   margin-bottom: 0;
   font-size: 13px;
   color: var(--muted);

@@ -113,8 +113,8 @@ pub struct RecipeFields {
 /// 型が違う（`servings` が文字列など）ときは、ここで読めずに `invalid_body` になる。
 ///
 /// `servings` は JSON の数値ならどれでも受け取り（`2.0`・`1e2`・桁の大きな整数も）、[`validate`] で
-/// 「値が 1 から 100 までの整数か」を確かめる。JavaScript の `JSON.parse` は `2` と `2.0` を区別できないので、
-/// 書き方ではなく値で決めると、リライトの後（`Number.isInteger`）と結果がそろう。
+/// 「値が 1 から 100 までの整数か」を確かめる。JSON の読み方は言語によって `2` と `2.0` を区別できない
+/// （JavaScript の `JSON.parse` など）ので、書き方ではなく値で決めると、リライトで言語を変えても結果がそろいやすい。
 #[derive(Debug, Deserialize)]
 pub struct RecipeInput {
     pub name: Option<String>,
@@ -145,7 +145,7 @@ pub fn validate(input: RecipeInput) -> Result<RecipeFields, ApiError> {
 /// 画面はすべての誤りを一度に出し、API は最初の 1 つだけを返す（[`validate`]）。
 ///
 /// 長さは Unicode のコードポイントの数で数える（`chars().count()`）。
-/// バイト数や UTF-16 の長さで数えると、日本語や絵文字でリライトの後と結果が変わるため。
+/// バイト数や UTF-16 の長さで数えると、日本語や絵文字で、リライトで選んだ言語の数え方と結果が変わりうるため。
 /// 同じ理由で、画面の入力欄には `maxlength`（UTF-16 の長さで数える）を付けない。
 pub fn check(input: RecipeInput) -> Result<RecipeFields, Vec<FieldError>> {
     let mut errors = Vec::new();
@@ -153,7 +153,8 @@ pub fn check(input: RecipeInput) -> Result<RecipeFields, Vec<FieldError>> {
 
     let name = input.name.unwrap_or_default();
     // trim は Unicode の White_Space の文字を空白とみなす。
-    // JavaScript の trim は U+FEFF なども空白とみなすので、リライトの後は /^\p{White_Space}*$/u で同じ判定をする。
+    // 言語によって空白とみなす文字が違う（JavaScript の trim は U+FEFF なども空白とみなす）ので、
+    // リライトでは White_Space の文字だけを空白とみなす判定（JavaScript なら /^\p{White_Space}*$/u）にする。
     if name.trim().is_empty() {
         invalid("name", "料理名を入力してください");
     } else if name.chars().count() > MAX_NAME_CHARS {

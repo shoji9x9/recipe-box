@@ -13,6 +13,9 @@ import MarkdownIt from "markdown-it";
 /** 解説のリンクと引用の元にする、公開リポジトリの main のファイルの URL の先頭。 */
 export const REPOSITORY_BLOB = "https://github.com/shoji9x9/recipe-box/blob/main/";
 
+/** expandDirectives が、引用するコードの前に置く行の形。 */
+const CITE_LINE = /^\[[^\]]+\]\(https:\/\/[^)]+\) から:$/;
+
 /** 図を置くパス（Workers の静的アセット）。 */
 export const DIAGRAM_PATH = "/assets/guide/";
 
@@ -71,6 +74,13 @@ function dedent(lines: string[], path: string, name: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * guide/ のファイルの名前から、図の元（.d2）を選ぶ。_ で始まるものは、各図が読み込む共通の設定（_style.d2）なので図にしない。
+ */
+export function diagramSources(files: string[]): string[] {
+  return files.filter((file) => file.endsWith(".d2") && !file.startsWith("_")).sort();
 }
 
 /** 名前（印と図）に使える文字。 */
@@ -240,6 +250,10 @@ export function renderMarkdown(
   const anchors: string[] = [];
   let title = "";
   tokens.forEach((token, i) => {
+    // 引用するコードの前の「<ファイル> から:」の段落に、見た目を分けるクラスを付ける（expandDirectives が作る行）。
+    if (token.type === "paragraph_open" && CITE_LINE.test(tokens[i + 1]?.content ?? "")) {
+      token.attrSet("class", "cite");
+    }
     if (token.type === "heading_open") {
       const text = plainText(tokens[i + 1]?.children ?? null);
       const level = Number(token.tag.slice(1));
@@ -326,11 +340,11 @@ export function renderPage(page: { title: string; html: string; headings: Headin
   <body class="guide">
     <header>
       <a class="brand" href="/">recipe-box</a>
-      <nav><a href="/">レシピ帳に戻る</a></nav>
+      <nav aria-label="サイト"><a href="/">レシピ帳に戻る</a></nav>
     </header>
     <div class="guide-layout">
-      <nav class="toc" aria-label="目次">
-        <p class="toc-title">目次</p>
+      <nav class="toc" aria-labelledby="toc-title">
+        <p class="toc-title" id="toc-title">目次</p>
         <ol>
 ${toc}
         </ol>

@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   checkPath,
+  diagramSources,
   githubSlug,
   expandDirectives,
   extractSnippet,
@@ -104,6 +105,12 @@ describe("expandDirectives", () => {
   });
 });
 
+describe("diagramSources", () => {
+  test("_ で始まる共通の設定と、.d2 でないファイルを除く", () => {
+    expect(diagramSources(["b.d2", "_style.d2", "about.md", "a.d2"])).toEqual(["a.d2", "b.d2"]);
+  });
+});
+
 describe("checkPath", () => {
   test.each(["/etc/passwd", "a/../b", "./a", "a//b"])("%s を断る", (path) => {
     expect(() => checkPath(path)).toThrow(GuideError);
@@ -162,6 +169,16 @@ describe("renderMarkdown", () => {
     expect(result.headings[0]?.text).toBe("Send と リンク");
   });
 
+  test("引用するコードの前の行に、cite のクラスを付ける", () => {
+    const { html } = renderMarkdown(
+      `# 題\n\n[src/a.rs](${REPOSITORY_BLOB}src/a.rs) から:\n\n\`\`\`rust\na\n\`\`\`\n\nふつうの段落\n`,
+      exists,
+      read,
+    );
+    expect(html).toContain('<p class="cite"><a href');
+    expect(html).toContain("<p>ふつうの段落</p>");
+  });
+
   test("ページの中のリンクは、ある見出しなら通す", () => {
     expect(renderMarkdown("# 題\n\n## 一\n\n[a](#一)", exists, read).html).toContain('href="#%E4%B8%80"');
   });
@@ -191,6 +208,14 @@ describe("renderMarkdown", () => {
 });
 
 describe("renderPage", () => {
+  test("目次を左、本文を右に置く入れ物と、レシピ帳に戻るリンクを入れる", () => {
+    const html = renderPage({ title: "題", html: "<p>本文</p>\n", headings: [] });
+    expect(html).toContain('<nav aria-label="サイト"><a href="/">レシピ帳に戻る</a></nav>');
+    expect(html).toMatch(/<div class="guide-layout">\s*<nav class="toc" aria-labelledby="toc-title">/);
+    expect(html).toContain('<p class="toc-title" id="toc-title">目次</p>');
+    expect(html).toMatch(/<main>\s*<h1>題<\/h1>\s*<article>\s*<p>本文<\/p>/);
+  });
+
   test("題と目次を入れ、インラインのスタイルとスクリプトを使わない", () => {
     const html = renderPage({ title: "A & B", html: "<p>本文</p>\n", headings: [{ level: 2, id: "x", text: "<見出し>" }] });
     expect(html).toContain("<title>A &#38; B - recipe-box</title>");

@@ -12,11 +12,11 @@
   <body class="guide">
     <header>
       <a class="brand" href="/">recipe-box</a>
-      <nav><a href="/">レシピ帳に戻る</a></nav>
+      <nav aria-label="サイト"><a href="/">レシピ帳に戻る</a></nav>
     </header>
     <div class="guide-layout">
-      <nav class="toc" aria-label="目次">
-        <p class="toc-title">目次</p>
+      <nav class="toc" aria-labelledby="toc-title">
+        <p class="toc-title" id="toc-title">目次</p>
         <ol>
           <li class="toc-2"><a href="#全体の構成">全体の構成</a></li>
           <li class="toc-2"><a href="#cloudflare-の各サービス">Cloudflare の各サービス</a></li>
@@ -71,7 +71,7 @@
 </ul>
 <h2 id="cloudflare-の各サービス">Cloudflare の各サービス</h2>
 <p>使っているサービスは、すべて <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/wrangler.toml">apps/recipe-box-rs/wrangler.toml</a> に書いています。binding（<code>DB</code> など）は、コードからサービスを使うときの名前です。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/wrangler.toml">apps/recipe-box-rs/wrangler.toml</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/wrangler.toml">apps/recipe-box-rs/wrangler.toml</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-toml"># レシピなどを保存する D1 のデータベース。
 # database_id はアカウントごとの値なので書かない。wrangler は database_name で探す。
 [[d1_databases]]
@@ -120,8 +120,8 @@ Worker のリクエストの数に入らないので、費用がかかりませ�
 <p>画面の応答のヘッダー（CSP など）は Worker が付けますが、静的アセットには Worker が動かないので、<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/public/_headers">public/_headers</a> で付けます。</p>
 <h3 id="d1">D1</h3>
 <p>SQLite を元にしたデータベースです。ワークスペース・レシピ・写真の行（大きさなど）を置きます。
-SQL は標準の範囲で書き、リライトの後に PostgreSQL へ移しても差が出ないようにしています（<a href="https://github.com/shoji9x9/recipe-box/blob/main/AGENTS.md">AGENTS.md の「SQL」</a>）。
-例外は、ページ分けの <code>LIMIT ? OFFSET ?</code> と、料理名の部分一致の <code>instr</code> だけです。</p>
+SQL は標準の範囲で書き、リライトで別の DB（PostgreSQL など）へ移しても差が出にくいようにしています（<a href="https://github.com/shoji9x9/recipe-box/blob/main/AGENTS.md">AGENTS.md の「SQL」</a>）。
+標準から外れるのは、ページ分けの <code>LIMIT ? OFFSET ?</code> と、料理名の部分一致の <code>instr</code> です。</p>
 <p>D1 は、複数の文を <code>batch</code> で 1 つのトランザクションとして実行できます。上限を数えることと保存することを 1 つにまとめ、同時に作られても上限を超えないようにしています（<a href="#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a>）。
 テーブルを作る SQL は、番号を付けたマイグレーションのファイル（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/migrations">apps/recipe-box-rs/migrations/</a>）です。デプロイでは、コードを入れ替える前にマイグレーションを当てるので、マイグレーションは表や列を足すだけにします。</p>
 <h3 id="r2">R2</h3>
@@ -133,7 +133,7 @@ Cloudflare の拠点ごとに数える、おおよその制限です。厳密な
 <h3 id="cron-triggers">Cron Triggers</h3>
 <p>決まった時刻に Worker を呼ぶ機能です。毎日 UTC の 18 時（日本時間の 3 時）に、14 日使われていないワークスペースを消します（<a href="#%E3%83%AF%E3%83%BC%E3%82%AF%E3%82%B9%E3%83%9A%E3%83%BC%E3%82%B9%E3%81%AB%E3%82%88%E3%82%8B%E3%83%87%E3%83%BC%E3%82%BF%E3%81%AE%E5%88%86%E9%9B%A2">ワークスペースによるデータの分離</a>）。
 Worker は、リクエストの入口（<code>fetch</code>）とは別の入口（<code>scheduled</code>）で呼ばれます。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[event(scheduled)]
 async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     console_error_panic_hook::set_once();
@@ -232,7 +232,7 @@ Workers では Wasm にして動かします。JavaScript と違い、<code>null
 <h3 id="workers-rs">workers-rs</h3>
 <p>Rust から Workers の機能（リクエスト・D1・R2・Rate Limiting など）を使うためのライブラリです。
 <code>#[event(fetch)]</code> を付けた関数が、リクエストの入口になります。このアプリは、受け取ったリクエストを axum の Router に渡します。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[event(fetch)]
 async fn fetch(
     req: worker::Request,
@@ -252,7 +252,7 @@ async fn fetch(
 <h3 id="axum">axum</h3>
 <p>Rust の Web フレームワークです。パスとメソッドの組（Router）に、ハンドラーの関数を結び付けます。
 Hono と同じく、ミドルウェア（middleware）で前後の処理を足せます。このアプリは、書き込む API の前に、回数と本文の大きさを確かめる middleware を付けています。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">fn recipe_routes&lt;B: Backend&gt;(backend: B) -&gt; Router&lt;B&gt; {
     Router::new()
         .route(&quot;/recipes&quot;, get(recipe::list::&lt;B&gt;).post(recipe::create::&lt;B&gt;))
@@ -270,7 +270,7 @@ Hono と同じく、ミドルウェア（middleware）で前後の処理を足�
 </code></pre>
 <p>axum らしい点は、extractor です。ハンドラーの引数の型を書くと、axum がリクエストからその値を取り出してから、ハンドラーを呼びます。
 取り出せなければ、ハンドラーを呼ばずに失敗の応答を返します。このアプリは、ワークスペースの ID を確かめる extractor（<code>Workspace</code>）を作り、ID の要る API の引数にしています。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/workspace.rs">apps/recipe-box-rs/src/workspace.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/workspace.rs">apps/recipe-box-rs/src/workspace.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">impl&lt;B: Backend&gt; FromRequestParts&lt;B&gt; for Workspace {
     type Rejection = ApiError;
 
@@ -303,7 +303,7 @@ Hono と同じく、ミドルウェア（middleware）で前後の処理を足�
 <h3 id="htmx">htmx</h3>
 <p>HTML の属性で、「この操作でサーバーに HTML を取りに行き、ページのこの部分を入れ替える」を書くライブラリです。
 一覧の検索では、入力しながら一覧の部分だけを入れ替えます。サーバーは、ふつうの一覧の画面の HTML を返し、htmx がその中の <code>#results</code> だけを取り出して入れ替えます。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/list.html">apps/recipe-box-rs/templates/list.html</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/list.html">apps/recipe-box-rs/templates/list.html</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">&lt;input id=&quot;q&quot; type=&quot;search&quot; name=&quot;q&quot; value=&quot;{{ q }}&quot; placeholder=&quot;料理名で探す&quot; autocomplete=&quot;off&quot; data-search-input
        hx-get=&quot;/&quot; hx-trigger=&quot;search-input changed delay:300ms, search&quot;
        hx-target=&quot;#results&quot; hx-select=&quot;#results&quot; hx-swap=&quot;outerHTML&quot; hx-push-url=&quot;true&quot;&gt;
@@ -314,7 +314,7 @@ CSP でインラインのスクリプトと <code>eval</code> を禁じている
 <h4 id="send-の扱い"><code>Send</code> の扱い</h4>
 <p>axum は、ハンドラーの <code>Future</code> に <code>Send</code>（別のスレッドに渡せること）を求めます。ところが、Workers の値（D1 のデータベースなど）は JavaScript の値なので <code>Send</code> ではありません。
 Workers は 1 つのスレッドで動くので、実際には別のスレッドに渡ることはありません。そこで、workers-rs の <code>SendWrapper</code>・<code>SendFuture</code> で包んで、<code>Send</code> として扱います。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">apps/recipe-box-rs/src/cloudflare.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">apps/recipe-box-rs/src/cloudflare.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">pub struct CloudflareBackend {
     env: SendWrapper&lt;Env&gt;,
     /// リクエストの context（`waitUntil` に使う）。定期実行には無い。
@@ -347,7 +347,7 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 <li>書き込みは、POST の後に別の画面へ移す（リダイレクトする）ので、再読み込みで二重に送りません。</li>
 <li>削除の確認のダイアログは、Invoker Commands（<code>commandfor</code>・<code>command</code> 属性）で開閉します。ボタンの属性だけで <code>&lt;dialog&gt;</code> を開けるので、スクリプトが要りません。</li>
 </ul>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/delete_dialog.html">apps/recipe-box-rs/templates/delete_dialog.html</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/delete_dialog.html">apps/recipe-box-rs/templates/delete_dialog.html</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action) %}
 &lt;button type=&quot;button&quot; class=&quot;text danger&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;show-modal&quot;&gt;{{ dialog_open }}&lt;/button&gt;
 &lt;dialog id=&quot;{{ dialog_id }}&quot; class=&quot;confirm&quot; aria-labelledby=&quot;{{ dialog_id }}-title&quot;&gt;
@@ -367,7 +367,7 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 <h3 id="テストの仕組み">テストの仕組み</h3>
 <p>アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分は、<code>Backend</code> トレイトにまとめています。</p>
 <p>次は、トレイトの先頭（乱数・時計・回数の制限）だけです。ワークスペース・レシピ・写真を読み書きするメソッドが続きます（全体は <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a>）。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">pub trait Backend: Clone + Send + Sync + 'static {
     /// 暗号に使える質の 128 ビットの乱数を返す。
     fn random_128(&amp;self) -&gt; [u8; 16];
@@ -391,7 +391,7 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 </code></pre>
 <p>本番では Cloudflare の機能を使う実装（<code>CloudflareBackend</code>）を、テストではメモリの中で動く偽物（<code>FakeBackend</code>）を使います。
 テストは、偽物を入れた Router にリクエストを送り、応答と、偽物に残ったデータを確かめます。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/tests/workspaces.rs">apps/recipe-box-rs/src/tests/workspaces.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/tests/workspaces.rs">apps/recipe-box-rs/src/tests/workspaces.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[tokio::test]
 async fn create_workspace_returns_new_id() {
     let backend = FakeBackend::default();
@@ -483,7 +483,7 @@ async fn create_workspace_returns_new_id() {
 </table>
 </div>
 <p>IP アドレスごとの回数は、Cloudflare が入れる <code>cf-connecting-ip</code> ヘッダーで数えます。IPv6 は、1 人が使える範囲（上位 64 ビット）でまとめて数えます。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/limits.rs">apps/recipe-box-rs/src/limits.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/limits.rs">apps/recipe-box-rs/src/limits.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">pub fn client_key(headers: &amp;HeaderMap) -&gt; String {
     let ip = headers
         .get(CLIENT_IP_HEADER)
@@ -504,7 +504,7 @@ async fn create_workspace_returns_new_id() {
 </code></pre>
 <p>アプリ全体の上限は、数えることと保存することを 1 つのトランザクションにして、同時に作られても超えないようにします。
 1 日に作った数は、ワークスペースを消しても残る記録（<code>workspace_creations</code>）で数え、作ると消すを繰り返して超えさせません。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">apps/recipe-box-rs/src/cloudflare.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">apps/recipe-box-rs/src/cloudflare.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">// 上限の判定と保存を 1 つの文にして、同時に作られても上限を超えないようにする。
 // FROM の (VALUES (0)) は、1 行だけの表として使う（標準の SQL の書き方）。
 // 全体を数えるので、workspace_id では絞り込まない（AGENTS.md のワークスペースを作るクエリ）。
@@ -551,7 +551,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 </ul>
 <h3 id="ciセキュリティサプライチェーン攻撃への対策">CI・セキュリティ・サプライチェーン攻撃への対策</h3>
 <p>画面の応答には、CSP（スクリプトとスタイルは自分のドメインのファイルだけ、インラインは禁止）などのヘッダーを付けます。</p>
-<p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/screen.rs">apps/recipe-box-rs/src/screen.rs</a> から:</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/screen.rs">apps/recipe-box-rs/src/screen.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">const SECURITY_HEADERS: [(HeaderName, &amp;str); 4] = [
     (
         header::CONTENT_SECURITY_POLICY,
@@ -645,7 +645,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <td>DB とクエリの書き方</td>
 <td>D1（SQLite）、標準の SQL、<code>LIMIT ? OFFSET ?</code>、<code>instr</code></td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB">テーブル</a></td>
-<td>どの DB にするか。SQL は標準の範囲なので、移すときに書き換えるのは例外の <code>LIMIT ? OFFSET ?</code> と <code>instr</code>（PostgreSQL なら <code>strpos</code>）だけである。<code>LOWER</code> を使わずアプリで作る <code>search_name</code> の決まりを保つ。マイグレーションは足すだけにする</td>
+<td>どの DB にするか。SQL は標準の範囲で書いているが、標準から外れる <code>LIMIT ? OFFSET ?</code> と <code>instr</code>（PostgreSQL なら <code>strpos</code>）は、選んだ DB で確かめる。ほかに、上限の判定で条件を左から評価する前提（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a>）と、batch のトランザクションの意味も DB で変わる。<code>LOWER</code> を使わずアプリで作る <code>search_name</code> の決まりを保つ。マイグレーションは足すだけにする</td>
 </tr>
 <tr>
 <td>トランザクション</td>
