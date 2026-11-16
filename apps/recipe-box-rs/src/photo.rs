@@ -5,6 +5,7 @@
 //!
 //! 写真はバイト列をそのまま本文で受け取る（multipart にしない）。形式は `Content-Type` ではなく、
 //! 中身の先頭のバイトで決める。宣言と中身が違うファイルを、別の形式として配らないため。
+//! 撮った場所などのメタデータは、保存する前に取り除く（[`crate::metadata`]）。
 
 use axum::{
     Extension, Json,
@@ -19,6 +20,7 @@ use crate::{
     backend::{Backend, BackendError, PhotoInsert, PhotoLimits},
     error::{ApiError, log_error, run_to_completion_or_internal},
     id,
+    metadata::{self, Rejection},
     recipe::RecipeId,
     stream::{self, PhotoStream, RawPhotoBody},
     workspace::{MAX_WORKSPACES, Workspace, WorkspaceId},
@@ -140,11 +142,23 @@ impl PhotoBody {
         }
     }
 
-    /// 形式を決めるのに使う、本文の先頭。
-    fn head(&self) -> &[u8] {
-        match self {
-            Self::Bytes(bytes) => bytes,
-            Self::Stream(stream) => &stream.head,
+    /// 頭の部分のメタデータを取り除き（[`metadata`]）、形式を返す。形式が違うか、頭の部分の形が正しくなければ断る。
+    ///
+    /// ストリームの本文は、頭の部分を読んだとき（[`stream::open`]）に書き換えを済ませているので、その結果を返す。
+    fn strip_metadata(&mut self) -> Result<PhotoFormat, ApiError> {
+        let format = match self {
+            Self::Bytes(bytes) => metadata::strip(bytes),
+            Self::Stream(stream) => stream.format,
+        };
+        format.map_err(ApiError::from)
+    }
+}
+
+impl From<Rejection> for ApiError {
+    fn from(rejection: Rejection) -> Self {
+        match rejection {
+            Rejection::Unsupported => Self::UnsupportedPhotoType,
+            Rejection::WebpMetadata => Self::UnsupportedPhotoMetadata,
         }
     }
 }
@@ -271,7 +285,7 @@ pub async fn create<B: Backend>(
 
 /// 写真を追加する。API と画面の両方から使う。
 ///
-/// 1. デモでないか、大きさ、形式を確かめる（D1 も R2 も使わない）。
+/// 1. デモでないか、大きさ、形式を確かめ、メタデータを取り除く（D1 も R2 も使わない。壊れた写真はここで断る）。
 /// 2. D1 に行と追加の記録を入れる。上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えない。
 ///    行には、R2 への書き込みが終わっていない印を付ける（画面と API に見せない。上限には数える）。
 /// 3. R2 に書き込む。失敗したら、D1 の行を消す（追加の記録は残し、回数に数える）。
@@ -283,13 +297,14 @@ pub async fn add<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
     recipe: &RecipeId,
-    body: PhotoBody,
+    mut body: PhotoBody,
 ) -> Result<Photo, ApiError> {
     deny_demo(backend, workspace)?;
     if body.len() > MAX_PHOTO_BYTES {
         return Err(ApiError::PayloadTooLarge);
     }
-    let format = PhotoFormat::detect(body.head()).ok_or(ApiError::UnsupportedPhotoType)?;
+    // 長さは変えないので、大きさ（size）と上限の数え方は、取り除く前と同じである。
+    let format = body.strip_metadata()?;
     let now = backend.now_millis();
     let photo = Photo {
         id: PhotoId::from_bytes(backend.random_128()).0,

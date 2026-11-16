@@ -45,8 +45,10 @@ pub enum ApiError {
     PhotoLimitReached,
     /// ワークスペースの写真の大きさの合計が上限に達する。
     PhotoStorageLimitReached,
-    /// 写真の形式が JPEG・PNG・WebP のどれでもない（中身の先頭のバイトで決める）。
+    /// 写真の形式が JPEG・PNG・WebP のどれでもないか、頭の部分の形が正しくない（中身の先頭の部分で決める。[`crate::metadata`]）。
     UnsupportedPhotoType,
+    /// メタデータ（EXIF・XMP）を持つと印で分かる WebP。頭だけでは取り除けないので断る（[`crate::metadata`]）。
+    UnsupportedPhotoMetadata,
     /// 共有のデモでは、写真を追加・削除できない。
     DemoPhotosDisabled,
     /// 共有のデモのワークスペースは削除できない。
@@ -142,7 +144,12 @@ impl ApiError {
             Self::UnsupportedPhotoType => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_photo_type",
-                "写真は JPEG・PNG・WebP のどれかにしてください",
+                "写真は JPEG・PNG・WebP のどれかにしてください。壊れたファイルは追加できません",
+            ),
+            Self::UnsupportedPhotoMetadata => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_photo_metadata",
+                "撮った場所などの情報（EXIF・XMP）を含む WebP は追加できません。JPEG か PNG にして追加してください",
             ),
             Self::DemoPhotosDisabled => (
                 StatusCode::FORBIDDEN,

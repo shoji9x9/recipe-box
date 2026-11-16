@@ -24,7 +24,7 @@ import { ID_PATTERN, wrangler } from "./wrangler.ts";
 type Recipe = { id: string; name: string; servings: number; ingredients: string; steps: string };
 type RecipeList = { recipes: Recipe[]; total: number; page: number; per_page: number };
 type ErrorBody = { error: string; field?: string };
-type Photo = { id: string; content_type: string };
+type Photo = { id: string; content_type: string; size: number };
 type PhotoList = { photos: Photo[] };
 
 /** 確かめた結果が違ったときに投げる。最後の応答の本文を添えて止まる。 */
@@ -52,6 +52,51 @@ let retryOnWriteLimit = true;
 let status = 0;
 let body = Buffer.alloc(0);
 let responseHeaders = new Headers();
+
+/** 1 × 1 の透明な PNG（68 バイト）。 */
+const PNG_1X1 = Buffer.from(
+  "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c6360000200000500017a5eab3f0000000049454e44ae426082",
+  "hex",
+);
+/** EXIF の印（VP8X の 0x08）の付いた WebP の頭。 */
+const WEBP_WITH_EXIF_FLAG = Buffer.concat([
+  Buffer.from("RIFF"),
+  Buffer.from([0x16, 0, 0, 0]),
+  Buffer.from("WEBPVP8X"),
+  Buffer.from([0x0a, 0, 0, 0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+]);
+/** 位置情報に見立てた文字。 */
+const LOCATION_MARK = Buffer.from("GPS-SMOKE-SECRET");
+/** 向き（6）だけを持つ Exif（docs/spec.md の「写真」の、残す形）。 */
+const ORIENTATION_ONLY_EXIF = Buffer.from("457869660000" + "49492a0008000000" + "0100" + "120103000100000006000000" + "00000000", "hex");
+
+/** JPEG のセグメント（印・長さ・中身）。 */
+function jpegSegment(code: number, payload: Buffer): Buffer {
+  const head = Buffer.from([0xff, code, 0, 0]);
+  head.writeUInt16BE(payload.length + 2, 2);
+  return Buffer.concat([head, payload]);
+}
+
+/**
+ * 位置情報に見立てた文字を、Exif（向き 6 と一緒に）と XMP に持つ JPEG。`imageStart` は SOS の印の位置。
+ * 本番と同じく、頭の部分を本文の何回かの読み取りに分けて読ませるよう、XMP を大きく（約 190 KB）する。
+ */
+function jpegWithLocation(): { bytes: Buffer; imageStart: number } {
+  const exif = Buffer.concat([
+    Buffer.from("457869660000" + "49492a0008000000" + "0100" + "120103000100000006000000" + "00000000", "hex"),
+    LOCATION_MARK,
+  ]);
+  const xmp = Buffer.concat([Buffer.from("http://ns.adobe.com/xap/1.0/\0"), LOCATION_MARK, Buffer.alloc(63_000, 0x20)]);
+  const head = Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    jpegSegment(0xe1, exif),
+    jpegSegment(0xe1, xmp),
+    jpegSegment(0xe1, xmp),
+    jpegSegment(0xe1, xmp),
+  ]);
+  const image = Buffer.concat([jpegSegment(0xda, Buffer.from([1, 1, 0, 0, 0x3f, 0])), Buffer.alloc(100_000, 0x55), Buffer.from([0xff, 0xd9])]);
+  return { bytes: Buffer.concat([head, image]), imageStart: head.length };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -482,22 +527,30 @@ async function main(): Promise<void> {
   expect(404, "無いワークスペース");
 
   console.log("写真（R2）");
-  // PNG の先頭のバイトで始まる、小さなデータ。
-  const photo = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("smoke-test")]);
-  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: photo });
+  // 1 × 1 の PNG。写真の追加は頭の部分を読む（docs/spec.md の「写真」）ので、中身の正しい画像を送る。
+  const photo = PNG_1X1;
+  // 1 枚目は、位置情報に見立てた文字を持つ JPEG。保存する前に取り除かれ、向きだけが残る。
+  const located = jpegWithLocation();
+  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: located.bytes });
   expect(201, "POST /api/recipes/{id}/photos");
   const added = json<Photo>();
-  if (added.content_type !== "image/png") fail("写真の形式が image/png でない");
+  if (added.content_type !== "image/jpeg") fail("写真の形式が image/jpeg でない");
+  if (added.size !== located.bytes.length) fail("写真の大きさが、送ったものと違う（長さは変えない）");
   const photoId = added.id;
   await request("GET", `/api/recipes/${recipeId}/photos`, a);
   expect(200, "GET /api/recipes/{id}/photos");
   if (json<PhotoList>().photos.length !== 1) fail("写真の一覧が 1 件でない");
   await request("GET", `/api/recipes/${recipeId}/photos/${photoId}`, a);
   expect(200, "GET /api/recipes/{id}/photos/{photo_id}");
-  if (!body.equals(photo)) fail("R2 から読んだ写真が、送ったものと違う");
+  if (body.length !== located.bytes.length) fail("R2 から読んだ写真の長さが、送ったものと違う");
+  if (body.includes(LOCATION_MARK)) fail("R2 から読んだ写真に、位置情報が残っている");
+  if (!body.includes(ORIENTATION_ONLY_EXIF)) fail("R2 から読んだ写真に、向きが残っていない");
+  if (!body.subarray(located.imageStart).equals(located.bytes.subarray(located.imageStart))) {
+    fail("R2 から読んだ写真の、画像のデータから後ろが、送ったものと違う");
+  }
   // 写真を配るときのヘッダー（docs/spec.md の「写真の API」）。
   for (const [name, value] of [
-    ["content-type", "image/png"],
+    ["content-type", "image/jpeg"],
     ["cache-control", "private, max-age=86400"],
     ["vary", "X-Workspace-Id, Cookie"],
     ["x-content-type-options", "nosniff"],
@@ -514,6 +567,14 @@ async function main(): Promise<void> {
   await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: Buffer.from("GIF89a smoke-test") });
   expect(415, "JPEG・PNG・WebP でない写真");
   if (json<ErrorBody>().error !== "unsupported_photo_type") fail("形式の誤りのエラーが unsupported_photo_type でない");
+  // 頭の部分が途中で切れた JPEG も、415 で断る。
+  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10, 0x00]) });
+  expect(415, "頭の部分が途中で切れた JPEG");
+  if (json<ErrorBody>().error !== "unsupported_photo_type") fail("壊れた JPEG のエラーが unsupported_photo_type でない");
+  // メタデータ（EXIF）を持つと印で分かる WebP は、415 で断る（頭だけでは取り除けない）。
+  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: WEBP_WITH_EXIF_FLAG });
+  expect(415, "EXIF の印の付いた WebP");
+  if (json<ErrorBody>().error !== "unsupported_photo_metadata") fail("EXIF の印の付いた WebP のエラーが unsupported_photo_metadata でない");
   // 1 つのレシピの写真は 5 枚まで。6 枚目は 409 で断る。
   for (let n = 2; n <= 5; n++) {
     await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: photo });

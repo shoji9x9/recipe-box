@@ -1103,8 +1103,13 @@ impl Backend for CloudflareBackend {
             let action = "写真を R2 に書き込めない";
             let data = match body {
                 PhotoBody::Bytes(bytes) => Data::Bytes(bytes),
-                // 長さの分かるストリーム（FixedLengthStream の読む側）なので、R2 がそのまま読める。
-                PhotoBody::Stream(stream) => Data::ReadableStream(stream.readable.0),
+                // 書き換えた頭と本文の残りを続けて流す、長さの分かるストリーム（FixedLengthStream の読む側）なので、
+                // R2 がそのまま読める。
+                PhotoBody::Stream(stream) => Data::ReadableStream(
+                    stream
+                        .into_readable()
+                        .map_err(|e| backend_error(action, &worker::Error::from(e)))?,
+                ),
             };
             bucket(&env)?
                 .put(key, data)
