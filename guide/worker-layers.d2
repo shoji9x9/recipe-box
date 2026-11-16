@@ -22,15 +22,15 @@ users: 使う人\n（ブラウザ） {
   browser_files: ブラウザ\n（CSS などの\nファイル） {class: actor; width: 150; height: 100}
 }
 
-runtime: Workers のランタイム（V8）\nこの上で動く {
+runtime: Workers\nコードはランタイム（V8）の上で動く {
   class: [group; cloudflare]
   grid-rows: 5
   vertical-gap: 50
   entry: build/index.js\nfetch のハンドラー {class: actor; width: 290; height: 100}
   wasm: Rust を Wasm にしたもの\naxum・askama のテンプレート・\nmetadata.rs・workers-rs {class: app; width: 290; height: 100}
   glue: build/index.js\n橋渡しのコード・\nphoto-stream.js {class: actor; width: 290; height: 100}
-  bindings: D1・R2 の binding\n（JavaScript の値。\n通信はランタイムが行う） {class: service; width: 290; height: 100}
-  assets: 静的アセット（public/）\nWorker を通さずに返す {class: service; width: 290; height: 100}
+  bindings: D1・R2 などの binding\n（JavaScript の値。\n通信はランタイムが行う） {class: service; width: 290; height: 100}
+  assets: 静的アセット（public/）\nWorker も V8 も動かさずに返す {class: service; width: 290; height: 100}
 
   entry -> wasm: Rust を呼ぶ
   wasm -> glue: JavaScript を呼ぶ

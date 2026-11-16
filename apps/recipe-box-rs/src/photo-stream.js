@@ -1,7 +1,7 @@
 // 写真の本文を流す、Worker の中の JavaScript（src/stream.rs が wasm-bindgen で呼ぶ）。
 // 頭の部分（画像のデータより前）だけを読んで Rust に渡し、書き換えた頭の後に、残りを組み込みの pipeTo で R2 へ流す。
-// 本文の全体を JavaScript に流すと CPU 時間が大きく増えるので、頭の後ろは読まない（Issue #52）。
-// 画面の JavaScript ではないので public/ に置かない。単体テストは js-tests/photo-stream.test.ts。
+// 本文の全体を JavaScript に流すと CPU 時間が大きく増えるので、頭より後ろは、まとめて読んだ分のほかは読まない（Issue #52）。
+// 画面の JavaScript ではないので public/ に置かない。単体テストは js-tests/worker/photo-stream.test.ts。
 
 /**
  * 本文を読む状態。`rest` は、読んだが Rust に渡していない残り。
@@ -82,6 +82,7 @@ export function cancelBody(body) {
   body.cancel().catch(() => {});
 }
 
+// guide:start join-photo
 /**
  * reader を外し、`head`（書き換えた頭）・`rest`・本文の残りを続けて流す、長さ `length` のストリームを返す。
  * 本文の残りは JavaScript を通さず、組み込みの pipeTo で流す。読む側（R2）が読み始めるまでは、何も流れない。
@@ -92,7 +93,6 @@ export function cancelBody(body) {
  * @param {number} length
  * @returns {ReadableStream<Uint8Array>}
  */
-// guide:start join-photo
 export function joinPhoto(body, state, head, length) {
   state.reader.releaseLock();
   /** @type {FixedLengthStream} */
