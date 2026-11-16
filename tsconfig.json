@@ -34,6 +34,8 @@
   // 画面の JavaScript・テスト・vitest と commitlint の設定。htmx.min.js はビルドで写す配布物なので除く。
   "include": [
     "apps/*/public/assets/**/*.js",
+    // Worker の中で動く JavaScript（wasm-bindgen が呼ぶ。src/photo-stream.js）。
+    "apps/*/src/**/*.js",
     "apps/*/js-tests/**/*.ts",
     "vitest.config.ts",
     "commitlint.config.ts"

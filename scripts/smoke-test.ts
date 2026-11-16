@@ -81,7 +81,7 @@ function jpegSegment(code: number, payload: Buffer): Buffer {
  * 位置情報に見立てた文字を、Exif（向き 6 と一緒に）と XMP に持つ JPEG。`imageStart` は SOS の印の位置。
  * 本番と同じく、頭の部分を本文の何回かの読み取りに分けて読ませるよう、XMP を大きく（約 190 KB）する。
  */
-function jpegWithLocation(): { bytes: Buffer; imageStart: number } {
+function jpegWithLocation(imageBytes = 100_000): { bytes: Buffer; imageStart: number } {
   // 向きだけの Exif の後ろに位置情報の文字を足したもの（取り除くと、ORIENTATION_ONLY_EXIF の後ろが 0 になる）。
   const exif = Buffer.concat([ORIENTATION_ONLY_EXIF, LOCATION_MARK]);
   const xmp = Buffer.concat([Buffer.from("http://ns.adobe.com/xap/1.0/\0"), LOCATION_MARK, Buffer.alloc(63_000, 0x20)]);
@@ -92,7 +92,7 @@ function jpegWithLocation(): { bytes: Buffer; imageStart: number } {
     jpegSegment(0xe1, xmp),
     jpegSegment(0xe1, xmp),
   ]);
-  const image = Buffer.concat([jpegSegment(0xda, Buffer.from([1, 1, 0, 0, 0x3f, 0])), Buffer.alloc(100_000, 0x55), Buffer.from([0xff, 0xd9])]);
+  const image = Buffer.concat([jpegSegment(0xda, Buffer.from([1, 1, 0, 0, 0x3f, 0])), Buffer.alloc(imageBytes, 0x55), Buffer.from([0xff, 0xd9])]);
   return { bytes: Buffer.concat([head, image]), imageStart: head.length };
 }
 
@@ -581,6 +581,10 @@ async function main(): Promise<void> {
   await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: photo });
   expect(409, "6 枚目の写真");
   if (json<ErrorBody>().error !== "photo_limit_reached") fail("6 枚目の写真のエラーが photo_limit_reached でない");
+  // 頭を読んだ後に断るときも、本文の残り（約 3 MB）を読まずに捨て、断った理由を返す（接続を切らない）。
+  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: jpegWithLocation(3_000_000).bytes });
+  expect(409, "6 枚目の大きな写真");
+  if (json<ErrorBody>().error !== "photo_limit_reached") fail("6 枚目の大きな写真のエラーが photo_limit_reached でない");
   // 写真を消すと、一覧から消え、データも読めなくなる。ほかのワークスペースからは消せない。
   await request("DELETE", `/api/recipes/${recipeId}/photos/${photoId}`, b);
   expect(404, "DELETE /api/recipes/{id}/photos/{photo_id}（B から）");

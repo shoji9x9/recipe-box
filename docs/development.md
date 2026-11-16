@@ -43,6 +43,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | --- | --- | --- |
 | Rust | 外から呼ぶ API と画面は `apps/recipe-box-rs/src/tests/`。モジュールの中だけの関数は、そのファイルの `#[cfg(test)] mod tests` | `cargo test` |
 | 画面の JavaScript（`apps/<app>/public/assets/`） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。happy-dom の DOM で動かす |
+| Worker の中で動く JavaScript（`apps/<app>/src/*.js`。Rust から wasm-bindgen で呼ぶ） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。Workers だけにある機能（`FixedLengthStream` など）は、テストで代わりのものを置く |
 | スクリプト（`scripts/` の TypeScript とシェルスクリプト） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす（シェルスクリプトは、子のプロセスとして動かして確かめる） |
 
 - JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
@@ -61,6 +62,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
   スクリプトはビルドせず、Node が型の注釈を取り除いてそのまま動かす（`node scripts/seed.ts`）。そのため、Node が取り除けない書き方（`enum`・`namespace`・コンストラクターの引数のプロパティなど）は使わない（`scripts/tsconfig.json` の `erasableSyntaxOnly`）。
   ほかのスクリプトは `./seed-lib.ts` のように `.ts` の拡張子で import する。
 - 画面の JavaScript（`public/assets/`）は、ビルドせずにそのまま配るので、JavaScript のまま書き、型は JSDoc で書く（ブラウザは TypeScript を動かせない）。
+  Worker の中で動く JavaScript（`src/*.js`。wasm-bindgen がそのまま束ねる）も同じにする。
 - シェルスクリプト（`scripts/*.sh`）で書くのは、ほかのコマンドを呼んで並べるだけの手順に限り、shellcheck で確かめる。
   次のどれかに当たれば、TypeScript で書く。
   - コマンドや API の出力（JSON・HTTP の応答）の中身を読んで、次にすることや結果を決める（`jq` で値を取り出すことも含む）。

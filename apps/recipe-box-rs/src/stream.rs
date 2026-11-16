@@ -29,66 +29,7 @@ use crate::{
     photo::{self, PhotoFormat},
 };
 
-#[wasm_bindgen(inline_js = r#"
-export function photoReader(body) {
-  return { reader: body.getReader(), rest: null };
-}
-
-function take(state, max) {
-  const chunk = state.rest;
-  if (chunk.byteLength <= max) {
-    state.rest = null;
-    return chunk;
-  }
-  state.rest = chunk.subarray(max);
-  return chunk.subarray(0, max);
-}
-
-export async function readAtLeast(state, min, max) {
-  const chunks = [];
-  let got = 0;
-  while (got < min) {
-    if (state.rest === null) {
-      const { done, value } = await state.reader.read();
-      if (done) break;
-      state.rest = value;
-    }
-    const chunk = take(state, max - got);
-    chunks.push(chunk);
-    got += chunk.byteLength;
-  }
-  if (chunks.length === 1) return chunks[0];
-  const out = new Uint8Array(got);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-
-export function discardPhoto(state) {
-  state.reader.cancel().catch(() => {});
-}
-
-export function joinPhoto(body, state, head, length) {
-  state.reader.releaseLock();
-  const { readable, writable } = new FixedLengthStream(length);
-  const writer = writable.getWriter();
-  const rest = state.rest;
-  writer
-    .write(head)
-    .then(() => (rest === null ? undefined : writer.write(rest)))
-    .then(() => {
-      writer.releaseLock();
-      return body.pipeTo(writable);
-    })
-    .catch((error) => {
-      body.cancel(error).catch(() => {});
-    });
-  return readable;
-}
-"#)]
+#[wasm_bindgen(module = "/src/photo-stream.js")]
 extern "C" {
     /// 本文を読む reader と、読んだが渡していない残り（`rest`）を持つ状態を作る。
     #[wasm_bindgen(catch, js_name = photoReader)]
@@ -136,17 +77,32 @@ pub struct PhotoStream {
     /// 本文。`state` の reader で先頭を読んだ後の残りを流す。
     body: SendWrapper<web_sys::ReadableStream>,
     /// 本文を読む reader と、読んだが Wasm に写していない残り（[`photo_reader`]）。
-    state: SendWrapper<JsValue>,
+    /// R2 に流したら `None` にする。`Some` のまま捨てたら（断ったときなど）、本文を取り消す（[`Drop`]）。
+    state: Option<SendWrapper<JsValue>>,
 }
 
 impl PhotoStream {
     /// 書き換えた頭と、本文の残りを続けて流す、長さの分かるストリームにする（R2 にそのまま渡せる）。
-    pub fn into_readable(self) -> Result<web_sys::ReadableStream, JsValue> {
+    pub fn into_readable(mut self) -> Result<web_sys::ReadableStream, JsValue> {
         // 写真の上限（4,000,000）以下なので u32 に収まる。
         let length =
             u32::try_from(self.length).map_err(|_| JsValue::from_str("本文が大きすぎる"))?;
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| JsValue::from_str("本文はもう流した"))?;
         let head = Uint8Array::from(self.head.as_slice());
-        join_photo(&self.body, &self.state, &head, length)
+        join_photo(&self.body, &state, &head, length)
+    }
+}
+
+/// R2 に流さずに捨てた本文（形式・デモ・上限などで断ったとき）は、取り消して読まない。
+/// 読まずに応答を返すと、送り手がまだ送っている間に接続が切れ、応答（断った理由）が届かないことがあるため。
+impl Drop for PhotoStream {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            discard_photo(&state);
+        }
     }
 }
 
@@ -251,9 +207,6 @@ pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
                 Err(rejection) => break Err(rejection),
             }
         };
-        if format.is_err() {
-            discard_photo(&state);
-        }
         if head.len() > length {
             return Err(JsValue::from_str("本文が Content-Length より長い"));
         }
@@ -268,7 +221,7 @@ pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
         format,
         head,
         body: raw.stream,
-        state: SendWrapper::new(state),
+        state: Some(SendWrapper::new(state)),
     })
 }
 
