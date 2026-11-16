@@ -7,7 +7,7 @@
 - [mise](https://mise.jdx.dev/)
 - [GitHub CLI](https://cli.github.com/)（`gh auth login` で認証しておく）
 - Google Chrome（エージェントが chrome-devtools MCP で画面を確かめるときだけ要る）
-- `curl` と `jq`（`mise run smoke` のスモークテストと、`mise run pin` で使う）
+- `curl` と `jq`（自動削除と共有のデモをローカルで試す手順で使う。どちらも下の「CI と CD」にある）
 - OS のパッケージの `pkg-config` と OpenSSL の開発用ファイル。worker-build のビルドに要る。
   Ubuntu では `sudo apt-get install -y pkg-config libssl-dev` で入る。
 
@@ -42,12 +42,25 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | --- | --- | --- |
 | Rust | 外から呼ぶ API と画面は `apps/recipe-box-rs/src/tests/`。モジュールの中だけの関数は、そのファイルの `#[cfg(test)] mod tests` | `cargo test` |
 | 画面の JavaScript（`apps/<app>/public/assets/`） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。happy-dom の DOM で動かす |
-| Node のスクリプト（`scripts/`） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす |
+| スクリプト（`scripts/` の TypeScript とシェルスクリプト） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす（シェルスクリプトは、子のプロセスとして動かして確かめる） |
 
 - JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
 - 画面のテストを `public/` の下に置かない。`public/` の下のファイルは、Workers の静的アセットとして誰でも取れる。
-- 型は `mise run typecheck`（`mise run lint` と commit の前の lefthook から呼ぶ）の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトのテストは `scripts/tsconfig.json`（Node の型）。
-  画面の JavaScript は、ビルドせずに配るので JavaScript のまま書き、型は JSDoc で書く。スクリプト（`.mjs`）には型を付けていないので、テストの `.ts` だけを確かめる。
+- 型は `mise run typecheck`（`mise run lint` と commit の前の lefthook から呼ぶ）の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトとそのテストは `scripts/tsconfig.json`（Node の型）。
+
+### 言語
+
+- Node で動かすスクリプト（`scripts/`）と設定（`commitlint.config.ts`・`vitest.config.ts`）は、TypeScript で書く。
+  スクリプトはビルドせず、Node が型の注釈を取り除いてそのまま動かす（`node scripts/seed.ts`）。そのため、Node が取り除けない書き方（`enum`・`namespace`・コンストラクターの引数のプロパティなど）は使わない（`scripts/tsconfig.json` の `erasableSyntaxOnly`）。
+  ほかのスクリプトは `./seed-lib.ts` のように `.ts` の拡張子で import する。
+- 画面の JavaScript（`public/assets/`）は、ビルドせずにそのまま配るので、JavaScript のまま書き、型は JSDoc で書く（ブラウザは TypeScript を動かせない）。
+- シェルスクリプト（`scripts/*.sh`）で書くのは、ほかのコマンドを呼んで並べるだけの手順に限り、shellcheck で確かめる。
+  次のどれかに当たれば、TypeScript で書く。
+  - コマンドや API の出力（JSON・HTTP の応答）の中身を読んで、次にすることや結果を決める（`jq` で値を取り出すことも含む）。
+  - 確かめる項目を並べたテストである（スモークテストなど）。
+  - 分岐やくり返しが増え、関数を分けたくなる。目安は 100 行を超えること。
+  シェルが向くのは、ツールを決まった引数と環境変数で起動する（`mwg.sh`）、ファイルの中の文字を取り出して比べる（`check-mwg-version.sh`）といった、終了コードと短い文字列だけで決まる手順である。
+  TypeScript にすると、コマンドを呼ぶたびに `execFile` と失敗の扱いを書くことになり、かえって長くなる。
 
 ### ディレクトリ
 
@@ -58,12 +71,14 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `apps/recipe-box-rs/public/` | Workers の静的アセット（CSS・画面の JavaScript・アイコン）。ここに置いたファイルは誰でも取れるので、テストなどを置かない |
 | `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（上の「テスト」） |
 | `apps/recipe-box-rs/js-types/` | 画面の JavaScript が使う、ほかのライブラリ（htmx）の型の宣言 |
-| `scripts/seed.mjs` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
-| `scripts/seed-lib.mjs` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
+| `scripts/seed.ts` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
+| `scripts/seed-lib.ts` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
 | `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |
-| `scripts/smoke-test.sh` | ローカルの Worker に API を呼んで確かめるスクリプト（CI でも使う） |
+| `scripts/smoke-test.ts` | ローカルの Worker に API を呼んで確かめるスクリプト（`mise run smoke`。CI でも使う） |
+| `scripts/pin-workspace.ts` | ワークスペースに、自動削除と削除から外す印を付ける・外す管理用のスクリプト（`mise run pin`）。出力の読み方は `scripts/pin-lib.ts` にあり、単体テストは `scripts/pin-lib.test.ts` |
+| `scripts/wrangler.ts` | seed と pin が wrangler を動かす部分（失敗の文の伏せ字と、ID の読み方） |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
 
 ## CI と CD

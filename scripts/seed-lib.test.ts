@@ -1,4 +1,4 @@
-// scripts/seed-lib.mjs の単体テスト（mise run test の vitest で実行する）。
+// scripts/seed-lib.ts の単体テスト（mise run test の vitest で実行する）。
 // 伏せ字は、公開の Actions のログにデモの ID などを出さないための要なので、形ごとに確かめる。
 import assert from "node:assert/strict";
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
@@ -14,22 +14,30 @@ import {
   MAX_SERVINGS,
   MAX_STEPS,
   MAX_WORKSPACE_PHOTO_BYTES,
+  d1Rows,
+  hasOwnKey,
   lstatWithoutLinks,
+  type PathRule,
   regularFileWithoutLinks,
   SeedDataError,
   pathPattern,
   redact,
   shortReason,
   validateRecipes,
-} from "./seed-lib.mjs";
+} from "./seed-lib.ts";
 
 const HEX32 = "0123456789abcdef0123456789abcdef";
 const UUID = "01234567-89ab-cdef-0123-456789abcdef";
 
 describe("redact", () => {
-  const paths = [
-    [pathPattern("/home/user/projects/recipe-box"), "."],
-    [pathPattern("/home/user"), "~"],
+  const pattern = (path: string): RegExp => {
+    const made = pathPattern(path);
+    assert.ok(made !== null);
+    return made;
+  };
+  const paths: PathRule[] = [
+    [pattern("/home/user/projects/recipe-box"), "."],
+    [pattern("/home/user"), "~"],
   ];
 
   test("16 進数 32 文字・UUID・大文字を伏せる", () => {
@@ -85,6 +93,44 @@ describe("shortReason", () => {
   });
 });
 
+describe("hasOwnKey", () => {
+  const targets = { "--local": 1, "--remote": 2 };
+
+  test("record の自分のキーだけを受け付ける", () => {
+    assert.equal(hasOwnKey(targets, "--local"), true);
+    assert.equal(hasOwnKey(targets, "--remote"), true);
+    assert.equal(hasOwnKey(targets, "--prod"), false);
+    assert.equal(hasOwnKey(targets, undefined), false);
+  });
+
+  test("プロトタイプから引き継いだ名前は受け付けない", () => {
+    for (const name of ["toString", "__proto__", "constructor", "hasOwnProperty"]) {
+      assert.equal(hasOwnKey(targets, name), false, name);
+    }
+  });
+});
+
+describe("d1Rows", () => {
+  test("最後の文の結果の行を返す", () => {
+    const output = JSON.stringify([{ results: [{ id: "a" }] }, { results: [{ id: "b" }, { id: "c" }] }]);
+    assert.deepEqual(d1Rows(output), [{ id: "b" }, { id: "c" }]);
+  });
+
+  test("行が無ければ、空の配列を返す（形の違いと見分ける）", () => {
+    assert.deepEqual(d1Rows(JSON.stringify([{ results: [] }])), []);
+  });
+
+  test("形が違えば undefined を返す", () => {
+    for (const output of ["[]", "[{}]", '[{"results": {}}]', '{"results": []}', "null", '"text"']) {
+      assert.equal(d1Rows(output), undefined, output);
+    }
+  });
+
+  test("JSON として読めなければ、例外を投げる", () => {
+    assert.throws(() => d1Rows("✘ [ERROR] not json"), SyntaxError);
+  });
+});
+
 describe("lstatWithoutLinks", () => {
   let base: string;
   beforeAll(() => {
@@ -132,7 +178,7 @@ describe("lstatWithoutLinks", () => {
 
   test("ふつうのファイルだけを、理由の分かる文で受け付ける", () => {
     const check = (path: string) => regularFileWithoutLinks(path, base, "x");
-    assert.equal(check(join(base, "seed", "recipes.json"))?.isFile(), true);
+    assert.equal(check(join(base, "seed", "recipes.json")).isFile(), true);
     assert.throws(() => check(join(base, "seed", "photos-link", "a.jpg")), /x か、その上のディレクトリがシンボリックリンク/);
     assert.throws(() => check(tmpdir()), /x がリポジトリの下に無い/);
     assert.throws(() => check(join(base, "seed", "missing.json")), /x を読めない（ENOENT）/);
@@ -141,8 +187,8 @@ describe("lstatWithoutLinks", () => {
     writeFileSync(join(base, "seed", "linked.json"), "[]");
     linkSync(join(base, "seed", "linked.json"), join(base, "seed", "hard.json"));
     assert.throws(() => check(join(base, "seed", "linked.json")), /x がハードリンク/);
-    // プログラムの誤り（fs のシステムの失敗でないもの）は、データの問題に見せない。
-    assert.throws(() => regularFileWithoutLinks(undefined, base, "x"), TypeError);
+    // プログラムの誤り（fs のシステムの失敗でないもの）は、データの問題に見せない。型に合わない値を、わざと渡して起こす。
+    assert.throws(() => regularFileWithoutLinks(undefined as unknown as string, base, "x"), TypeError);
     assert.throws(() => check(join(base, "seed", "missing.json")), SeedDataError);
   });
 });
@@ -248,7 +294,8 @@ describe("validateRecipes", () => {
 
   test("データの誤りでない例外は、レシピの番号を添えずにそのまま投げる", () => {
     assert.throws(
-      () => validateRecipes([recipe({ photos: [photo("bug.jpg", 10)] })], dir, undefined),
+      // 型に合わない値を、わざと渡してプログラムの誤りを起こす。
+      () => validateRecipes([recipe({ photos: [photo("bug.jpg", 10)] })], dir, undefined as unknown as string),
       (error) => !(error instanceof SeedDataError) && error instanceof TypeError,
     );
   });

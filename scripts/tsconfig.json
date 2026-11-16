@@ -1,14 +1,19 @@
 {
-  // Node のスクリプト（seed・modern-web-guidance）の単体テストの型を確かめる（mise run lint）。
+  // Node のスクリプト（seed）とスクリプトのテストの型を確かめる（mise run typecheck）。
   // 共通の設定はルートの tsconfig.json から引き継ぎ、DOM の代わりに Node の型を使う。
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "lib": ["ES2023"],
     "types": ["node"],
-    // スクリプト（seed-lib.mjs など）には JSDoc の型を付けていないので、テストの .ts だけを確かめる。
-    // テストが import するスクリプトの型は、コードから推し量ったものを使う。
-    "checkJs": false
+    // Node と同じ決まりで import を解決する（拡張子の無い import などを、動かす前に見つける）。
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    // スクリプトは、Node が型の注釈を取り除いてそのまま動かす（ビルドしない）。
+    // Node が取り除けない書き方（enum・namespace・コンストラクターの引数のプロパティなど）を使わない。
+    "erasableSyntaxOnly": true,
+    // Node は import の拡張子を書き換えないので、ほかのスクリプトは ./seed-lib.ts のように .ts で import する。
+    "allowImportingTsExtensions": true
   },
-  "include": ["**/*.test.ts"],
+  "include": ["**/*.ts"],
   "exclude": []
 }
