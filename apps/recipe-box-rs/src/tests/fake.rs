@@ -595,7 +595,6 @@ impl Backend for FakeBackend {
                 .filter(|(w, _, _)| w == workspace.as_str())
                 .map(|(_, _, p)| p.size)
                 .sum();
-            let total_bytes: i64 = photos.iter().map(|(_, _, p)| p.size).sum();
             let uploads_since = uploads.iter().filter(|&&at| at >= limits.since).count();
             if i64::try_from(in_recipe).unwrap() >= limits.max_per_recipe {
                 return PhotoInsert::RecipeFull;
@@ -603,9 +602,7 @@ impl Backend for FakeBackend {
             if workspace_bytes + photo.size > limits.max_bytes_per_workspace {
                 return PhotoInsert::WorkspaceFull;
             }
-            if total_bytes + photo.size > limits.max_bytes_total
-                || i64::try_from(uploads_since).unwrap() >= limits.max_uploads_since
-            {
+            if i64::try_from(uploads_since).unwrap() >= limits.max_uploads_since {
                 return PhotoInsert::CapacityReached;
             }
             photos.push((workspace.to_string(), recipe.to_string(), photo.clone()));

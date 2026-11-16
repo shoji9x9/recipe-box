@@ -43,8 +43,6 @@ pub struct PhotoLimits {
     pub max_per_recipe: i64,
     /// 1 つのワークスペースの写真の大きさの合計の上限（バイト）。
     pub max_bytes_per_workspace: i64,
-    /// アプリ全体の写真の大きさの合計の上限（バイト）。
-    pub max_bytes_total: i64,
     /// `since` 以後にアプリ全体で写真を追加した回数の上限。
     pub max_uploads_since: i64,
     /// 数え始める日時（UNIX 時間のミリ秒）。
@@ -84,7 +82,7 @@ pub enum PhotoInsert {
     RecipeFull,
     /// 足すと、ワークスペースの写真の大きさの合計が上限を超える。
     WorkspaceFull,
-    /// 足すと、アプリ全体の写真の大きさの合計か、1 日の追加の回数が上限を超える。
+    /// 足すと、アプリ全体の 1 日の追加の回数が上限を超える。
     CapacityReached,
 }
 

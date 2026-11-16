@@ -223,12 +223,12 @@ stateDiagram-v2
 | `405` | `method_not_allowed` | パスが受け付けないメソッド |
 | `409` | `recipe_limit_reached` | ワークスペースのレシピが上限（80 件）に達していて、登録できない |
 | `409` | `photo_limit_reached` | レシピの写真が上限（5 枚）に達していて、追加できない |
-| `409` | `photo_storage_limit_reached` | 追加すると、ワークスペースの写真の大きさの合計が上限（100,000,000 バイト）を超える |
+| `409` | `photo_storage_limit_reached` | 追加すると、ワークスペースの写真の大きさの合計が上限（50,000,000 バイト）を超える |
 | `413` | `payload_too_large` | 本文が 128 KiB（131,072 バイト）を超える。写真の API では、写真が 4,000,000 バイトを超える。`Content-Length` で超えると分かれば、本文を読まずに断る |
 | `415` | `unsupported_photo_type` | 写真が JPEG・PNG・WebP のどれでもない（中身の先頭のバイトで決める） |
 | `429` | `too_many_requests` | ワークスペースを作る回数か、書き込む API の回数の制限を超えた |
 | `500` | `internal_error` | サーバーの中の失敗（詳しいことはログにだけ出す） |
-| `503` | `capacity_reached` | アプリ全体の量が上限に達していて、新しく作れない。ワークスペースの数・1 日に作る数・写真の大きさの合計・1 日に写真を追加する回数（docs/security.md の「費用の対策」） |
+| `503` | `capacity_reached` | アプリ全体の量が上限に達していて、新しく作れない。ワークスペースの数・1 日に作る数・1 日に写真を追加する回数（docs/security.md の「費用の対策」） |
 
 ### レシピの API
 
@@ -304,7 +304,7 @@ stateDiagram-v2
 - 写真のデータを返すときは、`Cache-Control: private, max-age=86400`・`Vary: X-Workspace-Id, Cookie`・`X-Content-Type-Options: nosniff`・`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox` を付ける。
   写真の ID は使い回さず、中身も変わらないので、ブラウザに 1 日残させて R2 の読み取りを減らす。消した写真が残り続けないよう、それより長くはしない。
 - 失敗の理由が 2 つ以上あるときは、次の順に確かめる。
-  書き込みの回数（`too_many_requests`）→ `Content-Length`（`payload_too_large`）→ ワークスペース → パスの ID の形（`recipe_not_found`・`photo_not_found`）→ 本文の読み取り（`payload_too_large`）→ デモか（`demo_photos_disabled`）→ 大きさ（`payload_too_large`）→ 形式（`unsupported_photo_type`）→ レシピが在るか（`recipe_not_found`）→ レシピの枚数（`photo_limit_reached`）→ ワークスペースの合計（`photo_storage_limit_reached`）→ アプリ全体の上限（`capacity_reached`）。
+  書き込みの回数（`too_many_requests`）→ `Content-Length`（`payload_too_large`）→ ワークスペース → パスの ID の形（`recipe_not_found`・`photo_not_found`）→ 本文の読み取り（`payload_too_large`）→ デモか（`demo_photos_disabled`）→ 大きさ（`payload_too_large`）→ 形式（`unsupported_photo_type`）→ レシピが在るか（`recipe_not_found`）→ レシピの枚数（`photo_limit_reached`）→ ワークスペースの合計（`photo_storage_limit_reached`）→ アプリ全体の 1 日の追加の回数（`capacity_reached`）。
   R2 に書いている間にレシピが消されたときは、R2 のデータを消して、`404`（`recipe_not_found`）を返す。1 時間より長く送り続けて、行が自動削除で片付けられたときは `404`（`photo_not_found`）を返す（下の「写真」）。
 - レシピを消すと、その写真も消える。共有のデモでも同じである（デモのレシピは誰でも消せるので、その写真も消える。毎日のリセットで戻る）。
 
@@ -343,8 +343,8 @@ stateDiagram-v2
 ## 写真
 
 - 1 つのレシピに複数の写真を付けられる。
-- 上限は 1 枚 4,000,000 バイト以下、1 レシピ 5 枚まで、1 ワークスペースの合計 100,000,000 バイトまで。形式は JPEG・PNG・WebP。
-  アプリ全体の上限（合計の大きさと、1 日の追加の回数）は docs/security.md の「費用の対策」にある。
+- 上限は 1 枚 4,000,000 バイト以下、1 レシピ 5 枚まで、1 ワークスペースの合計 50,000,000 バイトまで。形式は JPEG・PNG・WebP。
+  アプリ全体の上限（1 日の追加の回数）と、アプリ全体の合計の大きさをワークスペースごとの合計の上限で守ることは、docs/security.md の「費用の対策」にある。
 - 大きさが上限を超えたら 413、6 枚目を追加しようとしたら 409 を返す。
 - リライト前は写真を R2 に保管する。リライトで保管先（DB など）が変わっても、API の仕様は変えない。
 - 写真のバイト列そのものを送る追加（API と、画面の同じ形の送り方）は、本文を読みためずに、ストリームのまま R2 に流す。

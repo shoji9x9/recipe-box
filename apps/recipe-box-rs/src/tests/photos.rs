@@ -13,11 +13,13 @@ use super::{
     send,
 };
 use crate::{
+    error::ApiError,
     photo::{
         MAX_PHOTO_BYTES, MAX_PHOTO_BYTES_PER_WORKSPACE, MAX_PHOTO_BYTES_TOTAL,
         MAX_PHOTO_UPLOADS_PER_DAY, MAX_PHOTOS_PER_RECIPE,
     },
     router,
+    workspace::MAX_WORKSPACES,
 };
 
 const DEMO: &str = "dddddddddddddddddddddddddddddddd";
@@ -195,21 +197,37 @@ async fn workspace_photo_bytes_boundary() {
     assert_eq!(response.status, StatusCode::CREATED);
 }
 
+#[test]
+fn workspace_photo_bytes_keep_app_wide_total() {
+    // アプリ全体の合計は追加のときに数えず、ワークスペースの数とワークスペースごとの合計の上限で守る。
+    // 値は docs/spec.md と docs/security.md に書いている。変えたら文書も直す。
+    assert_eq!(MAX_PHOTO_BYTES_PER_WORKSPACE, 50_000_000);
+    assert_eq!(MAX_PHOTO_BYTES_TOTAL, 5_000_000_000);
+    // ちょうど合計の上限にしている（超えないことは、photo.rs でコンパイルのときにも確かめる）。
+    assert_eq!(
+        MAX_WORKSPACES * MAX_PHOTO_BYTES_PER_WORKSPACE,
+        MAX_PHOTO_BYTES_TOTAL
+    );
+    // 利用者に見せる文の値も同じにする。
+    let megabytes = MAX_PHOTO_BYTES_PER_WORKSPACE / 1_000_000;
+    let (_, _, message) = ApiError::PhotoStorageLimitReached.parts();
+    assert!(
+        message.contains(&format!("上限（{megabytes} MB）")),
+        "{message}"
+    );
+}
+
 #[tokio::test]
-async fn app_wide_photo_bytes_boundary() {
+async fn other_workspaces_photo_bytes_not_counted() {
     let (backend, recipe) = setup().await;
     let recipe_b = create_recipe(&backend, WORKSPACE_B).await;
-    // ほかのワークスペースの写真で、アプリ全体の合計を上限の 10 バイト手前まで埋める。
+    // ほかのワークスペースの写真の合計がアプリ全体の上限に達していても、断らない（数えるのはワークスペースの合計だけ）。
     backend.add_photo_row(
         WORKSPACE_B,
         &recipe_b,
         "11111111111111111111111111111111",
-        MAX_PHOTO_BYTES_TOTAL - 10,
+        MAX_PHOTO_BYTES_TOTAL,
     );
-    let response = upload(&backend, WORKSPACE_A, &recipe, jpeg(11)).await;
-    assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(error_code(&response), "capacity_reached");
-    assert!(backend.objects.lock().unwrap().is_empty());
     let response = upload(&backend, WORKSPACE_A, &recipe, jpeg(10)).await;
     assert_eq!(response.status, StatusCode::CREATED);
 }

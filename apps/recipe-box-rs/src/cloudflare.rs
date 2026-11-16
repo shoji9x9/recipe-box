@@ -741,9 +741,9 @@ impl Backend for CloudflareBackend {
             let size = || int_to_js(photo.size);
             // 上限の判定と保存を 1 つの文にして、同時に追加されても上限を超えないようにする。
             // 行は、R2 への書き込みが終わっていない印（日時）を付けて入れる。上限は、印の付いた行も数える。
-            // アプリ全体の合計と 1 日の回数は、全体を数えるので workspace_id では絞り込まない（AGENTS.md の全体の上限のクエリ）。
-            // 読む行の少ない条件から並べる。SQL は評価の順を保証しないが、SQLite は AND を左から評価し、
-            // 偽になれば後ろを評価しないので、断る試行で photos の全体を読む（アプリ全体の合計を求める）回数を減らせる。
+            // 1 日の回数は、全体を数えるので workspace_id では絞り込まない（AGENTS.md の全体の上限のクエリ）。
+            // アプリ全体の写真の合計は数えない（photos の全体を読むことになるため）。ワークスペースの数の上限と、
+            // ワークスペースごとの合計の上限で守る（photo::MAX_PHOTO_BYTES_TOTAL）。
             let insert = db
                 .prepare(
                     "INSERT INTO photos \
@@ -752,8 +752,7 @@ impl Backend for CloudflareBackend {
                      WHERE EXISTS (SELECT 1 FROM recipes WHERE workspace_id = ? AND id = ?) \
                      AND (SELECT COUNT(*) FROM photos WHERE workspace_id = ? AND recipe_id = ?) < ? \
                      AND (SELECT COUNT(*) FROM photo_uploads WHERE created_at >= ?) < ? \
-                     AND (SELECT COALESCE(SUM(size), 0) FROM photos WHERE workspace_id = ?) + ? <= ? \
-                     AND (SELECT COALESCE(SUM(size), 0) FROM photos) + ? <= ?",
+                     AND (SELECT COALESCE(SUM(size), 0) FROM photos WHERE workspace_id = ?) + ? <= ?",
                 )
                 .bind(&[
                     w(),
@@ -773,8 +772,6 @@ impl Backend for CloudflareBackend {
                     w(),
                     size(),
                     int_to_js(limits.max_bytes_per_workspace),
-                    size(),
-                    int_to_js(limits.max_bytes_total),
                 ])
                 .map_err(|e| backend_error(action, &e))?;
             // 写真の行が入ったときだけ、追加の記録を入れる。

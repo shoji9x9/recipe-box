@@ -8,7 +8,8 @@ export const MAX_RECIPES = 80;
 export const MAX_PHOTOS_PER_RECIPE = 5;
 export const MAX_PHOTO_BYTES = 4_000_000;
 // seed は写真の上限を判定する API を通らずに入れるので、ワークスペースの合計の上限も seed で確かめる。
-export const MAX_WORKSPACE_PHOTO_BYTES = 100_000_000;
+// アプリ全体の写真の合計は、この上限とワークスペースの数の上限で守るので、seed が入れる量もこれを超えてはいけない（docs/security.md）。
+export const MAX_WORKSPACE_PHOTO_BYTES = 50_000_000;
 export const MAX_NAME = 100;
 export const MAX_SERVINGS = 100;
 export const MAX_INGREDIENTS = 2_000;
