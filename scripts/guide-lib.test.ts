@@ -2,6 +2,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  boldFallback,
   checkPath,
   diagramSources,
   githubSlug,
@@ -108,6 +109,30 @@ describe("expandDirectives", () => {
 describe("diagramSources", () => {
   test("_ で始まる共通の設定と、.d2 でないファイルを除く", () => {
     expect(diagramSources(["b.d2", "_style.d2", "about.md", "a.d2"])).toEqual(["a.d2", "b.d2"]);
+  });
+});
+
+describe("boldFallback", () => {
+  const svg = [
+    '.d2-1 .text-bold {\n\tfont-family: "d2-1-font-bold";\n}',
+    '@font-face {\n\tfont-family: d2-1-font-bold;\n\tsrc: url("data:x");\n}',
+  ].join("\n");
+
+  test("太字の class とフォントの両方に、太さを書く", () => {
+    expect(boldFallback(svg)).toBe(
+      [
+        '.d2-1 .text-bold {\n\tfont-family: "d2-1-font-bold"; font-weight: 700;\n}',
+        '@font-face {\n\tfont-family: d2-1-font-bold; font-weight: 700;\n\tsrc: url("data:x");\n}',
+      ].join("\n"),
+    );
+  });
+
+  test("太字を使わない SVG は変えない", () => {
+    expect(boldFallback("<svg></svg>")).toBe("<svg></svg>");
+  });
+
+  test("書き方が想定と違えば失敗する", () => {
+    expect(() => boldFallback('.d2-1 .text-bold { font-family: "d2-1-font-bold"; }')).toThrow(GuideError);
   });
 });
 

@@ -83,6 +83,25 @@ export function diagramSources(files: string[]): string[] {
   return files.filter((file) => file.endsWith(".d2") && !file.startsWith("_")).sort();
 }
 
+/**
+ * d2 が作った SVG の太字を、日本語でも太くする。
+ * d2 は太字を、ラテン文字だけを持つ埋め込みのフォントで描き、太さ（font-weight）を指定しない。
+ * そのフォントに無い日本語は、ブラウザが既定のフォントの細い字で描くので、同じ見出しの中で英字だけが太く見える。
+ * 太字の class とそのフォントの両方に 700 を書くと、英字は埋め込みのフォントのまま（太さを重ねて作らず）、日本語は既定のフォントの太字になる。
+ * d2 の出力の形が変わって書き換えられなければ、失敗させる（黙って細い字に戻さない）。
+ */
+export function boldFallback(svg: string): string {
+  const rule = /(\.d2-\d+ \.text-bold \{\s*font-family: "d2-\d+-font-bold";)/g;
+  const face = /(@font-face \{\s*font-family: d2-\d+-font-bold;)/g;
+  if (!svg.includes("font-bold")) {
+    return svg;
+  }
+  if ((svg.match(rule) ?? []).length !== 1 || (svg.match(face) ?? []).length !== 1) {
+    throw new GuideError("d2 の SVG の太字のフォントの書き方が、想定と違います（scripts/guide-lib.ts の boldFallback）");
+  }
+  return svg.replace(rule, "$1 font-weight: 700;").replace(face, "$1 font-weight: 700;");
+}
+
 /** 名前（印と図）に使える文字。 */
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 
