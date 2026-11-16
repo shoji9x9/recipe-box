@@ -327,6 +327,8 @@ button.primary.danger-fill {
   }
 
   & input {
+    /* 入力を消すボタンと探すボタンを並べても、狭い画面で横にはみ出さないよう、欄の幅を縮められるようにする */
+    min-width: 0;
     min-height: var(--control-height);
     padding: 0;
     border: none;
@@ -334,6 +336,16 @@ button.primary.danger-fill {
 
     &:focus {
       box-shadow: none;
+    }
+
+    /* ブラウザが出す入力を消す × は Tab で選べないので隠し、代わりのボタン（.clear）を出す */
+    &::-webkit-search-cancel-button {
+      display: none;
+    }
+
+    /* 文字が無いときは、入力を消すボタンを出さない */
+    &:placeholder-shown ~ .clear {
+      display: none;
     }
   }
 
@@ -349,6 +361,23 @@ button.primary.danger-fill {
 
     &:hover {
       background: var(--primary-active);
+    }
+  }
+
+  /* 入力を消すボタン。丸い枠の中で、探すボタンの手前に小さく置く */
+  & .clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--control-height);
+    margin-right: var(--space-2);
+    padding: 0;
+    color: var(--muted);
+    background: transparent;
+
+    &:hover {
+      color: var(--ink);
+      background: var(--surface-soft);
     }
   }
 }

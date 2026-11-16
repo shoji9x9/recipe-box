@@ -14,6 +14,8 @@
     {#- 写真の追加のフォームで、複数の写真を 1 枚ずつ送る。hx-boost は head を入れ替えないので、どの画面でも読む。
         ES モジュールなので、defer と同じく、HTML を読み終えてから動く。 #}
     <script src="/assets/photo-upload.js" type="module"></script>
+    {#- 一覧の検索で、日本語の入力の変換中は検索しない。入力を消すボタンも扱う。ES モジュール。 #}
+    <script src="/assets/search.js" type="module"></script>
   </head>
   <body hx-boost="true">
     <header>
