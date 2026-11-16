@@ -1154,11 +1154,15 @@ async fn photo_can_be_added_shown_and_deleted_on_the_edit_page() {
     assert_eq!(photo_srcs(&response.body), srcs);
     assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
     assert!(!response.body.contains("写真を削除"));
+    // 自分のレシピ帳では、編集の画面でできることは書かない（書かなくても分かる）。
     assert!(
-        response
-            .body
-            .contains("写真は、編集の画面で追加・削除できます")
+        !response.body.contains("追加・削除でき"),
+        "{}",
+        response.body
     );
+    // 最初の写真は遅らせずに高い優先度で読む（この写真は 1 枚なので、見える所に来てから読む写真は無い）。
+    assert!(!response.body.contains(r#"loading="lazy""#));
+    assert_eq!(response.body.matches(r#"fetchpriority="high""#).count(), 1);
 
     // 写真のデータは、画面の Cookie で読める。ブラウザに残させ、画面の no-store で上書きしない。
     let response = screen_get(&backend, &srcs[0], Some(&a)).await;
@@ -1679,7 +1683,14 @@ async fn workspace_deleted_by_another_request_is_treated_as_deleted() {
     assert!(backend.objects.lock().unwrap().is_empty());
 }
 
-/// 一覧は、写真のあるレシピに先頭の写真（追加した順の最初）を小さく出す。
+/// 一覧のカード（`<ul class="recipes">` の各 `<li>`）の HTML を、並びの順に返す。
+fn list_cards(body: &str) -> Vec<&str> {
+    let start = body.find(r#"<ul class="recipes">"#).expect("一覧が無い");
+    let list = &body[start..start + body[start..].find("</ul>").unwrap()];
+    list.split("<li>").skip(1).collect()
+}
+
+/// 一覧は、写真のあるレシピに先頭の写真（追加した順の最初）を小さく出し、写真の無いレシピには「写真なし」の枠を出す。
 #[tokio::test]
 async fn list_shows_the_first_photo_of_each_recipe() {
     let backend = backend_with_workspaces();
@@ -1710,21 +1721,72 @@ async fn list_shows_the_first_photo_of_each_recipe() {
         NOW + 1,
     );
 
+    let other = create_recipe(&backend, WORKSPACE_A, "ハヤシライス").await;
+    let other_id = other.rsplit('/').next().unwrap().to_owned();
+    backend.add_photo_row_at(
+        WORKSPACE_A,
+        &other_id,
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        3,
+        NOW + 1,
+    );
+
     let response = screen_get(&backend, "/", Some(&a)).await;
     assert_eq!(response.status, StatusCode::OK);
-    let thumb = format!(
-        r#"<img class="thumb" src="{with_photos}/photos/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" alt="" loading="lazy" width="240" height="160">"#
+    // ページの説明は、どの画面でも同じで、レシピの中身を書かない。
+    let description = r#"<meta name="description" content="料理名・何人分か・材料・手順と写真を書き留める、ログインのいらないレシピ帳です。">"#;
+    assert!(response.body.contains(description));
+    assert_eq!(
+        response.body.matches(r#"<meta name="description""#).count(),
+        1
     );
-    assert!(response.body.contains(&thumb), "{}", response.body);
-    assert_eq!(response.body.matches(r#"class="thumb""#).count(), 1);
-    assert!(
-        response
-            .body
-            .contains(&format!(r#"href="{without_photos}""#))
-    );
+    let cards = list_cards(&response.body);
+    assert_eq!(cards.len(), 3, "{}", response.body);
+    let card_of = |path: &str| {
+        cards
+            .iter()
+            .find(|card| card.contains(&format!(r#"<a class="card-link" href="{path}">"#)))
+            .unwrap_or_else(|| panic!("{path}: {}", response.body))
+    };
+    assert!(card_of(&with_photos).contains(&format!(
+        r#"<img class="thumb" src="{with_photos}/photos/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" alt=""#
+    )));
+    assert!(card_of(&other).contains(&format!(
+        r#"<img class="thumb" src="{other}/photos/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" alt=""#
+    )));
+    // 写真の無いレシピには、読み込み中と見分けられる「写真なし」の枠を、写真と同じ所に出す。
+    let empty = card_of(&without_photos);
+    assert!(!empty.contains("<img"), "{empty}");
+    assert!(empty.contains(r#"<div class="thumb no-photo" aria-hidden="true">"#));
+    assert!(empty.contains("写真なし"));
+    // 写真のある最初のカードの写真だけを、遅らせずに高い優先度で読む。ほかは見える所に来てから読む。
+    assert_eq!(response.body.matches("fetchpriority").count(), 1);
+    let priority = cards.iter().position(|card| card.contains("<img")).unwrap();
+    for (index, card) in cards.iter().enumerate() {
+        if !card.contains("<img") {
+            continue;
+        }
+        if index == priority {
+            assert!(
+                card.contains(r#" fetchpriority="high" width="240" height="160">"#),
+                "{card}"
+            );
+            assert!(!card.contains("loading="), "{card}");
+        } else {
+            assert!(
+                card.contains(r#" loading="lazy" width="240" height="160">"#),
+                "{card}"
+            );
+            assert!(!card.contains("fetchpriority"), "{card}");
+        }
+    }
 
     // 詳細の画面の写真の並びの最初と同じ写真である。
     let response = screen_get(&backend, &with_photos, Some(&a)).await;
+    assert!(response.body.contains(description));
+    // 最初の写真だけを遅らせずに高い優先度で読み、ほか（ここでは 2 枚）は見える所に来てから読む。
+    assert_eq!(response.body.matches(r#"fetchpriority="high""#).count(), 1);
+    assert_eq!(response.body.matches(r#"loading="lazy""#).count(), 2);
     assert_eq!(
         photo_srcs(&response.body)[0],
         format!("{with_photos}/photos/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

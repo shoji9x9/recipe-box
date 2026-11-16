@@ -275,6 +275,8 @@ struct ListPage {
     page: i64,
     /// レシピと、その先頭の写真（あれば一覧に小さく出す）。
     recipes: Vec<ListedRecipe>,
+    /// 遅らせずに高い優先度で読む写真の、`recipes` の中の位置。写真のある最初のレシピ（最初の表示で一番大きな要素になりやすい）。
+    priority_photo: Option<usize>,
     pages: Vec<PageLink>,
     first_page_href: String,
 }
@@ -590,6 +592,7 @@ pub async fn index<B: Backend>(
                     total: 0,
                     page: 1,
                     recipes: Vec::new(),
+                    priority_photo: None,
                     pages: Vec::new(),
                 },
             ));
@@ -615,6 +618,10 @@ pub async fn index<B: Backend>(
             q,
             total: result.total,
             page,
+            priority_photo: result
+                .recipes
+                .iter()
+                .position(|listed| listed.first_photo_id.is_some()),
             recipes: result.recipes,
             pages,
         },

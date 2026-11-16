@@ -37,13 +37,22 @@
     {%- let listed = recipe %}
     {%- let recipe = listed.recipe %}
     <li>
-      {#- 先頭の写真。写真は縮小していない原寸（1 枚 4 MB まで）なので、見える所に来てから読む（loading="lazy"）。
+      {#- 先頭の写真。写真の無いレシピには、同じ大きさの「写真なし」の枠を出す（読み込み中の写真と見分け、料理名の位置をそろえる）。
+          写真は縮小していない原寸（1 枚 4 MB まで）なので、見える所に来てから読む（loading="lazy"）。
+          ただし写真のある最初のレシピの写真（priority_photo）は、最初の表示で一番大きな要素（LCP）になりやすいので、すぐに高い優先度で読む。
           大きさは width・height と CSS で決めておき、読み込んだときに並びがずれないようにする。
-          料理名はすぐ下のリンクにあるので、代替テキストは空にする（読み上げで料理名を繰り返さない）。 #}
+          料理名はすぐ下のリンクにあるので、代替テキストは空にし、「写真なし」も読み上げない（読み上げで料理名を繰り返さない）。 #}
       {%- if let Some(photo_id) = listed.first_photo_id %}
-      <img class="thumb" src="/recipes/{{ recipe.id }}/photos/{{ photo_id }}" alt="" loading="lazy" width="240" height="160">
+      <img class="thumb" src="/recipes/{{ recipe.id }}/photos/{{ photo_id }}" alt=""{% if priority_photo.as_ref() == Some(loop.index0) %} fetchpriority="high"{% else %} loading="lazy"{% endif %} width="240" height="160">
+      {%- else %}
+      <div class="thumb no-photo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32"><path d="M4 5h16v14H4zM4 16l4.5-4.5 4 4 3-3L20 17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="15.5" cy="9" r="1.5" fill="currentColor"/></svg>
+        <span>写真なし</span>
+      </div>
       {%- endif %}
-      <a href="/recipes/{{ recipe.id }}">{{ recipe.name }}</a>
+      {#- 写真を押しても詳細の画面に移るよう、料理名のリンクの押せる範囲をカードの全体に広げる（CSS の .card-link）。
+          リンクは 1 つだけにし、読み上げとキーボードで同じリンクを 2 回たどらないようにする。 #}
+      <a class="card-link" href="/recipes/{{ recipe.id }}">{{ recipe.name }}</a>
       <span class="servings">{{ recipe.servings }} 人分</span>
       <div class="card-actions">
         {%- call dialog::recipe_delete_dialog(recipe, Some((q.as_str(), page))) %}{% endcall %}
