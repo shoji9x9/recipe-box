@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   classify,
+  count,
   describeFailures,
   detailPathOf,
   failureReason,
@@ -62,6 +63,14 @@ describe("判定の関数", () => {
     expect(localReason(limits, { size: 11 })).toBe(TOO_LARGE);
     expect(localReason(limits, { size: 10 })).toBeNull();
     expect(localReason(limits, { size: 1 })).toBeNull();
+  });
+
+  test("count は、0 以上の整数の形だけを読み、ほかは null にする", () => {
+    expect(count("0")).toBe(0);
+    expect(count("4000000")).toBe(4000000);
+    for (const value of [undefined, "", " ", "-1", "1.5", "abc", "1e3"]) {
+      expect(count(value)).toBeNull();
+    }
   });
 
   test("detailPathOf は、送り先から /photos を除いたパスにする", () => {
@@ -152,7 +161,11 @@ describe("送る流れ", () => {
     fetchMock.mockResolvedValue(page(204, null));
     const photos = [file("a.jpg", 5), file("b.png", 6, "image/png")];
     expect(submit(photos)).toBe(true);
+    // file の欄の value は "" しか入れられないので、空にしたことは代入を見て確かめる（送り始めた後に差し替える）。
+    const setValue = vi.fn();
+    Object.defineProperty(input(), "value", { get: () => "C:\\fakepath\\a.jpg", set: setValue, configurable: true });
     await finished();
+    expect(setValue).toHaveBeenCalledWith("");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls.map(([url, init]) => [url, init.method, init.body, init.headers])).toEqual([
@@ -246,18 +259,37 @@ describe("送る流れ", () => {
     expect(status()).toBe("追加できる写真がなかったので、送りませんでした");
     expect(messages()[0]?.items).toEqual([`big.jpg: ${TOO_LARGE}`]);
     expect(setValue).toHaveBeenCalledWith("");
+    expect(input().disabled).toBe(false);
   });
 
-  test.each(["tooLarge", "maxBytes"] as const)(
-    "data-%s が無ければ、大きさを確かめずに送り、サーバーの知らせを理由にする",
-    async (key) => {
-      delete form().dataset[key];
+  test.each([
+    ["tooLarge", undefined],
+    ["maxBytes", undefined],
+    ["maxBytes", ""],
+    ["maxBytes", "0"],
+    ["maxBytes", "abc"],
+  ] as const)(
+    "data-%s が %s なら、大きさを確かめずに送り、サーバーの知らせを理由にする",
+    async (key, value) => {
+      if (value === undefined) {
+        delete form().dataset[key];
+      } else {
+        form().dataset[key] = value;
+      }
       fetchMock.mockResolvedValue(page(413, "サーバーの知らせ"));
       await upload(form(), [file("big.jpg", 101)]);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(messages()[0]?.items).toEqual(["big.jpg: サーバーの知らせ"]);
     },
   );
+
+  test("残りの枚数を読めなければ、枚数を確かめずに送る", async () => {
+    form().dataset.remaining = "";
+    fetchMock.mockResolvedValue(page(204, null));
+    await upload(form(), [file("a.jpg", 5), file("b.jpg", 5), file("c.jpg", 5), file("d.jpg", 5)]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(form().dataset.remaining).toBe("");
+  });
 
   test("残りの枚数より多く選んだら、送らずに減らすよう伝え、送れない写真も挙げる", () => {
     submit([file("a.jpg", 5), file("b.jpg", 5), file("c.jpg", 5), file("d.jpg", 5), file("big.jpg", 101)]);

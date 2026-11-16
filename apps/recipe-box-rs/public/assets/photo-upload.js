@@ -191,7 +191,10 @@ async function finish(form, detailPath, added, failures, redirected) {
   }
   // 読み直せなかったとき（htmx が無いなど）は、フォームが残っているので、使える状態に戻す。
   if (form.isConnected) {
-    form.dataset.remaining = String(Math.max(0, Number(form.dataset.remaining) - added));
+    const remaining = count(form.dataset.remaining);
+    if (remaining !== null) {
+      form.dataset.remaining = String(Math.max(0, remaining - added));
+    }
     clearFileInput(form);
     setControlsDisabled(form, false);
     setStatus(form, added > 0 ? "送り終えました。ページを読み直すと、追加した写真が出ます" : "送り終えました");
@@ -243,6 +246,16 @@ export function localReason(limits, file) {
 }
 
 /**
+ * サーバーがフォームに書いた数（data-max-bytes・data-remaining）を読む。0 以上の整数の形でなければ null を返す。
+ * 読めない値は、画面で確かめずにサーバーに任せる（上限の判定はすべてサーバーが行う。docs/security.md）。
+ * @param {string | undefined} value
+ * @returns {number | null}
+ */
+export function count(value) {
+  return value !== undefined && /^\d+$/.test(value) ? Number(value) : null;
+}
+
+/**
  * 詳細の画面のパス。フォームの送り先（/recipes/<id>/photos）の親である。
  * @param {string} action フォームの送り先の URL。
  */
@@ -260,12 +273,12 @@ export async function upload(form, files) {
   const failures = [];
   /** @type {File[]} */
   const sending = [];
-  // 上限（data-max-bytes）か、大きすぎるときの文（data-too-large）が無ければ、大きさは確かめずにサーバーに任せる
+  // 上限（data-max-bytes）か、大きすぎるときの文（data-too-large）を読めなければ、大きさは確かめずにサーバーに任せる
   // （理由をサーバーの知らせとそろえるため）。
-  const maxBytes = Number(form.dataset.maxBytes || Number.NaN);
+  const maxBytes = count(form.dataset.maxBytes);
   const tooLarge = form.dataset.tooLarge;
   const limits =
-    tooLarge && Number.isFinite(maxBytes)
+    tooLarge && maxBytes !== null && maxBytes > 0
       ? { maxBytes, tooLarge }
       : { maxBytes: Number.POSITIVE_INFINITY, tooLarge: "" };
   for (const file of files) {
@@ -276,8 +289,9 @@ export async function upload(form, files) {
       failures.push([file.name, reason]);
     }
   }
-  const remaining = Number(form.dataset.remaining);
-  if (sending.length > remaining) {
+  // 残りの枚数（data-remaining）を読めなければ、枚数は確かめずにサーバーに任せる。
+  const remaining = count(form.dataset.remaining);
+  if (remaining !== null && sending.length > remaining) {
     // 送らずに断る写真があれば、それも一緒に知らせる（選び直すときに除けるように）。
     const others = describeFailures(failures).join("。");
     setStatus(
