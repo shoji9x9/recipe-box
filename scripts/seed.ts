@@ -14,7 +14,8 @@
 //   2. 公開 API で、デモのレシピを全部消す（レシピを消すと、その写真も消える）。
 //   3. 公開 API で、サンプルのレシピを入れる。
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
-//      アプリと同じく D1 の行を先に入れる。書いた後に行が消えていれば（レシピが消された）、その写真の R2 のデータを消す。
+//      アプリと同じく D1 の行を、書き込みが終わっていない印を付けて先に入れ、R2 に書けたら印を外す。
+//      書いた後に行が消えていれば（レシピが消された）、その写真の R2 のデータを消す。
 //      ほかの失敗では、入れた写真を消してから止まる（R2 に書き始める前なら行だけを、後なら R2・D1 の順に）。
 //      R2 の操作と、D1 の写真の行の読み取り・削除は、wrangler が失敗したら待ってやり直す。
 //      どの行からもたどれないデータを R2 に残さないためである。R2 から消せず、行も無いデータは、手で消せるようキーを表示する。
@@ -423,6 +424,8 @@ async function main(): Promise<void> {
   console.log(`レシピ ${recipes.length} 件を入れた`);
 
   // 4. 写真の D1 の行を入れてから、R2 にデータを書く（アプリの写真の追加と同じ順）。
+  //    行には、R2 への書き込みが終わっていない印（pending_since）を付け、画面と API に出さない。書けたら印を外す。
+  //    途中で止まって印が付いたまま残った行は、アプリの毎日の自動削除が片付ける（docs/spec.md の「写真」）。
   //    デモは誰でも書き込めるので、入れている間にレシピが消されることがある。そのレシピの写真は入れない。
   //    それ以外の失敗では、入れた写真を消してから止まる（もう一度実行すれば入れ直せる）。
   let inserted: Photo[] = [];
@@ -434,8 +437,8 @@ async function main(): Promise<void> {
       // 値は、形を確かめた ID・数・決まった形式の文字列だけなので、SQL に埋め込める。
       const statements = photos.map(
         (photo, index) =>
-          "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at) " +
-          `SELECT '${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index} ` +
+          "INSERT INTO photos (workspace_id, recipe_id, id, content_type, size, created_at, pending_since) " +
+          `SELECT '${workspaceId}', '${photo.recipeId}', '${photo.id}', '${photo.contentType}', ${photo.size}, ${now + index}, ${now} ` +
           `FROM recipes WHERE workspace_id = '${workspaceId}' AND id = '${photo.recipeId}'`,
       );
       for (let i = 0; i < statements.length; i += INSERT_BATCH) {
@@ -460,6 +463,21 @@ async function main(): Promise<void> {
         (await removePhotos(inserted))
           ? `写真 ${failed.length} 枚を R2 に書けなかったので、入れた写真を消した。もう一度実行する`
           : `写真 ${failed.length} 枚を R2 に書けず、入れた写真も一部を消せなかった（上の表示を見る）。もう一度実行する`,
+      );
+    }
+    // 書けた写真の行の印を外す（レシピが消されて行が無ければ、何も変わらない）。
+    try {
+      if (inserted.length > 0) {
+        const ids = photoIdList(inserted);
+        const sql = `UPDATE photos SET pending_since = NULL WHERE workspace_id = '${workspaceId}' AND id IN (${ids})`;
+        await wranglerWithRetry("写真の行の印を外す", "d1", "execute", "DB", "--command", sql);
+      }
+    } catch (error) {
+      warn(messageOf(error));
+      fail(
+        (await removePhotos(inserted))
+          ? "写真の行の印を外せなかったので、入れた写真を消した。もう一度実行する"
+          : "写真の行の印を外せず、入れた写真も一部を消せなかった（上の表示を見る）。もう一度実行する",
       );
     }
     // R2 に書いている間にレシピが消されると、行は消えたのに R2 のデータが残る。

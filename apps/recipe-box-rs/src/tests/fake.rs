@@ -14,8 +14,8 @@ use std::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, ListedRecipe, PhotoInsert, PhotoKey, PhotoLimits,
-        RecipePage, WorkspaceLimits, WorkspaceStatus,
+        Backend, BackendError, BackendResult, ListedRecipe, PendingPhoto, PhotoInsert, PhotoKey,
+        PhotoLimits, RecipePage, WorkspaceLimits, WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -62,6 +62,13 @@ pub struct FakeBackend {
     pub last_used_writes: Arc<AtomicUsize>,
     /// 写真の行。ワークスペースの ID・レシピの ID・写真の情報。
     pub photos: Arc<Mutex<Vec<(String, String, Photo)>>>,
+    /// 書き込みか削除が終わっていない印（`pending_since`）の付いた写真の ID と、印を付けた日時
+    /// （写真の ID は乱数なので、ID だけで見分ける。行を消すときは、印も消す）。
+    pub pending_photos: Arc<Mutex<HashMap<String, i64>>>,
+    /// `true` なら、写真の印を外す・付けるのが失敗したことにする（D1 の失敗）。
+    pub broken_photo_pending: bool,
+    /// `true` なら、写真の行を消すのが失敗したことにする（D1 の失敗）。
+    pub broken_photo_delete: bool,
     /// 写真を追加した記録（追加した日時）。
     pub photo_uploads: Arc<Mutex<Vec<i64>>>,
     /// R2 のオブジェクト。キーと、データ・形式。
@@ -106,6 +113,9 @@ impl Default for FakeBackend {
             write_limit_keys: Arc::default(),
             last_used_writes: Arc::default(),
             photos: Arc::default(),
+            pending_photos: Arc::default(),
+            broken_photo_pending: false,
+            broken_photo_delete: false,
             photo_uploads: Arc::default(),
             objects: Arc::default(),
             broken_r2_put: false,
@@ -157,6 +167,61 @@ impl FakeBackend {
                 created_at,
             },
         ));
+    }
+
+    /// 写真の行に、書き込みか削除が終わっていない印が付いているか。
+    pub fn is_pending(&self, id: &str) -> bool {
+        self.pending_photos.lock().unwrap().contains_key(id)
+    }
+
+    /// 写真の行に、日時 `since` の印を付ける（途中で残った行を作るテストで使う）。
+    pub fn mark_pending(&self, id: &str, since: i64) {
+        self.pending_photos
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), since);
+    }
+
+    /// 消した写真の行の印を消す（本物では、印は行の列なので、行と一緒に消える）。
+    fn forget_pending<'a>(&self, ids: impl IntoIterator<Item = &'a String>) {
+        let mut pending = self.pending_photos.lock().unwrap();
+        for id in ids {
+            pending.remove(id);
+        }
+    }
+
+    /// 写真の行に、印が付いていないか（見せる写真か）。
+    fn is_visible(&self, photo: &Photo) -> bool {
+        !self.is_pending(&photo.id)
+    }
+
+    /// 写真の印を付ける（`since` が日時）か外す（`None`）。付けるときは印の無い行に、外すときは印の付いた行にだけ効く。
+    fn set_pending(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        since: Option<i64>,
+    ) -> BackendResult<bool> {
+        self.check()?;
+        if self.broken_photo_pending {
+            return Err(BackendError("壊れた DB（写真の印）".into()));
+        }
+        let exists = self.photos.lock().unwrap().iter().any(|(w, r, p)| {
+            w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
+        });
+        if !exists {
+            return Ok(false);
+        }
+        let mut pending = self.pending_photos.lock().unwrap();
+        Ok(match since {
+            Some(since) if !pending.contains_key(id.as_str()) => {
+                pending.insert(id.as_str().to_owned(), since);
+                true
+            }
+            Some(_) => false,
+            None => pending.remove(id.as_str()).is_some(),
+        })
     }
 
     /// ワークスペースのすべての写真の、レシピの ID と写真の ID。
@@ -370,6 +435,7 @@ impl Backend for FakeBackend {
                         .filter(|_| with_first_photo)
                         .filter(|(w, r, _)| w == workspace.as_str() && *r == recipe.id)
                         .map(|(_, _, photo)| photo)
+                        .filter(|photo| self.is_visible(photo))
                         .min_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)))
                         .map(|photo| photo.id.clone());
                     ListedRecipe {
@@ -455,6 +521,7 @@ impl Backend for FakeBackend {
                 .map(|(_, _, p)| p.id.clone())
                 .collect();
             photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
+            self.forget_pending(&removed);
             Some(removed)
         }))
     }
@@ -492,6 +559,7 @@ impl Backend for FakeBackend {
                 .lock()
                 .unwrap()
                 .retain(|(w, _, _)| w != workspace.as_str());
+            self.forget_pending(removed.iter().map(|key| &key.id));
             // 別のリクエストが先に（同じように）消していたなら、この削除では何も消えていない。
             if self.workspace_vanishes_on_delete {
                 return None;
@@ -541,8 +609,26 @@ impl Backend for FakeBackend {
                 return PhotoInsert::CapacityReached;
             }
             photos.push((workspace.to_string(), recipe.to_string(), photo.clone()));
+            // 本物と同じく、R2 への書き込みが終わっていない印を付けて入れる。
+            self.mark_pending(&photo.id, photo.created_at);
             uploads.push(photo.created_at);
             PhotoInsert::Inserted
+        }))
+    }
+
+    fn list_recipe_photo_ids(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
+        ready(self.check().map(|()| {
+            self.photos
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
+                .map(|(_, _, p)| p.id.clone())
+                .collect()
         }))
     }
 
@@ -559,6 +645,7 @@ impl Backend for FakeBackend {
                 .iter()
                 .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
                 .map(|(_, _, p)| p.clone())
+                .filter(|p| self.is_visible(p))
                 .collect();
             photos.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
             photos
@@ -580,6 +667,7 @@ impl Backend for FakeBackend {
                     w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
                 })
                 .map(|(_, _, p)| p.clone())
+                .filter(|p| self.is_visible(p))
         }))
     }
 
@@ -589,13 +677,94 @@ impl Backend for FakeBackend {
         recipe: &RecipeId,
         id: &PhotoId,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
+        if self.broken_photo_delete {
+            return ready(Err(BackendError("壊れた DB（写真の削除）".into())));
+        }
         ready(self.check().map(|()| {
             let mut photos = self.photos.lock().unwrap();
             let before = photos.len();
             photos.retain(|(w, r, p)| {
                 !(w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str())
             });
-            photos.len() < before
+            let deleted = photos.len() < before;
+            if deleted {
+                self.forget_pending([&id.as_str().to_owned()]);
+            }
+            deleted
+        }))
+    }
+
+    fn finish_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
+        ready(self.set_pending(workspace, recipe, id, None))
+    }
+
+    fn hide_photo(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        now: i64,
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
+        ready(self.set_pending(workspace, recipe, id, Some(now)))
+    }
+
+    fn list_pending_photos(
+        &self,
+        before: i64,
+    ) -> impl Future<Output = BackendResult<Vec<PendingPhoto>>> + Send {
+        ready(self.check().map(|()| {
+            self.photos
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, _, p)| {
+                    self.pending_photos
+                        .lock()
+                        .unwrap()
+                        .get(&p.id)
+                        .is_some_and(|&since| since < before)
+                })
+                .map(|(w, r, p)| PendingPhoto {
+                    workspace_id: w.clone(),
+                    recipe_id: r.clone(),
+                    id: p.id.clone(),
+                })
+                .collect()
+        }))
+    }
+
+    fn delete_photos(
+        &self,
+        photos: &[(WorkspaceId, RecipeId, PhotoId)],
+        marked_before: i64,
+    ) -> impl Future<Output = BackendResult<()>> + Send {
+        if self.broken_photo_delete {
+            return ready(Err(BackendError("壊れた DB（写真の削除）".into())));
+        }
+        ready(self.check().map(|()| {
+            // 本物の batch と同じく、まとめて消す（途中で失敗して一部だけが消えることは無い）。
+            // 印を付けた日時が marked_before より前の行だけを消し、消した行の印だけを消す。
+            let marked = self.pending_photos.lock().unwrap().clone();
+            let mut rows = self.photos.lock().unwrap();
+            let mut deleted = Vec::new();
+            rows.retain(|(w, r, p)| {
+                let target = photos.iter().any(|(workspace, recipe, id)| {
+                    w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
+                }) && marked
+                    .get(&p.id)
+                    .is_some_and(|&since| since < marked_before);
+                if target {
+                    deleted.push(p.id.clone());
+                }
+                !target
+            });
+            drop(rows);
+            self.forget_pending(&deleted);
         }))
     }
 
