@@ -29,6 +29,17 @@ jobs:
     permissions:
       contents: read # コードを読む
     steps:
+      # 本番の権限は、レビューを経て main に入ったコードにだけ渡す。それを守るのは Environment「production」の
+      # main だけを許す設定である（docs/development.md。ブランチの workflow はこの step を消せるので、ここでは守れない）。
+      # この step は、誤って main 以外から手で動かしたときに、黙って skip せずに失敗して気付けるようにするためのもの。
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::デプロイは main からだけ動かす（今は $REF）"
+            exit 1
+          fi
       - name: Check Cloudflare credentials
         id: cred
         env:
