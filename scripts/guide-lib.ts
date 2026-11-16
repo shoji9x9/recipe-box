@@ -126,8 +126,9 @@ export function systemFonts(svg: string): string {
     }
     out = out.replace(rule, `$1${SYSTEM_FONTS};${style}`).replace(face, "");
   }
-  // 知らない種類のフォントが残っていれば、埋め込んだまま配らないよう失敗させる。
-  if (/@font-face|d2-\d+-font-/.test(out)) {
+  // 知らない種類のフォントが残っていれば、埋め込んだまま配らないよう失敗させる。図の文字（<text>）は見ず、<style> の中だけを見る。
+  const styles = out.match(/<style[^>]*>[\s\S]*?<\/style>/g) ?? [];
+  if (styles.some((style) => /@font-face|d2-\d+-font-/.test(style))) {
     throw new GuideError("d2 の SVG に、取り除けなかったフォントがあります（scripts/guide-lib.ts の systemFonts）");
   }
   return out;

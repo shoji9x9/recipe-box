@@ -1,4 +1,6 @@
 // scripts/guide-lib.ts の単体テスト（mise run test）。
+import { readFileSync } from "node:fs";
+
 import { describe, expect, test } from "vitest";
 
 import {
@@ -132,9 +134,22 @@ describe("systemFonts", () => {
     );
   });
 
-  test("OS のフォントの並びは、日本語のゴシックを経て sans-serif で終わる", () => {
-    expect(SYSTEM_FONTS).toContain('"Noto Sans JP"');
-    expect(SYSTEM_FONTS.endsWith("sans-serif")).toBe(true);
+  test("OS のフォントの並びは、画面の文字（style.css の --font）と同じ", () => {
+    const css = readFileSync("apps/recipe-box-rs/public/assets/style.css", "utf8");
+    expect(css.match(/^\s*--font: (.+);$/m)?.[1]).toBe(SYSTEM_FONTS);
+  });
+
+  test("斜体は、斜めにする指定を書く", () => {
+    const italic = [
+      '.d2-1 .text-italic {\n\tfont-family: "d2-1-font-italic";\n}',
+      '@font-face {\n\tfont-family: d2-1-font-italic;\n\tsrc: url("data:application/font-woff;base64,CCC=");\n}',
+    ].join("\n");
+    expect(systemFonts(italic)).toBe(`.d2-1 .text-italic {\n\tfont-family: ${SYSTEM_FONTS}; font-style: italic;\n}`);
+  });
+
+  test("図の文字に @font-face などを書いても、失敗しない", () => {
+    const text = `${svg}\n<text>@font-face と d2-1-font-bold</text>`;
+    expect(systemFonts(text)).toContain("<text>@font-face と d2-1-font-bold</text>");
   });
 
   test("フォントを埋め込まない SVG は、文字に font-bold などを含んでも変えない", () => {
@@ -147,7 +162,7 @@ describe("systemFonts", () => {
     ["class が無い", '@font-face { font-family: d2-1-font-bold; src: url("data:x"); }'],
     ["2 つある", `${svg}\n${svg}`],
     ["src が data: でない", svg.replace("data:application/font-woff;base64,BBB=", "https://example.com/a.woff")],
-    ["知らない種類のフォントがある", `${svg}\n@font-face { font-family: d2-1-font-mono; src: url("data:z"); }`],
+    ["知らない種類のフォントがある", svg.replace("]]></style>", '\n@font-face { font-family: d2-1-font-mono; }]]></style>')],
   ])("書き方が想定と違えば失敗する（%s）", (_, input) => {
     expect(() => systemFonts(input)).toThrow(GuideError);
   });

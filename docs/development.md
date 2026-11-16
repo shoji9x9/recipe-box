@@ -51,7 +51,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 - スモークテスト（`scripts/smoke-test.ts`、`mise run smoke`）は、起動した Worker に HTTP で API を呼び、本物に近い D1・R2・Rate Limiting を通して確かめる。値と応答の形は `docs/spec.md` を正にする。
   確かめるものは、次の 2 つに分かれる。リライトの後の新しいアプリには、`API_ONLY=1` を付け、`SCHEDULED_LOG` を付けずに当てる（`docs/architecture.md` の「リライトの比較の基準」）。
   - API（`docs/spec.md` の「API」）だけで確かめるもの。いつも確かめる。回数の制限は `CHECK_RATE_LIMIT=1` のときだけ確かめる。
-  - 今の作りに頼るもの。画面と静的アセット（`/` の文字・`/assets/` のファイル・`/about` の `public/_headers`）は、`API_ONLY=1` のときは確かめない。
+  - 今の作りに頼るもの。画面と静的アセット（`/` の文字・`/assets/` のファイル・`/about` と `/assets/guide/` の `public/_headers`）は、`API_ONLY=1` のときは確かめない。
     定期の自動削除（`SCHEDULED_LOG` のときだけ。wrangler でローカルの D1 の表を書き換え、ログの文を読む）も、今の作りに頼る。
   - ワークスペースを作る数が 1 日の作成の上限（docs/security.md の「費用の対策」）に近づかないよう、確かめる項目を足すときは、作ったワークスペースを使い回す。
 
