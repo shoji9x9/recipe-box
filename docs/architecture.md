@@ -3,10 +3,10 @@
 ## 方針
 
 - リライト前は Rust で書き、Cloudflare の Workers・D1・R2 で動かす。
-- リライト後は TypeScript・React・Hono・Drizzle などで書き、Cloudflare 以外のプラットフォームで動かす想定とする。オブジェクトストレージは使わない。
-  リライトの題材として差が出るよう、リライト前の技術スタックはリライト後となるべく異なるものにする。
+- リライト後の技術スタック（言語・フレームワーク・実行環境・DB・写真の置き場など）は決めない。リライトをする人が選ぶ。
+  リライトの題材として差が出るよう、リライト前は、Web アプリでよく使われる TypeScript の構成（React・Hono など）とは異なる技術を選んでいる。
 - 画面のほかに API を持たせる。リライトの前後で同じ API を保ち、テストに使う。
-- SQL は標準の範囲で書く。D1 は SQLite なので、SQLite だけで通じる書き方を避け、PostgreSQL に移しても差が出ないようにする。
+- SQL は標準の範囲で書く。D1 は SQLite なので、SQLite だけで通じる書き方を避け、リライトで別の DB（PostgreSQL など）に移しても差が出ないようにする。
 - ログイン機能は作らない。利用者の情報を持たずに、ワークスペースの ID でデータを分ける。
 
 ## リライトの比較の基準
@@ -21,7 +21,7 @@
 - 本番の Workers の実行環境は、Cloudflare が更新し続けるので固定できない。`compatibility_date`（`wrangler.toml`）で挙動は保たれるが、実行環境の版そのものは変わる。
 - ローカルなら、同じ commit から、同じ版の組み合わせで何度でも作り直せる。ツールは `mise.lock`、依存は `Cargo.lock` と `pnpm-lock.yaml` で決まる。
   Workers の実行環境（workerd）は、`pnpm-lock.yaml` で固定した wrangler の版で決まる。D1 と R2 も、wrangler がローカルに作るもの（Miniflare）を使う。
-- リライト後は Cloudflare 以外で動かす想定なので、新しい側は Workers の実行環境に依らない。固定が要るのは現行の側だけである。
+- 新しい側の実行環境は、リライトをする人が選び、自分で作り直せる。比べる基準として固定が要るのは、現行の側だけである。
 - 基準の環境には、Cloudflare のアカウントは要らない。`wrangler dev` は、何も指定しなければローカルの実行環境だけで動き、ログインを求めない。
   このアプリが使う D1・R2・Rate Limiting・静的アセットは、どれもローカルのものを使う。CI の「Build and smoke test」の job も、Cloudflare の認証情報を渡さずに Worker を起動し、API を確かめている。
   アカウントが要るのは、本番に触る操作（デプロイ・`mise run pin -- --remote`・`mise run seed -- --remote`・本番の `wrangler tail`）だけである。
@@ -86,4 +86,4 @@ Dependabot の更新のうち自動でマージされたもの（`dependabot-aut
 
 CSS の入れ子に対応したブラウザは、削除の確認に使う Invoker Commands（docs/spec.md）に対応したブラウザより広い。そのため、入れ子を使っても、使えるブラウザは変わらない。
 
-Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった。ただし公式ブログによると、Rust の Worker の開発とデプロイは wrangler に任せている。そのため wrangler を使う。リライト後は Cloudflare 以外で動かす想定なので、`cf` に移すかは検討しない。
+Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった。ただし公式ブログによると、Rust の Worker の開発とデプロイは wrangler に任せている。そのため wrangler を使う。リライト前の構成は wrangler で足りるので、`cf` に移すかは検討しない。

@@ -1,18 +1,22 @@
-# 全体の構成。mise run guide が SVG にする（docs/development.md）。
+# 全体の構成。mise run guide が SVG にする（docs/development.md の「解説」）。
+...@_style
+
 direction: down
 
 users: 使う人 {
-  browser: ブラウザ（画面）
-  api_client: API の利用者\n（スモークテスト・seed）
+  class: actor
+  browser: ブラウザ（画面） {class: actor}
+  api_client: API の利用者\n（スモークテスト・seed） {class: actor}
 }
 
 cloudflare: Cloudflare {
-  assets: 静的アセット\n（CSS・JavaScript・解説）
-  worker: Worker\n（Rust・axum を Wasm で動かす）
-  cron: Cron Trigger\n（毎日 UTC 18 時）
-  ratelimit: Rate Limiting
-  d1: D1（SQLite） {shape: cylinder}
-  r2: R2（写真） {shape: cylinder}
+  class: cloudflare
+  assets: 静的アセット\nCSS・JavaScript・解説 {class: service}
+  worker: Worker\nRust・axum を Wasm で動かす {class: app}
+  cron: Cron Trigger\n毎日 UTC 18 時 {class: service}
+  ratelimit: Rate Limiting\nIP アドレスごとの回数\n（Cloudflare が数える） {class: service}
+  d1: D1\nレシピ・ワークスペース {class: store}
+  r2: R2\n写真のデータ {class: store}
 
   cron -> worker: 自動削除
   worker -> ratelimit
@@ -20,13 +24,15 @@ cloudflare: Cloudflare {
   worker -> r2
 }
 
+# GitHub Actions は、使う人より後に書き、図の下の方に置く。
 github: GitHub Actions {
-  deploy: deploy.yml（main に入ったら）
-  seed: seed-demo.yml（毎日 UTC 19 時）
+  class: github
+  deploy: deploy.yml\nmain に入ったら {class: actor}
+  seed: seed-demo.yml\n毎日 UTC 19 時 {class: actor}
 }
 
 users.browser -> cloudflare.assets: ファイルのパス
-users.browser -> cloudflare.worker: 画面
 users.api_client -> cloudflare.worker: API
-github.deploy -> cloudflare: マイグレーションとデプロイ
-github.seed -> cloudflare: デモを入れ直す
+users.browser -> cloudflare.worker: 画面
+cloudflare <- github: デプロイ・デモの入れ直し
+

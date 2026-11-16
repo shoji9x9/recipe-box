@@ -111,7 +111,7 @@ main に入った変更は、GitHub Actions の `deploy.yml` が本番にデプ�
 | 画面の部分の入れ替え | htmx | React・Alpine.js |
 
 全体の一覧は [docs/architecture.md の「技術構成（リライト前）」](repo:docs/architecture.md#技術構成リライト前)にあります。
-リライト前の技術は、リライトの題材として差が出るよう、リライト後（TypeScript・React・Hono・Drizzle など）となるべく異なるものにしています。
+リライト後の技術スタックは決めていません。リライトの題材として差が出るよう、リライト前は、Web アプリでよく使われる TypeScript の構成とは異なる技術を選んでいます。表の右の列は、読む人が知っていそうな技術との対応で、リライト後の候補を示すものではありません。
 
 ### Rust
 
@@ -303,19 +303,19 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 
 ## リライトで選ぶもの
 
-リライト後の方針（[docs/architecture.md](repo:docs/architecture.md)）は、TypeScript・React・Hono・Drizzle など、Cloudflare 以外のプラットフォーム、オブジェクトストレージを使わない、です。
-これを前提に、選ばなければならないものを挙げます。正解は書かず、選ぶ材料を書きます。
+リライト後の技術スタック（言語・フレームワーク・実行環境・DB・写真の置き場など）は決めていません（[docs/architecture.md の「方針」](repo:docs/architecture.md#方針)）。リライトをする人が選びます。
+ここでは、選ばなければならないものと、どれを選んでも守る仕様を挙げます。正解は書かず、選ぶ材料を書きます。
 
 比較の基準にする現行の環境は、選んだ commit をローカルで動かしたものです（[docs/architecture.md の「リライトの比較の基準」](repo:docs/architecture.md#リライトの比較の基準)）。
 
 | 項目 | リライト前のやり方 | 守る仕様 | 選ぶときの注意 |
 | --- | --- | --- | --- |
-| フロントエンドの言語・フレームワーク | askama で HTML を作り、htmx で一部を入れ替える | [画面](repo:docs/spec.md#画面) | 画面は JavaScript が動かなくても使える仕様である。React で SPA にすると守れないので、SSR にするか、段階的な強化（progressive enhancement）にするかを決める |
+| フロントエンドの言語・フレームワーク | askama で HTML を作り、htmx で一部を入れ替える | [画面](repo:docs/spec.md#画面) | 画面は JavaScript が動かなくても使える仕様である。ブラウザだけで画面を組み立てる SPA にすると守れないので、サーバーで HTML を返すか、段階的な強化（progressive enhancement）にするかを決める |
 | バックエンドの言語・フレームワーク | Rust・axum・workers-rs | [API](repo:docs/spec.md#api) | 画面と API の両方を返す。API はリライトの前後で同じに保つ（スモークテストに使う） |
-| 実行環境（ホスティング） | Cloudflare Workers | [費用の対策](repo:docs/security.md#費用の対策) | 1 回の CPU 時間・本文の大きさの上限など、プラットフォームの制約で作りが変わる |
-| DB とクエリの書き方 | D1（SQLite）、標準の SQL、`LIMIT ? OFFSET ?`、`instr` | [テーブル](repo:docs/spec.md#テーブル) | PostgreSQL を想定する。`instr` は `strpos` などに書き換える。`LOWER` を使わずアプリで作る `search_name` の決まりを保つ。マイグレーションは足すだけにする |
+| 実行環境（ホスティング） | Cloudflare Workers | [費用の対策](repo:docs/security.md#費用の対策) | Cloudflare のまま動かすか、ほかのプラットフォームに移すか。1 回の CPU 時間・本文の大きさの上限など、プラットフォームの制約で作りが変わる |
+| DB とクエリの書き方 | D1（SQLite）、標準の SQL、`LIMIT ? OFFSET ?`、`instr` | [テーブル](repo:docs/spec.md#テーブル) | どの DB にするか。SQL は標準の範囲なので、移すときに書き換えるのは例外の `LIMIT ? OFFSET ?` と `instr`（PostgreSQL なら `strpos`）だけである。`LOWER` を使わずアプリで作る `search_name` の決まりを保つ。マイグレーションは足すだけにする |
 | トランザクション | D1 の batch で、数えることと保存することを 1 つにまとめる | [ワークスペースによるデータの分離](repo:docs/spec.md#ワークスペースによるデータの分離) | 上限の判定（同時に追加されても超えない）を、どの分離レベル・ロックで守るか |
-| 写真の保管 | R2。D1 に行を入れて上限を判定してから R2 に書く | [写真](repo:docs/spec.md#写真) | オブジェクトストレージを使わず DB に保管する。API の仕様は変えない。大きさの上限・合計の上限の意味が変わる（費用の対策を作り直す） |
+| 写真の保管 | R2。D1 に行を入れて上限を判定してから R2 に書く | [写真](repo:docs/spec.md#写真) | オブジェクトストレージ（R2・S3 など）に置くか、DB に置くか。どちらでも API の仕様は変えない。置き場の料金と制限が変わるので、大きさの上限・合計の上限を見直す（費用の対策を作り直す） |
 | 写真の受け取り | multipart のふつうのフォームと、API はバイト列そのもの。`Content-Length` で先に断る | [写真の API](repo:docs/spec.md#写真の-api) | 本文の上限、形式を先頭のバイトで決めること |
 | 定期実行 | Cron Trigger（毎日 UTC の 18 時、使われないワークスペースを消す） | [ワークスペースによるデータの分離](repo:docs/spec.md#ワークスペースによるデータの分離) | 移した先の定期実行の仕組み。途中で使われたワークスペースを消さない確かめ直しを保つ |
 | デモのリセット | GitHub Actions（`seed-demo.yml`）が毎日 seed を流す。写真は wrangler で D1 と R2 に直接入れる | [デモ用のデータ](repo:docs/spec.md#デモ用のデータ) | 写真を入れる部分を書き直す。アプリと同じデータの層（ORM など）で入れられるか |

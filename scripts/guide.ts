@@ -35,7 +35,8 @@ function build(): Outputs {
   const page = renderMarkdown(markdown, existsSync, (path) => readFileSync(path, "utf8"));
   const outputs: Outputs = new Map([[PAGE_OUT, renderPage(page)]]);
 
-  const sources = readdirSync(DIAGRAM_SOURCE_DIR).filter((file) => file.endsWith(".d2"));
+  // _ で始まる .d2 は、各図が読み込む共通の設定（_style.d2）で、それ自体は図にしない。
+  const sources = readdirSync(DIAGRAM_SOURCE_DIR).filter((file) => file.endsWith(".d2") && !file.startsWith("_"));
   const used = new Set(diagrams.map((d) => d.name));
   const unused = sources.filter((file) => !used.has(file.slice(0, -".d2".length)));
   if (unused.length > 0) {

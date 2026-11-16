@@ -1,48 +1,200 @@
 /*
  * アプリの解説（/about）のスタイル。画面と同じ style.css の後に読む。
  * 解説は mise run guide が作る静的なページで、CSP でインラインのスタイルを禁じているので、ここにまとめる。
+ *
+ * 色は画面の変数（style.css の :root）を使い、解説だけで使う淡い色をここで足す。
+ * 図（guide/_style.d2）と同じ役割の色にそろえる（Cloudflare は橙、このアプリは画面の主色、データは青）。
  */
 .guide {
-  & main {
-    max-width: var(--width-content);
+  --guide-accent-soft: #fff0f3;
+  --guide-cloudflare: #f38020;
+  --guide-cloudflare-soft: #fff6ee;
+  --guide-store-soft: #eef4ff;
+  --guide-code-bg: #1f2328;
+  --guide-code-ink: #e6edf3;
+  /* 上に固定したヘッダーの高さ。目次を、その下に固定する */
+  --guide-header-height: 66px;
+
+  background: var(--surface-soft);
+}
+
+/* 広い画面では、左に目次を固定し、右に本文を置く。狭い画面では、目次を本文の上に置く。 */
+.guide-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "toc"
+    "main";
+  gap: var(--space-6);
+  max-width: var(--width-page);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4) var(--space-16);
+
+  @media (min-width: 960px) {
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-areas: "toc main";
+    gap: var(--space-8);
+    padding-inline: var(--space-6);
   }
 
-  & article {
-    overflow-wrap: anywhere;
+  & > main {
+    grid-area: main;
+    max-width: none;
+    margin: 0;
+    padding: var(--space-6) var(--space-4);
+    border: 1px solid var(--hairline-soft);
+    border-radius: var(--radius-md);
+    background: var(--canvas);
 
-    & h2 {
-      margin-top: var(--space-12);
-      padding-top: var(--space-4);
-      border-top: 1px solid var(--hairline-soft);
+    @media (min-width: 960px) {
+      padding: var(--space-12) var(--space-12);
+    }
+  }
+}
+
+.guide h1 {
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 4px solid var(--primary);
+}
+
+/* 目次 */
+.guide .toc {
+  grid-area: toc;
+  align-self: start;
+  padding: var(--space-4);
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+  font-size: 14px;
+
+  @media (min-width: 960px) {
+    position: sticky;
+    top: calc(var(--guide-header-height) + var(--space-4));
+    max-block-size: calc(100vh - var(--guide-header-height) - var(--space-8));
+    overflow-y: auto;
+  }
+
+  & .toc-title {
+    margin: 0 0 var(--space-2);
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  & ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  & a {
+    display: block;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--body);
+    text-decoration: none;
+
+    &:hover {
+      background: var(--guide-accent-soft);
+      color: var(--ink);
     }
 
-    & h3 {
-      margin: var(--space-8) 0 var(--space-2);
-      font-size: 17px;
-    }
-
-    & h4 {
-      margin: var(--space-6) 0 var(--space-2);
-      font-size: 16px;
-    }
-
-    & li {
-      color: var(--body);
-    }
-
-    & img {
-      display: block;
-      max-width: 100%;
-      height: auto;
-      margin: var(--space-4) 0;
+    &:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 1px;
     }
   }
 
-  /* 幅の広い表とコードは、その部分だけを横に動かす（scripts/guide-lib.ts が tabindex と名前を付ける）。 */
-  & .scroll {
-    overflow-x: auto;
-    max-width: 100%;
-    margin: var(--space-4) 0;
+  & .toc-2 {
+    margin-top: var(--space-2);
+
+    & > a {
+      font-weight: 600;
+      color: var(--ink);
+    }
+  }
+
+  & .toc-3 > a {
+    padding-left: var(--space-5);
+  }
+}
+
+/* 本文 */
+.guide article {
+  overflow-wrap: anywhere;
+
+  /* 最初の段落（このページの紹介）を、少し大きく、色の帯で目立たせる。 */
+  & > p:first-child {
+    margin-top: 0;
+    padding: var(--space-4) var(--space-5);
+    border-left: 4px solid var(--primary);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: var(--guide-accent-soft);
+    font-size: 17px;
+    color: var(--ink);
+  }
+
+  & h2 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-16);
+    font-size: 22px;
+
+    /* 見出しの左に、主色の短い線を置く。 */
+    &::before {
+      content: "";
+      flex: none;
+      inline-size: 6px;
+      block-size: 1.1em;
+      border-radius: var(--radius-full);
+      background: var(--primary);
+    }
+  }
+
+  & h3 {
+    margin: var(--space-12) 0 var(--space-2);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--hairline-soft);
+    font-size: 18px;
+  }
+
+  & h4 {
+    margin: var(--space-8) 0 var(--space-2);
+    font-size: 16px;
+    color: var(--primary-active);
+  }
+
+  & p,
+  & li {
+    line-height: 1.8;
+  }
+
+  & li {
+    color: var(--body);
+  }
+
+  & a {
+    color: var(--primary-active);
+    text-decoration-thickness: 1px;
+
+    &:hover {
+      text-decoration-thickness: 2px;
+    }
+  }
+
+  & strong {
+    color: var(--ink);
+  }
+
+  /* 図（押すと元の大きさで開く） */
+  & a:has(> img) {
+    display: block;
+    margin: var(--space-6) 0;
+    padding: var(--space-4);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+    background: var(--canvas);
 
     &:focus-visible {
       outline: 2px solid var(--ink);
@@ -50,62 +202,86 @@
     }
   }
 
-  & table {
-    border-collapse: collapse;
-    font-size: 14px;
+  & img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+  }
+}
 
-    & th,
-    & td {
-      padding: var(--space-2) var(--space-3);
-      border: 1px solid var(--hairline);
-      text-align: left;
-      vertical-align: top;
-      min-width: 8em;
-    }
+/* 幅の広い表とコードは、その部分だけを横に動かす（scripts/guide-lib.ts が tabindex と名前を付ける）。 */
+.guide .scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: var(--space-4) 0 var(--space-6);
 
-    & th {
-      background: var(--surface-soft);
-    }
+  &:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+}
+
+.guide table {
+  border-collapse: collapse;
+  font-size: 14px;
+
+  & th,
+  & td {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--hairline);
+    text-align: left;
+    vertical-align: top;
+    min-width: 8em;
+    line-height: 1.6;
   }
 
-  & pre {
-    padding: var(--space-4);
-    border-radius: var(--radius-sm);
+  & th {
+    background: var(--guide-accent-soft);
+    color: var(--ink);
+  }
+
+  & tbody tr:nth-child(even) {
     background: var(--surface-soft);
-    font-size: 13px;
-    line-height: 1.5;
   }
+
+  /* 1 列目は、行の名前として太くする。 */
+  & td:first-child {
+    font-weight: 600;
+    color: var(--ink);
+  }
+}
+
+.guide pre {
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-sm);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+  font-size: 13px;
+  line-height: 1.6;
 
   & code {
-    font-family: var(--font-mono);
-    font-size: 0.9em;
+    background: none;
+    color: inherit;
   }
+}
 
-  & :not(pre) > code {
-    padding: 1px var(--space-1);
-    border-radius: 4px;
-    background: var(--surface-strong);
-    overflow-wrap: anywhere;
-  }
+.guide code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
 
-  & .toc {
-    padding: var(--space-4) var(--space-6);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius-md);
+.guide :not(pre) > code {
+  padding: 1px var(--space-1);
+  border-radius: 4px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
 
-    & ol {
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    & li {
-      margin: var(--space-1) 0;
-    }
-
-    & .toc-3 {
-      padding-left: var(--space-6);
-      font-size: 14px;
-    }
-  }
+/* 引用するコードの前の「<ファイル> から:」の行 */
+.guide article p:has(+ pre) {
+  margin-bottom: 0;
+  font-size: 13px;
+  color: var(--muted);
 }

@@ -310,7 +310,7 @@ export function escapeHtml(text: string): string {
 /** ページの全体の HTML を作る。CSP でインラインのスタイルとスクリプトを禁じるので、どちらも使わない。 */
 export function renderPage(page: { title: string; html: string; headings: Heading[] }): string {
   const toc = page.headings
-    .map((h) => `${"  ".repeat(h.level - 1)}<li class="toc-${h.level}"><a href="#${h.id}">${escapeHtml(h.text)}</a></li>`)
+    .map((h) => `          <li class="toc-${h.level}"><a href="#${h.id}">${escapeHtml(h.text)}</a></li>`)
     .join("\n");
   return `<!doctype html>
 <!-- このファイルは mise run guide が guide/about.md から作る。手で直さない（docs/development.md）。 -->
@@ -326,18 +326,22 @@ export function renderPage(page: { title: string; html: string; headings: Headin
   <body class="guide">
     <header>
       <a class="brand" href="/">recipe-box</a>
+      <nav><a href="/">レシピ帳に戻る</a></nav>
     </header>
-    <main>
-      <h1>${escapeHtml(page.title)}</h1>
+    <div class="guide-layout">
       <nav class="toc" aria-label="目次">
+        <p class="toc-title">目次</p>
         <ol>
 ${toc}
         </ol>
       </nav>
-      <article>
+      <main>
+        <h1>${escapeHtml(page.title)}</h1>
+        <article>
 ${page.html.trimEnd()}
-      </article>
-    </main>
+        </article>
+      </main>
+    </div>
   </body>
 </html>
 `;

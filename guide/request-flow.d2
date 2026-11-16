@@ -1,21 +1,24 @@
-# リクエストが届いてから応答を返すまで。mise run guide が SVG にする（docs/development.md）。
+# リクエストが届いてから応答を返すまで。mise run guide が SVG にする（docs/development.md の「解説」）。
+...@_style
+
 direction: down
 
-req: リクエスト {shape: oval}
-assets: 静的アセットに当たるか {shape: diamond}
-file: ファイルを返す\n（Worker は動かない） {shape: page}
-fetch: "#[event(fetch)] の入口\n写真のバイト列なら、本文をストリームのまま分けておく"
-router: axum の Router\nパスとメソッドでハンドラーを選ぶ
-mw: middleware\n画面の応答のヘッダー（CSP など）・書き込みの回数・本文の大きさ
-ext: extractor（Workspace）\nX-Workspace-Id か Cookie の ID を確かめ、最終利用日時を更新する
-handler: ハンドラー\n入力を確かめ、Backend を通して読み書きする
-backend: Backend（CloudflareBackend）\nD1・R2・Rate Limiting・乱数・時計
-res: 応答（HTML か JSON） {shape: oval}
+req: リクエスト {class: actor; shape: oval}
+assets: 静的アセットに当たるか {class: service; shape: diamond}
+file: ファイルを返す\n（Worker は動かない） {class: service; shape: page}
+fetch: "#[event(fetch)] の入口\n写真のバイト列なら、本文をストリームのまま分けておく" {class: app}
+router: axum の Router\nパスとメソッドでハンドラーを選ぶ {class: app}
+mw: middleware\n画面の応答のヘッダー（CSP など）・書き込みの回数・本文の大きさ {class: app}
+ext: extractor（Workspace）\nX-Workspace-Id か Cookie の ID を確かめ、最終利用日時を更新する {class: app}
+handler: ハンドラー\n入力を確かめ、Backend を通して読み書きする {class: app}
+backend: Backend（CloudflareBackend）\nD1・R2・Rate Limiting・乱数・時計 {class: service}
+res: 応答（HTML か JSON） {class: actor; shape: oval}
 
 req -> assets
 assets -> file: はい
 assets -> fetch: いいえ
-fetch -> router -> mw -> ext -> handler -> backend
+fetch -> router -> mw -> ext -> handler
+handler -> backend: 読み書き
 handler -> res
-mw -> res: 断る（429・413）
-ext -> res: 断る（400・404）
+mw -> res: 断る（429・413） {class: reject}
+ext -> res: 断る（400・404） {class: reject}

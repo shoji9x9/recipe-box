@@ -1,10 +1,12 @@
 # 写真を追加するときの D1 と R2 の順序。mise run guide が SVG にする（docs/development.md）。
+...@_style
+
 shape: sequence_diagram
 
-client: ブラウザ・API の利用者
-worker: Worker
-d1: D1
-r2: R2
+client: ブラウザ・API の利用者 {class: actor}
+worker: Worker {class: app}
+d1: D1 {class: store}
+r2: R2 {class: store}
 
 client -> worker: 写真のバイト列（Content-Length 付き）
 worker -> worker: 先頭のバイトで形式を決める\n大きさは Content-Length で決める

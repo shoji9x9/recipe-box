@@ -73,7 +73,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（上の「テスト」） |
 | `scripts/seed.ts` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
 | `scripts/seed-lib.ts` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
-| `guide/` | アプリの解説（`/about/`）の元の文章（`about.md`）と図の元（`*.d2`） |
+| `guide/` | アプリの解説（`/about/`）の元の文章（`about.md`）と図の元（`*.d2`。`_style.d2` は図に共通する設定） |
 | `scripts/guide.ts` | 解説を作るスクリプト（`mise run guide`）。印からコードを取り出す部分などは `scripts/guide-lib.ts`、単体テストは `scripts/guide-lib.test.ts` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
 | `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.ts` |
@@ -91,6 +91,9 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 - コードと設定は、写して貼らない。`guide/about.md` に `<!-- code: <パス>#<名前> -->` と書き、引用する範囲をそのファイルのコメントの `guide:start <名前>` と `guide:end <名前>` で囲む。印が無いと、生成が失敗する。
   印のあるコードを動かしたり消したりするときは、印も一緒に動かし、`mise run guide` で作り直す。
 - 図は `<!-- diagram: <名前> | <図の説明> -->` と書き、`guide/<名前>.d2` に図の元を置く。
+  - 図の元の先頭で `...@_style` と書き、共通の設定（`guide/_style.d2`）を読む。配置は ELK（線を水平と垂直の線分で描く）にし、色は役割ごとの class（`actor`・`app`・`service`・`store` など）で付ける。
+  - 線の交差を最も避け、次に曲がりを減らす。直線で結べるものは直線にする。交差が残るときは、`direction`・要素と線を書く順・線の結び先（枠か、中の要素か）を変えて試す。
+  - 作った SVG は、ブラウザで開いて目で確かめる（`mise run dev` の後に `http://localhost:8787/assets/guide/<名前>.svg`）。
 - リポジトリのファイルへのリンクは `[文字](repo:<パス>)` と書く。公開リポジトリの main のファイルへのリンクになり、ファイルが無ければ生成が失敗する。
 - 上限などの値は、解説に書かずに、原本（docs/spec.md・docs/security.md）へのリンクにする。
 - コードや文書を変えて引用の元が変わったら、`mise run guide` で作り直して一緒に commit する。CI（`mise run lint`）は、作り直したものが commit したものと違えば失敗する。

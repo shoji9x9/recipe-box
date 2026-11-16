@@ -1,0 +1,85 @@
+# 図に共通する設定と見た目。各図の先頭で ...@_style として読み込む（mise run guide。docs/development.md の「解説」）。
+# 配置は ELK にする。線を水平と垂直の線分で描き（直交）、交差と曲がりを減らすため。
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    # 線と矢印の色（B1）を灰色にし、図の中の要素より目立たせない。線の文字の色（N2）も合わせる。
+    theme-overrides: {
+      B1: "#6a6a6a"
+      N2: "#3f3f3f"
+    }
+  }
+}
+
+# 色は、アプリの画面（apps/recipe-box-rs/public/assets/style.css）の文字の色と、役割ごとの淡い色に合わせる。
+classes: {
+  # 使う人・外から呼ぶもの
+  actor: {
+    style: {
+      fill: "#f7f7f7"
+      stroke: "#6a6a6a"
+      font-color: "#222222"
+      border-radius: 8
+    }
+  }
+  # Cloudflare の枠
+  cloudflare: {
+    # 枠の名前は左上に置き、上から入る線のラベルと重ねない。
+    label.near: top-left
+    style: {
+      fill: "#fff6ee"
+      stroke: "#f38020"
+      font-color: "#222222"
+      border-radius: 12
+    }
+  }
+  # GitHub の枠
+  github: {
+    label.near: top-left
+    style: {
+      fill: "#f3f5f8"
+      stroke: "#57606a"
+      font-color: "#222222"
+      border-radius: 12
+    }
+  }
+  # このアプリのコード（Worker）
+  app: {
+    style: {
+      fill: "#fff0f3"
+      stroke: "#e00b41"
+      stroke-width: 2
+      font-color: "#222222"
+      bold: true
+      border-radius: 8
+    }
+  }
+  # Cloudflare の機能（データを持たないもの）
+  service: {
+    style: {
+      fill: "#ffffff"
+      stroke: "#f38020"
+      font-color: "#222222"
+      border-radius: 8
+    }
+  }
+  # データを置くところ
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#eef4ff"
+      stroke: "#2b6cb0"
+      font-color: "#222222"
+    }
+  }
+  # 断る・失敗の流れ
+  reject: {
+    style: {
+      stroke: "#c13515"
+      font-color: "#c13515"
+      stroke-dash: 4
+    }
+  }
+}
+

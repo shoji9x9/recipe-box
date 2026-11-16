@@ -12,42 +12,45 @@
   <body class="guide">
     <header>
       <a class="brand" href="/">recipe-box</a>
+      <nav><a href="/">レシピ帳に戻る</a></nav>
     </header>
-    <main>
-      <h1>このアプリの作り</h1>
+    <div class="guide-layout">
       <nav class="toc" aria-label="目次">
+        <p class="toc-title">目次</p>
         <ol>
-  <li class="toc-2"><a href="#全体の構成">全体の構成</a></li>
-  <li class="toc-2"><a href="#cloudflare-の各サービス">Cloudflare の各サービス</a></li>
-    <li class="toc-3"><a href="#workers">Workers</a></li>
-    <li class="toc-3"><a href="#静的アセット">静的アセット</a></li>
-    <li class="toc-3"><a href="#d1">D1</a></li>
-    <li class="toc-3"><a href="#r2">R2</a></li>
-    <li class="toc-3"><a href="#rate-limiting">Rate Limiting</a></li>
-    <li class="toc-3"><a href="#cron-triggers">Cron Triggers</a></li>
-    <li class="toc-3"><a href="#ローカルの開発と本番へのデプロイ">ローカルの開発と本番へのデプロイ</a></li>
-    <li class="toc-3"><a href="#運用ログwrangler-tailmetrics">運用（ログ・wrangler tail・Metrics）</a></li>
-    <li class="toc-3"><a href="#無料枠などの制約">無料枠などの制約</a></li>
-  <li class="toc-2"><a href="#フロントエンドとバックエンドの技術スタック">フロントエンドとバックエンドの技術スタック</a></li>
-    <li class="toc-3"><a href="#rust">Rust</a></li>
-    <li class="toc-3"><a href="#workers-rs">workers-rs</a></li>
-    <li class="toc-3"><a href="#axum">axum</a></li>
-    <li class="toc-3"><a href="#askama">askama</a></li>
-    <li class="toc-3"><a href="#htmx">htmx</a></li>
-    <li class="toc-3"><a href="#使って分かった難しい点">使って分かった難しい点</a></li>
-    <li class="toc-3"><a href="#リクエストの流れ">リクエストの流れ</a></li>
-    <li class="toc-3"><a href="#javascript-が動かなくても使える作り">JavaScript が動かなくても使える作り</a></li>
-    <li class="toc-3"><a href="#テストの仕組み">テストの仕組み</a></li>
-  <li class="toc-2"><a href="#特徴的な機能">特徴的な機能</a></li>
-    <li class="toc-3"><a href="#ワークスペースによるデータの分離">ワークスペースによるデータの分離</a></li>
-    <li class="toc-3"><a href="#費用の対策">費用の対策</a></li>
-    <li class="toc-3"><a href="#写真の保管">写真の保管</a></li>
-    <li class="toc-3"><a href="#共有のデモと-seed">共有のデモと seed</a></li>
-    <li class="toc-3"><a href="#ciセキュリティサプライチェーン攻撃への対策">CI・セキュリティ・サプライチェーン攻撃への対策</a></li>
-  <li class="toc-2"><a href="#リライトで選ぶもの">リライトで選ぶもの</a></li>
+          <li class="toc-2"><a href="#全体の構成">全体の構成</a></li>
+          <li class="toc-2"><a href="#cloudflare-の各サービス">Cloudflare の各サービス</a></li>
+          <li class="toc-3"><a href="#workers">Workers</a></li>
+          <li class="toc-3"><a href="#静的アセット">静的アセット</a></li>
+          <li class="toc-3"><a href="#d1">D1</a></li>
+          <li class="toc-3"><a href="#r2">R2</a></li>
+          <li class="toc-3"><a href="#rate-limiting">Rate Limiting</a></li>
+          <li class="toc-3"><a href="#cron-triggers">Cron Triggers</a></li>
+          <li class="toc-3"><a href="#ローカルの開発と本番へのデプロイ">ローカルの開発と本番へのデプロイ</a></li>
+          <li class="toc-3"><a href="#運用ログwrangler-tailmetrics">運用（ログ・wrangler tail・Metrics）</a></li>
+          <li class="toc-3"><a href="#無料枠などの制約">無料枠などの制約</a></li>
+          <li class="toc-2"><a href="#フロントエンドとバックエンドの技術スタック">フロントエンドとバックエンドの技術スタック</a></li>
+          <li class="toc-3"><a href="#rust">Rust</a></li>
+          <li class="toc-3"><a href="#workers-rs">workers-rs</a></li>
+          <li class="toc-3"><a href="#axum">axum</a></li>
+          <li class="toc-3"><a href="#askama">askama</a></li>
+          <li class="toc-3"><a href="#htmx">htmx</a></li>
+          <li class="toc-3"><a href="#使って分かった難しい点">使って分かった難しい点</a></li>
+          <li class="toc-3"><a href="#リクエストの流れ">リクエストの流れ</a></li>
+          <li class="toc-3"><a href="#javascript-が動かなくても使える作り">JavaScript が動かなくても使える作り</a></li>
+          <li class="toc-3"><a href="#テストの仕組み">テストの仕組み</a></li>
+          <li class="toc-2"><a href="#特徴的な機能">特徴的な機能</a></li>
+          <li class="toc-3"><a href="#ワークスペースによるデータの分離">ワークスペースによるデータの分離</a></li>
+          <li class="toc-3"><a href="#費用の対策">費用の対策</a></li>
+          <li class="toc-3"><a href="#写真の保管">写真の保管</a></li>
+          <li class="toc-3"><a href="#共有のデモと-seed">共有のデモと seed</a></li>
+          <li class="toc-3"><a href="#ciセキュリティサプライチェーン攻撃への対策">CI・セキュリティ・サプライチェーン攻撃への対策</a></li>
+          <li class="toc-2"><a href="#リライトで選ぶもの">リライトで選ぶもの</a></li>
         </ol>
       </nav>
-      <article>
+      <main>
+        <h1>このアプリの作り</h1>
+        <article>
 <p>recipe-box は、料理のレシピを登録・検索できる Web アプリです。ログインは無く、推測できない ID の「ワークスペース」でデータを分けます。
 このページは、アプリの作りを次の 2 者に向けて説明します。</p>
 <ul>
@@ -216,7 +219,7 @@ Cloudflare のアカウントは要りません。データは <code>apps/recipe
 </table>
 </div>
 <p>全体の一覧は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E6%8A%80%E8%A1%93%E6%A7%8B%E6%88%90%E3%83%AA%E3%83%A9%E3%82%A4%E3%83%88%E5%89%8D">docs/architecture.md の「技術構成（リライト前）」</a>にあります。
-リライト前の技術は、リライトの題材として差が出るよう、リライト後（TypeScript・React・Hono・Drizzle など）となるべく異なるものにしています。</p>
+リライト後の技術スタックは決めていません。リライトの題材として差が出るよう、リライト前は、Web アプリでよく使われる TypeScript の構成とは異なる技術を選んでいます。表の右の列は、読む人が知っていそうな技術との対応で、リライト後の候補を示すものではありません。</p>
 <h3 id="rust">Rust</h3>
 <p>型と所有権で、メモリの安全とデータの競合の無さをコンパイルのときに確かめる言語です。
 Workers では Wasm にして動かします。JavaScript と違い、<code>null</code> の代わりに <code>Option</code>、例外の代わりに <code>Result</code> を使い、失敗しうる処理をすべて型で表します。</p>
@@ -606,8 +609,8 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 </div>
 <p>詳しくは <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md">docs/security.md</a> と、エージェントの決まりの <a href="https://github.com/shoji9x9/recipe-box/blob/main/AGENTS.md">AGENTS.md</a> にあります。</p>
 <h2 id="リライトで選ぶもの">リライトで選ぶもの</h2>
-<p>リライト後の方針（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md">docs/architecture.md</a>）は、TypeScript・React・Hono・Drizzle など、Cloudflare 以外のプラットフォーム、オブジェクトストレージを使わない、です。
-これを前提に、選ばなければならないものを挙げます。正解は書かず、選ぶ材料を書きます。</p>
+<p>リライト後の技術スタック（言語・フレームワーク・実行環境・DB・写真の置き場など）は決めていません（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E6%96%B9%E9%87%9D">docs/architecture.md の「方針」</a>）。リライトをする人が選びます。
+ここでは、選ばなければならないものと、どれを選んでも守る仕様を挙げます。正解は書かず、選ぶ材料を書きます。</p>
 <p>比較の基準にする現行の環境は、選んだ commit をローカルで動かしたものです（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E3%83%AA%E3%83%A9%E3%82%A4%E3%83%88%E3%81%AE%E6%AF%94%E8%BC%83%E3%81%AE%E5%9F%BA%E6%BA%96">docs/architecture.md の「リライトの比較の基準」</a>）。</p>
 <div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
 <table>
@@ -624,7 +627,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <td>フロントエンドの言語・フレームワーク</td>
 <td>askama で HTML を作り、htmx で一部を入れ替える</td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E7%94%BB%E9%9D%A2">画面</a></td>
-<td>画面は JavaScript が動かなくても使える仕様である。React で SPA にすると守れないので、SSR にするか、段階的な強化（progressive enhancement）にするかを決める</td>
+<td>画面は JavaScript が動かなくても使える仕様である。ブラウザだけで画面を組み立てる SPA にすると守れないので、サーバーで HTML を返すか、段階的な強化（progressive enhancement）にするかを決める</td>
 </tr>
 <tr>
 <td>バックエンドの言語・フレームワーク</td>
@@ -636,13 +639,13 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <td>実行環境（ホスティング）</td>
 <td>Cloudflare Workers</td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a></td>
-<td>1 回の CPU 時間・本文の大きさの上限など、プラットフォームの制約で作りが変わる</td>
+<td>Cloudflare のまま動かすか、ほかのプラットフォームに移すか。1 回の CPU 時間・本文の大きさの上限など、プラットフォームの制約で作りが変わる</td>
 </tr>
 <tr>
 <td>DB とクエリの書き方</td>
 <td>D1（SQLite）、標準の SQL、<code>LIMIT ? OFFSET ?</code>、<code>instr</code></td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB">テーブル</a></td>
-<td>PostgreSQL を想定する。<code>instr</code> は <code>strpos</code> などに書き換える。<code>LOWER</code> を使わずアプリで作る <code>search_name</code> の決まりを保つ。マイグレーションは足すだけにする</td>
+<td>どの DB にするか。SQL は標準の範囲なので、移すときに書き換えるのは例外の <code>LIMIT ? OFFSET ?</code> と <code>instr</code>（PostgreSQL なら <code>strpos</code>）だけである。<code>LOWER</code> を使わずアプリで作る <code>search_name</code> の決まりを保つ。マイグレーションは足すだけにする</td>
 </tr>
 <tr>
 <td>トランザクション</td>
@@ -654,7 +657,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <td>写真の保管</td>
 <td>R2。D1 に行を入れて上限を判定してから R2 に書く</td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">写真</a></td>
-<td>オブジェクトストレージを使わず DB に保管する。API の仕様は変えない。大きさの上限・合計の上限の意味が変わる（費用の対策を作り直す）</td>
+<td>オブジェクトストレージ（R2・S3 など）に置くか、DB に置くか。どちらでも API の仕様は変えない。置き場の料金と制限が変わるので、大きさの上限・合計の上限を見直す（費用の対策を作り直す）</td>
 </tr>
 <tr>
 <td>写真の受け取り</td>
@@ -713,7 +716,8 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 </tbody>
 </table>
 </div>
-      </article>
-    </main>
+        </article>
+      </main>
+    </div>
   </body>
 </html>
