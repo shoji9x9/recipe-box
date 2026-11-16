@@ -82,10 +82,8 @@ function jpegSegment(code: number, payload: Buffer): Buffer {
  * 本番と同じく、頭の部分を本文の何回かの読み取りに分けて読ませるよう、XMP を大きく（約 190 KB）する。
  */
 function jpegWithLocation(): { bytes: Buffer; imageStart: number } {
-  const exif = Buffer.concat([
-    Buffer.from("457869660000" + "49492a0008000000" + "0100" + "120103000100000006000000" + "00000000", "hex"),
-    LOCATION_MARK,
-  ]);
+  // 向きだけの Exif の後ろに位置情報の文字を足したもの（取り除くと、ORIENTATION_ONLY_EXIF の後ろが 0 になる）。
+  const exif = Buffer.concat([ORIENTATION_ONLY_EXIF, LOCATION_MARK]);
   const xmp = Buffer.concat([Buffer.from("http://ns.adobe.com/xap/1.0/\0"), LOCATION_MARK, Buffer.alloc(63_000, 0x20)]);
   const head = Buffer.concat([
     Buffer.from([0xff, 0xd8]),

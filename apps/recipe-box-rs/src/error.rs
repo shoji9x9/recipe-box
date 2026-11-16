@@ -144,7 +144,7 @@ impl ApiError {
             Self::UnsupportedPhotoType => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_photo_type",
-                "写真は JPEG・PNG・WebP のどれかにしてください。壊れたファイルは追加できません",
+                "写真は JPEG・PNG・WebP のどれかにしてください。壊れたファイルと、画像の前の情報が 1 MiB を超えるファイルは追加できません",
             ),
             Self::UnsupportedPhotoMetadata => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,

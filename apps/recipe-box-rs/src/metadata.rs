@@ -49,21 +49,62 @@ pub struct Plan {
     edits: Vec<Edit>,
 }
 
+/// 書き換える場所と種類。書き換えた後のバイト列（向きだけの Exif や CRC）は、[`Plan::apply`] で 1 回だけ作る。
+/// [`inspect`] は読み足すたびに呼び直すので、そこでは場所を決めるだけにし、計算を繰り返さない。
+/// どの範囲も重ならない。
 #[derive(Debug, PartialEq, Eq)]
 enum Edit {
     /// `start..end` を 0 で埋める。
     Zero { start: usize, end: usize },
-    /// `at` から `bytes` で上書きする（長さは変えない）。
-    Write { at: usize, bytes: Vec<u8> },
+    /// `start..end` の Exif（`prefix` バイトの識別子の後に TIFF）を、向きだけを持つ形にする。
+    Exif {
+        start: usize,
+        end: usize,
+        prefix: usize,
+    },
+    /// `at` からの PNG のチャンク（種類の 4 バイト・中身の `length` バイト・CRC）を書き換える。
+    /// `eXIf` なら向きだけを持つ形にし（向きが無ければ文字のチャンクと同じにする）、文字のチャンクなら名前を変えて中身を 0 にする。
+    PngChunk {
+        at: usize,
+        length: usize,
+        exif: bool,
+    },
 }
 
 impl Plan {
     /// 頭の部分を書き換える。`bytes` は [`inspect`] に渡したものと同じ先頭を持つこと（それより長くてよい）。
     pub fn apply(&self, bytes: &mut [u8]) {
         for edit in &self.edits {
-            match edit {
-                Edit::Zero { start, end } => bytes[*start..*end].fill(0),
-                Edit::Write { at, bytes: new } => bytes[*at..*at + new.len()].copy_from_slice(new),
+            match *edit {
+                Edit::Zero { start, end } => bytes[start..end].fill(0),
+                Edit::Exif { start, end, prefix } => {
+                    let new = exif_replacement(&bytes[start..end], prefix);
+                    bytes[start..end].copy_from_slice(&new);
+                }
+                Edit::PngChunk { at, length, exif } => {
+                    let data = at + 4..at + 4 + length;
+                    let mut kind = *PNG_SCRUBBED_TYPE;
+                    let mut new = None;
+                    if exif {
+                        let prefix = if bytes[data.clone()].starts_with(EXIF_ID) {
+                            EXIF_ID.len()
+                        } else {
+                            0
+                        };
+                        let replacement = exif_replacement(&bytes[data.clone()], prefix);
+                        if replacement.iter().any(|&b| b != 0) {
+                            kind = *b"eXIf";
+                            new = Some(replacement);
+                        }
+                    }
+                    match new {
+                        Some(new) => bytes[data.clone()].copy_from_slice(&new),
+                        None => bytes[data.clone()].fill(0),
+                    }
+                    bytes[at..at + 4].copy_from_slice(&kind);
+                    let crc = crc32(&bytes[at..data.end]);
+                    bytes[data.end..data.end + 4].copy_from_slice(&crc.to_be_bytes());
+                }
             }
         }
     }
@@ -178,9 +219,10 @@ fn jpeg(bytes: Bytes) -> Result<Vec<Edit>, Stop> {
         let keep = match code {
             0xe0 => payload.starts_with(b"JFIF\0") || payload.starts_with(b"JFXX\0"),
             0xe1 if payload.starts_with(EXIF_ID) => {
-                edits.push(Edit::Write {
-                    at: start,
-                    bytes: exif_replacement(payload, EXIF_ID.len()),
+                edits.push(Edit::Exif {
+                    start,
+                    end,
+                    prefix: EXIF_ID.len(),
                 });
                 true
             }
@@ -227,40 +269,23 @@ fn png(bytes: Bytes) -> Result<Vec<Edit>, Stop> {
             _ => {}
         }
         let data_start = pos + 8;
-        let replacement = match &kind {
-            b"eXIf" => {
-                let data = bytes.get(data_start, length)?;
-                let prefix = if data.starts_with(EXIF_ID) {
-                    EXIF_ID.len()
-                } else {
-                    0
-                };
-                let exif = exif_replacement(data, prefix);
-                if exif.iter().any(|&b| b != 0) {
-                    Some((kind, exif))
-                } else {
-                    Some((*PNG_SCRUBBED_TYPE, exif))
-                }
-            }
-            b"tEXt" | b"zTXt" | b"iTXt" => Some((*PNG_SCRUBBED_TYPE, vec![0; length])),
-            _ => None,
-        };
         // チャンクの終わり（CRC の 4 バイトまで）がファイルの中にあるかは、次のチャンクを読むときに確かめる。
         let next = data_start
             .checked_add(length)
             .and_then(|end| end.checked_add(4))
             .ok_or(MALFORMED)?;
-        if let Some((new_kind, data)) = replacement {
-            // CRC の 4 バイトもファイルの中にあること。
-            bytes.get(data_start + length, 4)?;
-            let mut chunk = Vec::with_capacity(8 + length);
-            chunk.extend_from_slice(&new_kind);
-            chunk.extend_from_slice(&data);
-            let crc = crc32(&chunk);
-            chunk.extend_from_slice(&crc.to_be_bytes());
-            edits.push(Edit::Write {
+        let exif = match &kind {
+            b"eXIf" => Some(true),
+            b"tEXt" | b"zTXt" | b"iTXt" => Some(false),
+            _ => None,
+        };
+        if let Some(exif) = exif {
+            // 書き換えるチャンクは、中身と CRC を頭の部分として読む（ファイルと頭の上限の中にあることも確かめる）。
+            bytes.get(data_start, length + 4)?;
+            edits.push(Edit::PngChunk {
                 at: pos + 4,
-                bytes: chunk,
+                length,
+                exif,
             });
         }
         pos = next;
@@ -269,14 +294,21 @@ fn png(bytes: Bytes) -> Result<Vec<Edit>, Stop> {
 
 /// WebP の最初のチャンク。メタデータを持つと印で分かるものを断る。
 fn webp(bytes: Bytes) -> Result<Vec<Edit>, Stop> {
+    let riff = bytes.get(4, 4)?;
+    let riff = usize::try_from(u32::from_le_bytes([riff[0], riff[1], riff[2], riff[3]]))
+        .map_err(|_| MALFORMED)?;
     // RIFF の頭（12 バイト）の後の、最初のチャンクの頭。
     let header = bytes.get(12, 8)?;
     let size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
     let size = usize::try_from(size).map_err(|_| MALFORMED)?;
     match &header[..4] {
-        // 拡張の無い形（非可逆・可逆）は、メタデータを持てない。
+        // 拡張の無い形（非可逆・可逆）は、メタデータを持てない。仕様では、チャンクはこの 1 つだけである。
+        // 後ろにほかのチャンク（EXIF など）を付け足したものは断る（RIFF の大きさが、このチャンクとファイルの大きさに合うこと）。
         b"VP8 " | b"VP8L" => {
-            bytes.within(20, size)?;
+            let padded = size.checked_add(size & 1).ok_or(MALFORMED)?;
+            if padded.checked_add(12) != Some(riff) || riff.checked_add(8) != Some(bytes.total) {
+                return Err(MALFORMED);
+            }
             Ok(Vec::new())
         }
         b"VP8X" => {
@@ -329,8 +361,9 @@ fn orientation(tiff: &[u8]) -> Option<u16> {
         b"MM" => false,
         _ => return None,
     };
+    // 位置は送られた値なので、足し算があふれないよう checked_add を使う（wasm の usize は 32 ビット）。
     let u16_at = |at: usize| {
-        let b = tiff.get(at..at + 2)?;
+        let b = tiff.get(at..at.checked_add(2)?)?;
         Some(if little {
             u16::from_le_bytes([b[0], b[1]])
         } else {
@@ -338,7 +371,7 @@ fn orientation(tiff: &[u8]) -> Option<u16> {
         })
     };
     let u32_at = |at: usize| {
-        let b = tiff.get(at..at + 4)?;
+        let b = tiff.get(at..at.checked_add(4)?)?;
         let b = [b[0], b[1], b[2], b[3]];
         Some(if little {
             u32::from_le_bytes(b)
@@ -354,8 +387,11 @@ fn orientation(tiff: &[u8]) -> Option<u16> {
     for i in 0..count {
         let entry = ifd.checked_add(2 + i * 12)?;
         // 型が SHORT（3）で、数が 1 のもの。
-        if u16_at(entry)? == 0x0112 && u16_at(entry + 2)? == 3 && u32_at(entry + 4)? == 1 {
-            let value = u16_at(entry + 8)?;
+        if u16_at(entry)? == 0x0112
+            && u16_at(entry.checked_add(2)?)? == 3
+            && u32_at(entry.checked_add(4)?)? == 1
+        {
+            let value = u16_at(entry.checked_add(8)?)?;
             return (1..=8).contains(&value).then_some(value);
         }
     }
@@ -755,6 +791,36 @@ mod tests {
     }
 
     #[test]
+    fn simple_webp_with_trailing_chunks_is_rejected() {
+        // 拡張の無い形の後ろに、EXIF のチャンクを付け足したもの（仕様では、チャンクは 1 つだけ）。
+        let mut bytes = webp(*b"VP8 ", b"image-data");
+        bytes.extend_from_slice(b"EXIF\x0a\0\0\0GPS-SECRET");
+        let riff = u32::try_from(bytes.len() - 8).unwrap();
+        bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+        assert_eq!(strip(&mut bytes), Err(Rejection::Unsupported));
+        // RIFF の外に付け足したものも断る。
+        let mut bytes = webp(*b"VP8L", b"image-data");
+        bytes.extend_from_slice(b"GPS-SECRET");
+        assert_eq!(strip(&mut bytes), Err(Rejection::Unsupported));
+        // 奇数の長さのチャンクは、1 バイトの埋め草を含めて数える。
+        let mut bytes = webp(*b"VP8L", b"odd");
+        bytes.push(0);
+        let riff = u32::try_from(bytes.len() - 8).unwrap();
+        bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+        assert_eq!(strip(&mut bytes), Ok(PhotoFormat::Webp));
+    }
+
+    #[test]
+    fn huge_png_text_chunk_is_rejected_without_reading_it() {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend(chunk(*b"IHDR", &[0; 13]));
+        bytes.extend_from_slice(&0x7fff_0000_u32.to_be_bytes());
+        bytes.extend_from_slice(b"tEXt");
+        let total = bytes.len() + 0x7fff_0000;
+        assert_eq!(inspect(&bytes, total), Err(Rejection::Unsupported));
+    }
+
+    #[test]
     fn other_formats_are_rejected() {
         for bytes in [
             b"GIF89a....".as_slice(),
@@ -764,6 +830,15 @@ mod tests {
         ] {
             assert_eq!(strip(&mut bytes.to_vec()), Err(Rejection::Unsupported));
         }
+    }
+
+    #[test]
+    fn ifd_offset_near_the_end_of_the_address_space_is_ignored() {
+        let mut tiff = b"II\x2a\0".to_vec();
+        tiff.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(orientation(&tiff), None);
+        tiff[4..8].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
+        assert_eq!(orientation(&tiff), None);
     }
 
     #[test]

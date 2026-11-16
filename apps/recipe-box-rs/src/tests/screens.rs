@@ -1296,7 +1296,7 @@ async fn photo_errors_are_shown_on_the_edit_page() {
             // 頭の部分が途中で切れた JPEG。
             Some(vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10]),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "壊れたファイルは追加できません",
+            "壊れたファイルと、画像の前の情報が 1 MiB を超えるファイルは追加できません",
         ),
         (
             // EXIF の印の付いた WebP。

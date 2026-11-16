@@ -31,17 +31,31 @@ use crate::{
 
 #[wasm_bindgen(inline_js = r#"
 export function photoReader(body) {
-  return body.getReader();
+  return { reader: body.getReader(), rest: null };
 }
 
-export async function readAtLeast(reader, n) {
+function take(state, max) {
+  const chunk = state.rest;
+  if (chunk.byteLength <= max) {
+    state.rest = null;
+    return chunk;
+  }
+  state.rest = chunk.subarray(max);
+  return chunk.subarray(0, max);
+}
+
+export async function readAtLeast(state, min, max) {
   const chunks = [];
   let got = 0;
-  while (got < n) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.byteLength;
+  while (got < min) {
+    if (state.rest === null) {
+      const { done, value } = await state.reader.read();
+      if (done) break;
+      state.rest = value;
+    }
+    const chunk = take(state, max - got);
+    chunks.push(chunk);
+    got += chunk.byteLength;
   }
   if (chunks.length === 1) return chunks[0];
   const out = new Uint8Array(got);
@@ -53,12 +67,18 @@ export async function readAtLeast(reader, n) {
   return out;
 }
 
-export function joinPhoto(body, reader, head, length) {
-  reader.releaseLock();
+export function discardPhoto(state) {
+  state.reader.cancel().catch(() => {});
+}
+
+export function joinPhoto(body, state, head, length) {
+  state.reader.releaseLock();
   const { readable, writable } = new FixedLengthStream(length);
   const writer = writable.getWriter();
+  const rest = state.rest;
   writer
     .write(head)
+    .then(() => (rest === null ? undefined : writer.write(rest)))
     .then(() => {
       writer.releaseLock();
       return body.pipeTo(writable);
@@ -70,20 +90,25 @@ export function joinPhoto(body, reader, head, length) {
 }
 "#)]
 extern "C" {
-    /// 本文を読む reader を作る。
+    /// 本文を読む reader と、読んだが渡していない残り（`rest`）を持つ状態を作る。
     #[wasm_bindgen(catch, js_name = photoReader)]
     fn photo_reader(body: &web_sys::ReadableStream) -> Result<JsValue, JsValue>;
 
-    /// `reader` から、少なくとも `n` バイトを読んで、1 つの `Uint8Array` にして返す（本文が終われば、それより短い）。
+    /// 少なくとも `min` バイト、多くとも `max` バイトを読んで、1 つの `Uint8Array` にして返す（本文が終われば、それより短い）。
+    /// 読んだ塊のうち `max` を超えた分は、Wasm に写さず、状態の `rest` に残す（[`join_photo`] が R2 に流す）。
     #[wasm_bindgen(catch, js_name = readAtLeast)]
-    fn read_at_least(reader: &JsValue, n: u32) -> Result<Promise, JsValue>;
+    fn read_at_least(state: &JsValue, min: u32, max: u32) -> Result<Promise, JsValue>;
 
-    /// `reader` を外し、`head`（書き換えた頭）の後に `body` の残りを続けて流す、長さ `length` のストリームを返す。
+    /// 断った写真の本文を、読まずに捨てる。
+    #[wasm_bindgen(js_name = discardPhoto)]
+    fn discard_photo(state: &JsValue);
+
+    /// reader を外し、`head`（書き換えた頭）・状態の `rest`・`body` の残りを続けて流す、長さ `length` のストリームを返す。
     /// 残りは JavaScript を通さず、組み込みの `pipeTo` で流す。R2 が読み始めるまでは、何も流れない。
     #[wasm_bindgen(catch, js_name = joinPhoto)]
     fn join_photo(
         body: &web_sys::ReadableStream,
-        reader: &JsValue,
+        state: &JsValue,
         head: &Uint8Array,
         length: u32,
     ) -> Result<web_sys::ReadableStream, JsValue>;
@@ -108,9 +133,10 @@ pub struct PhotoStream {
     pub format: Result<PhotoFormat, Rejection>,
     /// 読んだ本文の先頭。頭の部分は書き換えてある。頭より後ろも、読んだ分は入る。
     head: Vec<u8>,
-    /// 本文。`reader` で先頭を読んだ後の残りを流す。
+    /// 本文。`state` の reader で先頭を読んだ後の残りを流す。
     body: SendWrapper<web_sys::ReadableStream>,
-    reader: SendWrapper<JsValue>,
+    /// 本文を読む reader と、読んだが Wasm に写していない残り（[`photo_reader`]）。
+    state: SendWrapper<JsValue>,
 }
 
 impl PhotoStream {
@@ -120,7 +146,7 @@ impl PhotoStream {
         let length =
             u32::try_from(self.length).map_err(|_| JsValue::from_str("本文が大きすぎる"))?;
         let head = Uint8Array::from(self.head.as_slice());
-        join_photo(&self.body, &self.reader, &head, length)
+        join_photo(&self.body, &self.state, &head, length)
     }
 }
 
@@ -185,6 +211,12 @@ fn is_photo_upload_path(path: &str) -> bool {
     photo::photo_recipe_path(path.strip_prefix("/api").unwrap_or(path)).is_some()
 }
 
+/// 頭の部分を読み足すときに、Wasm に写す大きさ（64 KiB。本文の残りがそれより短ければ残りのすべて。要る大きさがそれより大きければ、その大きさ）。
+///
+/// [`metadata::inspect`] は読み足すたびに頭を先頭から調べ直すので、細かく読み足すと、調べ直す回数が増える。
+/// 1 回に読む量の下限を決め、調べ直す回数を、頭の大きさの上限（[`metadata::MAX_HEAD_BYTES`]）÷ 64 KiB までに抑える。
+const MIN_READ_BYTES: usize = 64 * 1024;
+
 /// 本文の頭の部分だけを読んでメタデータを取り除き（[`metadata`]）、残りを R2 に流せる形にする。
 ///
 /// 頭の部分の形が正しくないときなどは、ここでは断らず、結果を [`PhotoStream::format`] に入れる
@@ -192,15 +224,18 @@ fn is_photo_upload_path(path: &str) -> bool {
 pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
     let length = raw.length;
     let read = async {
-        let reader = photo_reader(&raw.stream)?;
+        let state = photo_reader(&raw.stream)?;
         let mut head = Vec::new();
         let format = loop {
             match metadata::inspect(&head, length) {
                 Ok(Inspection::NeedMore(n)) => {
                     // 頭の上限（1 MiB）以下なので u32 に収まる。
-                    let want = u32::try_from(n - head.len())
-                        .map_err(|_| JsValue::from_str("頭が大きすぎる"))?;
-                    let chunk = JsFuture::from(read_at_least(&reader, want)?)
+                    let min = n - head.len();
+                    let max = min.max(MIN_READ_BYTES.min(length - head.len()));
+                    let to_u32 = |n: usize| {
+                        u32::try_from(n).map_err(|_| JsValue::from_str("頭が大きすぎる"))
+                    };
+                    let chunk = JsFuture::from(read_at_least(&state, to_u32(min)?, to_u32(max)?)?)
                         .await?
                         .dyn_into::<Uint8Array>()?;
                     // 本文が Content-Length より短い（送る途中で切れたときなど）。
@@ -216,13 +251,16 @@ pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
                 Err(rejection) => break Err(rejection),
             }
         };
+        if format.is_err() {
+            discard_photo(&state);
+        }
         if head.len() > length {
             return Err(JsValue::from_str("本文が Content-Length より長い"));
         }
-        Ok::<_, JsValue>((reader, head, format))
+        Ok::<_, JsValue>((state, head, format))
     };
     // 本文を読めないのは、送る途中で切れたときなど。multipart を読めないときと同じに扱う。
-    let (reader, head, format) = SendFuture::new(read)
+    let (state, head, format) = SendFuture::new(read)
         .await
         .map_err(|_| ApiError::InvalidBody)?;
     Ok(PhotoStream {
@@ -230,7 +268,7 @@ pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
         format,
         head,
         body: raw.stream,
-        reader: SendWrapper::new(reader),
+        state: SendWrapper::new(state),
     })
 }
 

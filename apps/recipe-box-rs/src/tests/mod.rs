@@ -48,7 +48,7 @@ pub fn jpeg_with_location() -> Vec<u8> {
 /// 向きだけを残した [`jpeg_with_location`]（長さは同じ）。
 pub fn jpeg_with_orientation_only() -> Vec<u8> {
     let mut bytes = jpeg_with_location();
-    let secret = bytes.len() - 6 - 10;
+    let secret = bytes.windows(10).position(|w| w == b"GPS-SECRET").unwrap();
     bytes[secret..secret + 10].fill(0);
     bytes
 }
