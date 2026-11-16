@@ -31,10 +31,9 @@
     // 依存のパッケージの .d.ts は確かめない（依存の型の誤りで lint が落ちないように）。
     "skipLibCheck": true
   },
-  // 画面の JavaScript・その型の宣言・テスト・vitest と commitlint の設定。htmx.min.js はビルドで写す配布物なので除く。
+  // 画面の JavaScript・テスト・vitest と commitlint の設定。htmx.min.js はビルドで写す配布物なので除く。
   "include": [
     "apps/*/public/assets/**/*.js",
-    "apps/*/js-types/**/*.d.ts",
     "apps/*/js-tests/**/*.ts",
     "vitest.config.ts",
     "commitlint.config.ts"

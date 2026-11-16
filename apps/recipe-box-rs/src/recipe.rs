@@ -270,9 +270,14 @@ pub async fn list<B: Backend>(
     // axum の既定のエラー（JSON でない本文）を返さないよう、q のエラーにする。
     let Query(params) = params.map_err(|_| invalid_query())?;
     let (pattern, page) = parse_list_params(&params)?;
-    let result = list_page(&backend, &workspace.id, pattern.as_deref(), page).await?;
+    let result = list_page(&backend, &workspace.id, pattern.as_deref(), page, false).await?;
     Ok(Json(RecipeList {
-        recipes: result.recipes,
+        // API の一覧は、レシピの中身だけを返す（写真は GET /api/recipes/{id}/photos で読む）。
+        recipes: result
+            .recipes
+            .into_iter()
+            .map(|listed| listed.recipe)
+            .collect(),
         total: result.total,
         page,
         per_page: PAGE_SIZE,
@@ -308,11 +313,13 @@ pub fn parse_list_params(params: &[(String, String)]) -> Result<(Option<String>,
 }
 
 /// 一覧の 1 ページ分を読む。`pattern` は検索の文字列（そのままの形。ここで検索に使う形にする）。
+/// `with_first_photo` なら、レシピごとの先頭の写真も読む（画面の一覧）。
 pub async fn list_page<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
     pattern: Option<&str>,
     page: i64,
+    with_first_photo: bool,
 ) -> Result<RecipePage, ApiError> {
     let query = pattern.map(search_name);
     Ok(backend
@@ -321,6 +328,7 @@ pub async fn list_page<B: Backend>(
             query.as_deref(),
             PAGE_SIZE,
             (page - 1) * PAGE_SIZE,
+            with_first_photo,
         )
         .await?)
 }

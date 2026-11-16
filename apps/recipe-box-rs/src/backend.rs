@@ -80,11 +80,19 @@ pub enum PhotoInsert {
     CapacityReached,
 }
 
+/// 一覧に出すレシピと、その先頭の写真。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedRecipe {
+    pub recipe: Recipe,
+    /// 先頭の写真（追加した順の最初）の ID。写真が無ければ `None`。
+    pub first_photo_id: Option<String>,
+}
+
 /// レシピの一覧の 1 ページ分。
 #[derive(Debug)]
 pub struct RecipePage {
     /// このページのレシピ。
-    pub recipes: Vec<Recipe>,
+    pub recipes: Vec<ListedRecipe>,
     /// 条件に当てはまるレシピの総数（すべてのページの合計）。
     pub total: i64,
 }
@@ -160,12 +168,15 @@ pub trait Backend: Clone + Send + Sync + 'static {
     /// `offset` 件を飛ばした後の `limit` 件と、当てはまるレシピの総数を返す。
     /// `query` があれば、`search_name` 列がそれを含むレシピだけを対象にする。
     /// `query` は呼び出し側で [`crate::recipe::search_name`] の形にしてから渡す。
+    /// `with_first_photo` なら、レシピごとに先頭の写真（[`Backend::list_photos`] の並びの最初）の ID も返す
+    /// （画面の一覧だけが使う。API の一覧は返さないので、写真を読まない）。
     fn list_recipes(
         &self,
         workspace: &WorkspaceId,
         query: Option<&str>,
         limit: i64,
         offset: i64,
+        with_first_photo: bool,
     ) -> impl Future<Output = BackendResult<RecipePage>> + Send;
 
     /// レシピを保存する。ワークスペースのレシピがすでに `max_recipes` 件あれば、保存せずに `false` を返す。
