@@ -11,47 +11,78 @@
 // ブラウザによっては、確定したときに compositionend と、変換中でない input の両方が起きる（Safari など）。
 // 値が同じなら htmx の changed が 1 回の検索にまとめる。
 // htmx のイベントの絞り込み（[...]）は、eval を禁じている（htmx-config の allowEval）ので使わない。
-"use strict";
+//
+// 入力を消すボタン（data-search-clear）も扱う。ブラウザが出す ×（Tab で選べない）の代わりに置いている。
+//
+// ES モジュールとして読み込む（base.html の <script type="module">）。判定の関数は、単体テスト
+// （apps/recipe-box-rs/js-tests/）のために export する。型は JSDoc で書き、`tsc --noEmit` で確かめる。
+// @ts-check
 
-(() => {
-  const INPUT = "input[data-search-input]";
+const INPUT = "input[data-search-input]";
+const CLEAR = "button[data-search-clear]";
 
-  // htmx が待つ search-input を起こす（templates/list.html の hx-trigger）。
-  function search(input) {
-    input.dispatchEvent(new Event("search-input"));
+// 印字できる ASCII の文字（空白を含む）だけの文字列か。
+const ASCII_ONLY = /^[\x20-\x7e]*$/;
+
+/**
+ * 検索の欄なら、その欄を返す。
+ * @param {EventTarget | null} target
+ * @returns {HTMLInputElement | null}
+ */
+function searchInput(target) {
+  return target instanceof HTMLInputElement && target.matches(INPUT) ? target : null;
+}
+
+/**
+ * htmx が待つ search-input を起こす。
+ * @param {HTMLInputElement} input
+ */
+function search(input) {
+  input.dispatchEvent(new Event("search-input"));
+}
+
+/**
+ * input で検索するか。変換中でなければする。変換中は、欄の値の全体が ASCII だけのときだけする。
+ * @param {Event} event
+ * @param {string} value 欄の今の値
+ */
+export function searchesOnInput(event, value) {
+  const composing = event instanceof InputEvent && event.isComposing;
+  return !composing || ASCII_ONLY.test(value);
+}
+
+/**
+ * 入力を消すボタンが押されたら、外側の検索のフォームの欄を空にして絞り込まない一覧にし、欄にフォーカスを戻す。
+ * ボタンは、JavaScript が動かないときのために別のフォーム（templates/list.html の clear-search）を送るので、送らせない。
+ * 検索は、打ったときと同じ search-input で起こす。changed が覚える前の値も空になり、同じ文字を打ち直しても検索する。
+ * @param {Event} event
+ * @returns {boolean} 入力を消したか
+ */
+export function clearOnClick(event) {
+  const button = event.target instanceof Element ? event.target.closest(CLEAR) : null;
+  // button.form は form 属性の先（clear-search）を指すので、外側の検索のフォームから欄を探す。
+  const input = button?.closest("form")?.querySelector(INPUT);
+  if (!(input instanceof HTMLInputElement)) {
+    return false;
   }
+  event.preventDefault();
+  input.value = "";
+  search(input);
+  input.focus();
+  return true;
+}
 
-  function notify(event) {
-    const input = event.target;
-    if (input instanceof HTMLInputElement && input.matches(INPUT)) {
-      search(input);
-    }
-  }
-
-  // 印字できる ASCII の文字（空白を含む）だけの文字列か。
-  const ASCII_ONLY = /^[\x20-\x7e]*$/;
-
-  // htmx がページを入れ替えても効くよう、document で受ける。
-  document.addEventListener("input", (event) => {
-    if (!event.isComposing || ASCII_ONLY.test(event.target.value ?? "")) {
-      notify(event);
-    }
-  });
-  document.addEventListener("compositionend", notify);
-
-  // 入力を消すボタン（data-search-clear）。欄を空にして絞り込まない一覧にし、欄にフォーカスを戻す。
-  // ボタンは JavaScript が動かないときのために別のフォーム（templates/list.html の clear-search）を送るので、送らせない。
-  // 検索は、打ったときと同じ search-input で起こす。changed が覚える前の値も空になり、同じ文字を打ち直しても検索する。
-  document.addEventListener("click", (event) => {
-    const button = event.target instanceof Element ? event.target.closest("button[data-search-clear]") : null;
-    // button.form は form 属性の先（clear-search）を指すので、外側の検索のフォームから欄を探す。
-    const input = button?.closest("form")?.querySelector(INPUT);
-    if (!input) {
-      return;
-    }
-    event.preventDefault();
-    input.value = "";
+// htmx がページを入れ替えても効くよう、document で受ける。
+document.addEventListener("input", (event) => {
+  const input = searchInput(event.target);
+  if (input && searchesOnInput(event, input.value)) {
     search(input);
-    input.focus();
-  });
-})();
+  }
+});
+document.addEventListener("compositionend", (event) => {
+  const input = searchInput(event.target);
+  if (input) {
+    search(input);
+  }
+});
+document.addEventListener("click", clearOnClick);

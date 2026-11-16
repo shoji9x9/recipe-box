@@ -1,4 +1,4 @@
-// scripts/seed.mjs の、外部（API・wrangler・標準入力）に触れない部分。単体テスト（seed-lib.test.mjs）で確かめる。
+// scripts/seed.mjs の、外部（API・wrangler・標準入力）に触れない部分。単体テスト（seed-lib.test.ts）で確かめる。
 import { closeSync, lstatSync, openSync, readSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 

@@ -1,5 +1,21 @@
 {
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true
+  },
+  "permissions": {
+    "deny": [
+      "Bash(npx *modern-web-guidance*)",
+      "Bash(pnpx *modern-web-guidance*)",
+      "Bash(bunx *modern-web-guidance*)",
+      "Bash(npm exec *modern-web-guidance*)",
+      "Bash(npm x *modern-web-guidance*)",
+      "Bash(pnpm *exec *modern-web-guidance*)",
+      "Bash(pnpm dlx *modern-web-guidance*)",
+      "Bash(pnpm modern-web-guidance*)",
+      "Bash(yarn *modern-web-guidance*)",
+      "Bash(node *modern-web.mjs*)",
+      "Bash(node_modules/.bin/modern-web-guidance*)",
+      "Bash(./node_modules/.bin/modern-web-guidance*)"
+    ]
   }
 }

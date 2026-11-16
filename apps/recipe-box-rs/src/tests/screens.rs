@@ -1207,7 +1207,7 @@ async fn search_waits_for_the_ime_to_commit() {
     assert!(
         response
             .body
-            .contains(r#"<script src="/assets/search.js" defer></script>"#)
+            .contains(r#"<script src="/assets/search.js" type="module"></script>"#)
     );
     assert!(response.body.contains(" data-search-input"));
     assert!(
@@ -1255,7 +1255,7 @@ async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
     assert!(
         response
             .body
-            .contains(r#"<script src="/assets/photo-upload.js" defer></script>"#)
+            .contains(r#"<script src="/assets/photo-upload.js" type="module"></script>"#)
     );
     assert!(response.body.contains(" data-photo-upload "));
     assert!(response.body.contains(r#"data-remaining="5""#));

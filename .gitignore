@@ -18,3 +18,8 @@ node_modules/
 
 # スキルの設定のうち、人ごと・このリポジトリ限定の層（本番の URL など、公開しない値を置く）
 .config/skills/shoji9x9/*.local.jsonc
+
+# Claude Code の git worktree（作業ごとのリポジトリの写し）
+.claude/worktrees/
+# modern-web-guidance のスキルの指針の写し。ツールはパッケージの中の指針を読むので、入れない（AGENTS.md の「スキル」）。
+.claude/skills/modern-web-guidance/guides/
