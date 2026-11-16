@@ -144,9 +144,9 @@ async fn workspace_delete_button_is_named() {
     let backend = backend_with_workspaces();
     let response = screen_get(&backend, "/workspace", Some(&cookie(WORKSPACE_A))).await;
     assert!(
-        response.body.contains(
-            r#"command="show-modal" aria-label="ワークスペースを削除する">ワークスペースを削除する</button>"#
-        ),
+        response
+            .body
+            .contains(r#"command="show-modal">ワークスペースを削除する</button>"#),
         "{}",
         response.body
     );
@@ -403,6 +403,13 @@ async fn names_are_escaped() {
         assert!(!response.body.contains("<script>alert"), "{page}");
         // askama は < を &#60; に、" を &#34; にする。
         assert!(response.body.contains("&#60;script&#62;alert"), "{page}");
+        // 削除のボタンの名前（属性の値）でも、エスケープする。
+        assert!(
+            response.body.contains(
+                r#"aria-label="「&#60;script&#62;alert(&#34;x&#34;)&#60;/script&#62;」を削除""#
+            ),
+            "{page}"
+        );
     }
 }
 

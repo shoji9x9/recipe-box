@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   classify,
+  copyMessages,
   count,
   describeFailures,
   editPathOf,
@@ -145,15 +146,15 @@ describe("画面の入れ替え", () => {
     document.body.innerHTML = "";
   });
 
-  test("replaceFrom は、知らせと写真の欄だけを写し、料理名などのフォームに触れない", () => {
+  test("replaceFrom は、写真の欄だけを写し、料理名などのフォームと知らせに触れない", () => {
     const name = document.querySelector('input[name="name"]') as HTMLInputElement;
     name.value = "書きかけ";
     const next = new DOMParser().parseFromString(
       editPage('<p class="message success">新しいメッセージ</p>', ["p1", "p2"], 3),
       "text/html",
     );
-    expect(replaceFrom(next, { messages: true })).toBe(true);
-    expect(document.getElementById("messages")?.textContent?.trim()).toBe("新しいメッセージ");
+    expect(replaceFrom(next)).toBe(true);
+    expect(document.getElementById("messages")?.textContent?.trim()).toBe("前のメッセージ");
     expect(document.querySelectorAll("#photos img")).toHaveLength(2);
     expect(document.querySelector("input[name=name]")).toBe(name);
     expect(name.value).toBe("書きかけ");
@@ -161,20 +162,28 @@ describe("画面の入れ替え", () => {
     expect((document.querySelector('#photos input[type="file"]') as HTMLInputElement).multiple).toBe(true);
   });
 
-  test("replaceFrom は、messages が false なら知らせを写さない", () => {
-    const next = new DOMParser().parseFromString(editPage("<p>新しい</p>", [], 5), "text/html");
-    replaceFrom(next, { messages: false });
-    expect(document.getElementById("messages")?.textContent?.trim()).toBe("前のメッセージ");
-  });
-
   test("replaceFrom は、写真の欄が無い画面（エラーの画面）なら false を返し、写真の欄を残す", () => {
     const next = new DOMParser().parseFromString(
       `<main>${messagesHtml("", '<p class="message error">見つかりません</p>')}</main>`,
       "text/html",
     );
-    expect(replaceFrom(next, { messages: true })).toBe(false);
-    expect(document.getElementById("messages")?.textContent?.trim()).toBe("見つかりません");
+    expect(replaceFrom(next)).toBe(false);
     expect(document.querySelectorAll("#photos img")).toHaveLength(1);
+  });
+
+  test("copyMessages は、読んだ画面の知らせを今の入れ物に写し、知らせの場所が無ければ false を返す", () => {
+    const status = document.getElementById("messages-status");
+    const next = new DOMParser().parseFromString(
+      `<main>${messagesHtml("", '<p class="message error">見つかりません</p>')}</main>`,
+      "text/html",
+    );
+    expect(copyMessages(next)).toBe(true);
+    expect(document.getElementById("messages-status")).toBe(status);
+    expect(status?.textContent).toBe("");
+    expect(document.getElementById("messages-alert")?.textContent).toBe("見つかりません");
+    const plain = new DOMParser().parseFromString("<p>Bad Gateway</p>", "text/html");
+    expect(copyMessages(plain)).toBe(false);
+    expect(document.getElementById("messages-alert")?.textContent).toBe("見つかりません");
   });
 });
 
@@ -478,6 +487,14 @@ describe("削除の流れ", () => {
     );
     await remove(deleteForm());
     expect(messageText()).toBe("少し待ってください");
+    expect(document.querySelectorAll("#photos img")).toHaveLength(2);
+    expect((deleteForm().querySelector("button") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("知らせの場所の無い誤りの応答（Worker の外の層の 502 など）なら、決まった文で知らせる", async () => {
+    fetchMock.mockResolvedValue(html(502, "<p>Bad Gateway</p>"));
+    await remove(deleteForm());
+    expect(messageText()).toBe("写真を削除できませんでした");
     expect(document.querySelectorAll("#photos img")).toHaveLength(2);
     expect((deleteForm().querySelector("button") as HTMLButtonElement).disabled).toBe(false);
   });

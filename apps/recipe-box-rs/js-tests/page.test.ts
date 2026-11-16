@@ -2,7 +2,7 @@
 // 判定の関数は直接呼び、happy-dom の DOM に画面を置いて確かめる。
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { focusHeading, invokeOnClick, supportsInvokers } from "../public/assets/page.js";
+import { focusHeading, invokeOnClick, reannounceMessages, supportsInvokers } from "../public/assets/page.js";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -11,7 +11,7 @@ afterEach(() => {
 describe("hx-boost の後のフォーカス", () => {
   test("フォーカスが body にあれば、見出しに移し、Tab ではたどらない", () => {
     document.body.innerHTML = "<header><a href='/'>recipe-box</a></header><main><h1>レシピの一覧</h1></main>";
-    expect(focusHeading(document)).toBe(true);
+    expect(focusHeading(document, "main h1")).toBe(true);
     const heading = document.querySelector("h1") as HTMLElement;
     expect(document.activeElement).toBe(heading);
     expect(heading.tabIndex).toBe(-1);
@@ -21,13 +21,57 @@ describe("hx-boost の後のフォーカス", () => {
     document.body.innerHTML = "<main><h1>ワークスペース</h1><input id='workspace-id' autofocus></main>";
     const input = document.getElementById("workspace-id") as HTMLInputElement;
     input.focus();
-    expect(focusHeading(document)).toBe(false);
+    expect(focusHeading(document, "main h1")).toBe(false);
     expect(document.activeElement).toBe(input);
+  });
+
+  test("hx-boost で本文を入れ替えたら、見出しにフォーカスを移し、少し後に知らせを同じ中身で入れ直す", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `<main><h1>カレー</h1><div id="messages">
+        <div id="messages-status" role="status"><p class="message success">レシピを保存しました</p></div>
+        <div id="messages-alert" role="alert"></div></div></main>`;
+      const status = document.getElementById("messages-status") as HTMLElement;
+      const before = status.firstChild;
+      document.body.dispatchEvent(new CustomEvent("htmx:afterSettle", { bubbles: true, detail: { boosted: true } }));
+      expect(document.activeElement?.textContent).toBe("カレー");
+      // フォーカスの読み上げと重ならないよう、知らせはすぐには入れ直さない。
+      expect(status.firstChild).toBe(before);
+      vi.runAllTimers();
+      expect(status.firstChild).not.toBe(before);
+      expect(status.textContent).toBe("レシピを保存しました");
+      expect(document.getElementById("messages-status")).toBe(status);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("一部だけを入れ替えたとき（検索・欄の確かめ直し）は、何もしない", () => {
+    document.body.innerHTML = "<main><h1>レシピの一覧</h1><section id='results'></section></main>";
+    const results = document.getElementById("results") as HTMLElement;
+    results.dispatchEvent(new CustomEvent("htmx:afterSettle", { bubbles: true, detail: { boosted: false } }));
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  test("戻る・進むで htmx が画面を読み直したときも、見出しにフォーカスを移す", () => {
+    document.body.innerHTML = "<main><h1>レシピの一覧</h1></main>";
+    document.body.dispatchEvent(new CustomEvent("htmx:historyRestore", { bubbles: true, detail: { path: "/" } }));
+    expect(document.activeElement?.textContent).toBe("レシピの一覧");
+  });
+
+  test("reannounceMessages は、空の入れ物には触れない", () => {
+    document.body.innerHTML = '<div id="messages-status" role="status"></div><div id="messages-alert" role="alert">誤り</div>';
+    const alert = document.getElementById("messages-alert") as HTMLElement;
+    const before = alert.firstChild;
+    reannounceMessages(document);
+    expect(document.getElementById("messages-status")?.childNodes).toHaveLength(0);
+    expect(alert.firstChild).not.toBe(before);
+    expect(alert.textContent).toBe("誤り");
   });
 
   test("見出しが無ければ、何もしない", () => {
     document.body.innerHTML = "<main><p>本文</p></main>";
-    expect(focusHeading(document)).toBe(false);
+    expect(focusHeading(document, "main h1")).toBe(false);
     expect(document.activeElement).toBe(document.body);
   });
 });

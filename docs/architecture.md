@@ -84,6 +84,7 @@ Dependabot の更新のうち自動でマージされたもの（`dependabot-aut
 | Node のパッケージマネージャー | pnpm |
 | git フック | lefthook |
 
-CSS の入れ子に対応したブラウザは、削除の確認に使う Invoker Commands（docs/spec.md）に対応したブラウザより広い。そのため、入れ子を使っても、使えるブラウザは変わらない。
+使えるブラウザの下限は、画面の CSS が使う入れ子と `:has()` に対応しているかで決まる。
+削除の確認に使う Invoker Commands（docs/spec.md）に対応していないブラウザでも、画面の JavaScript（`public/assets/page.js`）が同じダイアログを開くので、下限は変わらない。
 
 Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった。ただし公式ブログによると、Rust の Worker の開発とデプロイは wrangler に任せている。そのため wrangler を使う。リライト前の構成は wrangler で足りるので、`cf` に移すかは検討しない。

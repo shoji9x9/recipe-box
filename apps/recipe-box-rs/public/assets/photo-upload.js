@@ -14,6 +14,8 @@
 // （apps/recipe-box-rs/js-tests/）のために export する。型は JSDoc で書き、`tsc --noEmit` で確かめる。
 // @ts-check
 
+import { focusHeading } from "./page.js";
+
 const SECTION = "[data-photo-section]";
 const FORM = "form[data-photo-upload]";
 const SECTION_ID = "photos";
@@ -196,26 +198,27 @@ function importedChildren(page, id) {
 }
 
 /**
- * 読んだ画面の知らせ（#messages）を、今の画面の知らせの入れ物に写す。読んだ画面に知らせの場所が無ければ、何もしない。
+ * 読んだ画面の知らせ（#messages）を、今の画面の知らせの入れ物に写す。写したら true を返す。
+ * 読んだ画面に知らせの場所が無ければ（Worker の外の層が返した誤りのページなど）、何もせずに false を返す。
  * @param {Document} page
+ * @returns {boolean}
  */
-function copyMessages(page) {
-  if (page.getElementById(MESSAGES_ID)) {
-    setMessages(importedChildren(page, STATUS_ID), importedChildren(page, ALERT_ID));
+export function copyMessages(page) {
+  if (!page.getElementById(MESSAGES_ID)) {
+    return false;
   }
+  setMessages(importedChildren(page, STATUS_ID), importedChildren(page, ALERT_ID));
+  return true;
 }
 
 /**
- * 読んだ画面から、知らせ（#messages）と写真の欄（#photos）を今の画面に写す。料理名などのフォームには触れない。
+ * 読んだ画面から、写真の欄（#photos）を今の画面に写す。料理名などのフォームと、知らせには触れない
+ * （知らせは、フォーカスを移した後に、呼ぶ側が copyMessages などで出す）。
  * 写真の欄を入れ替えたかを返す（エラーの画面には写真の欄が無い）。
  * @param {Document} page
- * @param {{ messages: boolean }} options messages が false なら、知らせは写さない（呼ぶ側が結果を出す）。
  * @returns {boolean}
  */
-export function replaceFrom(page, options) {
-  if (options.messages) {
-    copyMessages(page);
-  }
+export function replaceFrom(page) {
   const next = page.getElementById(SECTION_ID);
   const current = document.getElementById(SECTION_ID);
   if (!next || !current) {
@@ -231,14 +234,7 @@ export function replaceFrom(page, options) {
  * 入れ替えた後、フォーカスが行き場を失っていれば（押したボタンやダイアログが消えた）、写真の欄の見出しに移す。
  */
 function restoreFocus() {
-  if (document.activeElement && document.activeElement !== document.body) {
-    return;
-  }
-  const heading = document.querySelector(`#${SECTION_ID} h2`);
-  if (heading instanceof HTMLElement) {
-    heading.tabIndex = -1;
-    heading.focus();
-  }
+  focusHeading(document, `#${SECTION_ID} h2`);
 }
 
 /**
@@ -276,7 +272,7 @@ async function finish(form, editPath, added, failures, redirected) {
       if (window.location.pathname !== editPath) {
         return;
       }
-      refreshed = replaceFrom(page, { messages: false });
+      refreshed = replaceFrom(page);
     }
   } catch {
     // 今の写真の欄のまま結果を出す。
@@ -311,19 +307,16 @@ function clearFileInput(form) {
 }
 
 /**
+ * フォームの下の知らせ（photo_section.html の [data-photo-status]）を書く。
+ * 入れ物は、読み上げのためにテンプレートが前から置く。ここでは作らない（新しく作った入れ物は、読み上げないことがある）。
  * @param {HTMLFormElement} form
  * @param {string} text
  */
 function setStatus(form, text) {
-  let status = form.querySelector("[data-photo-status]");
-  if (!status) {
-    status = document.createElement("p");
-    status.className = "note";
-    status.setAttribute("role", "status");
-    status.setAttribute("data-photo-status", "");
-    form.append(status);
+  const status = form.querySelector("[data-photo-status]");
+  if (status) {
+    status.textContent = text;
   }
-  status.textContent = text;
 }
 
 /**
@@ -459,7 +452,7 @@ export async function remove(form) {
     return;
   }
   // 知らせは、フォーカスを移した後に写す（finish と同じ順）。
-  if (replaceFrom(page, { messages: false })) {
+  if (replaceFrom(page)) {
     restoreFocus();
     copyMessages(page);
     return;
@@ -474,7 +467,9 @@ export async function remove(form) {
   }
   setControlsDisabled(form, false);
   restoreFocus();
-  copyMessages(page);
+  if (!copyMessages(page)) {
+    setMessages([], [message("error", "写真を削除できませんでした", [])]);
+  }
 }
 
 // htmx（hx-boost）より先に受け取るため、捕捉の段階で聞く。htmx に送らせると、ページの本文ごと入れ替わり、

@@ -314,9 +314,10 @@ button.primary.danger-fill {
     margin: 0;
   }
 
-  /* 見出しのすぐ下のメッセージ（#messages の中の、知らせの入れ物の最初のもの）と、メッセージが無いときの入力の誤りの一覧 */
+  /* 見出しのすぐ下のメッセージ（#messages の中の、空でない最初の知らせの入れ物の中身）と、メッセージが無いときの入力の誤りの一覧。
+     知らせの入れ物は、知らせが無ければ空（:empty）になる（templates/base.html と photo-upload.js） */
   & + .messages > :first-child > .message,
-  & + .messages > :first-child:not(:has(.message)) + * > .message,
+  & + .messages > :empty + * > .message,
   & + .messages:not(:has(.message)) + .error-summary {
     margin-top: calc(-1 * var(--space-2));
   }
