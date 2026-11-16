@@ -50,6 +50,9 @@ pre-commit:
             glob:
               - "*.{js,ts}"
               - "tsconfig.json"
+              # 型の定義（typescript・vitest・happy-dom）の版が変わったときにも確かめる。
+              - "package.json"
+              - "pnpm-lock.yaml"
             run: pnpm exec tsc -p tsconfig.json
 
     # 3. 秘密情報が stage されていないかを調べる。

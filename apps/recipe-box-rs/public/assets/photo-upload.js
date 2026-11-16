@@ -192,14 +192,22 @@ async function finish(form, detailPath, added, failures, redirected) {
   // 読み直せなかったとき（htmx が無いなど）は、フォームが残っているので、使える状態に戻す。
   if (form.isConnected) {
     form.dataset.remaining = String(Math.max(0, Number(form.dataset.remaining) - added));
-    const input = form.querySelector('input[type="file"]');
-    if (input instanceof HTMLInputElement) {
-      input.value = "";
-    }
+    clearFileInput(form);
     setControlsDisabled(form, false);
     setStatus(form, added > 0 ? "送り終えました。ページを読み直すと、追加した写真が出ます" : "送り終えました");
   }
   showResults(added, failures);
+}
+
+/**
+ * 選び直せるよう、ファイルの欄を空にする。
+ * @param {HTMLFormElement} form
+ */
+function clearFileInput(form) {
+  const input = form.querySelector('input[type="file"]');
+  if (input instanceof HTMLInputElement) {
+    input.value = "";
+  }
 }
 
 /**
@@ -252,11 +260,14 @@ export async function upload(form, files) {
   const failures = [];
   /** @type {File[]} */
   const sending = [];
-  // 大きすぎるときの文（data-too-large）が無ければ、大きさは確かめずにサーバーに任せる（理由をサーバーの知らせとそろえるため）。
+  // 上限（data-max-bytes）か、大きすぎるときの文（data-too-large）が無ければ、大きさは確かめずにサーバーに任せる
+  // （理由をサーバーの知らせとそろえるため）。
+  const maxBytes = Number(form.dataset.maxBytes || Number.NaN);
   const tooLarge = form.dataset.tooLarge;
-  const limits = tooLarge
-    ? { maxBytes: Number(form.dataset.maxBytes), tooLarge }
-    : { maxBytes: Number.POSITIVE_INFINITY, tooLarge: "" };
+  const limits =
+    tooLarge && Number.isFinite(maxBytes)
+      ? { maxBytes, tooLarge }
+      : { maxBytes: Number.POSITIVE_INFINITY, tooLarge: "" };
   for (const file of files) {
     const reason = localReason(limits, file);
     if (reason === null) {
@@ -277,10 +288,7 @@ export async function upload(form, files) {
   }
   // 1 枚も送らなければ、詳細の画面は変わらないので、読み直さずに理由だけを出し、選び直せるよう欄を空にする。
   if (sending.length === 0) {
-    const input = form.querySelector('input[type="file"]');
-    if (input instanceof HTMLInputElement) {
-      input.value = "";
-    }
+    clearFileInput(form);
     setStatus(form, "追加できる写真がなかったので、送りませんでした");
     showResults(0, failures);
     return;

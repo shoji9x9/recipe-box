@@ -29,11 +29,16 @@ function page(status: number, alert: string | null, redirected = false): Respons
  * happy-dom では window と globalThis が別なので、vi.stubGlobal では置けない。
  */
 async function withHtmx(ajax: Htmx["ajax"], fn: () => Promise<unknown>): Promise<void> {
+  const previous = window.htmx;
   window.htmx = { ajax };
   try {
     await fn();
   } finally {
-    delete window.htmx;
+    if (previous) {
+      window.htmx = previous;
+    } else {
+      delete window.htmx;
+    }
   }
 }
 
@@ -231,23 +236,28 @@ describe("送る流れ", () => {
 
   test("1 枚も送らなければ、詳細の画面を読み直さずに理由だけを出す", async () => {
     const ajax = vi.fn();
+    // file の欄の value は "" しか入れられないので、空にしたことは代入を見て確かめる。
+    const setValue = vi.fn();
+    Object.defineProperty(input(), "value", { get: () => "C:\\fakepath\\big.jpg", set: setValue, configurable: true });
     await withHtmx(ajax, () => upload(form(), [file("big.jpg", 101)]));
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(ajax).not.toHaveBeenCalled();
     expect(status()).toBe("追加できる写真がなかったので、送りませんでした");
     expect(messages()[0]?.items).toEqual([`big.jpg: ${TOO_LARGE}`]);
-    expect(input().disabled).toBe(false);
-    expect(input().value).toBe("");
+    expect(setValue).toHaveBeenCalledWith("");
   });
 
-  test("data-too-large が無ければ、大きさを確かめずに送り、サーバーの知らせを理由にする", async () => {
-    delete form().dataset.tooLarge;
-    fetchMock.mockResolvedValue(page(413, "写真は 4 MB までです"));
-    await upload(form(), [file("big.jpg", 101)]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(messages()[0]?.items).toEqual(["big.jpg: 写真は 4 MB までです"]);
-  });
+  test.each(["tooLarge", "maxBytes"] as const)(
+    "data-%s が無ければ、大きさを確かめずに送り、サーバーの知らせを理由にする",
+    async (key) => {
+      delete form().dataset[key];
+      fetchMock.mockResolvedValue(page(413, "サーバーの知らせ"));
+      await upload(form(), [file("big.jpg", 101)]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(messages()[0]?.items).toEqual(["big.jpg: サーバーの知らせ"]);
+    },
+  );
 
   test("残りの枚数より多く選んだら、送らずに減らすよう伝え、送れない写真も挙げる", () => {
     submit([file("a.jpg", 5), file("b.jpg", 5), file("c.jpg", 5), file("d.jpg", 5), file("big.jpg", 101)]);
