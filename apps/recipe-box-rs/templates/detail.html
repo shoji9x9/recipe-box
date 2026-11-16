@@ -10,18 +10,18 @@
     {%- if photos.is_empty() %}
     <p>写真はありません。</p>
     {%- else %}
+    {#- 最初の写真は、最初の表示で一番大きな要素（LCP）になりやすいので、遅らせずに高い優先度で読む。
+        ほかの写真は縮小していない原寸（1 枚 4 MB まで）で、狭い画面では 1 列に並んで下に続くので、見える所に来てから読む。 #}
     <ul class="photos">
       {%- for photo in photos %}
       <li>
-        <img src="/recipes/{{ recipe.id }}/photos/{{ photo.id }}" alt="{{ recipe.name }}の写真 {{ loop.index }}" loading="lazy">
+        <img src="/recipes/{{ recipe.id }}/photos/{{ photo.id }}" alt="{{ recipe.name }}の写真 {{ loop.index }}"{% if loop.first %} fetchpriority="high"{% else %} loading="lazy"{% endif %}>
       </li>
       {%- endfor %}
     </ul>
     {%- endif %}
-    {#- 写真の追加と削除は、編集の画面で行う。 #}
-    {%- if photos_editable %}
-    <p class="note">写真は、編集の画面で追加・削除できます。</p>
-    {%- else %}
+    {#- 写真の追加と削除は、編集の画面で行う。共有のデモでは編集の画面でもできないので、そう書く。 #}
+    {%- if !photos_editable %}
     <p class="note">共有のデモでは、写真を追加・削除できません。</p>
     {%- endif %}
   </section>
