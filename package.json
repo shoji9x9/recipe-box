@@ -11,8 +11,11 @@
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
     "chrome-devtools-mcp": "1.12.0",
+    "happy-dom": "21.0.4",
     "htmx.org": "2.0.11",
     "modern-web-guidance": "0.0.197",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0",
     "wrangler": "^4.158.0"
   }
 }
