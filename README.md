@@ -60,4 +60,4 @@
 
 [MIT License](LICENSE)
 
-ただし、`.claude/skills/` の第三者のスキルは [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) のとおり、`seed/photos/` の写真は [seed/photos/SOURCES.md](seed/photos/SOURCES.md) のとおり（CC0）です。
+ただし、第三者の著作物（`.claude/skills/` の一部と、解説の図に埋め込んだフォント）は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) のとおり、`seed/photos/` の写真は [seed/photos/SOURCES.md](seed/photos/SOURCES.md) のとおりです。

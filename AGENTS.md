@@ -91,6 +91,7 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 - `browser-test`: 画面の変更を、chrome-devtools MCP で実際のブラウザを操作して確かめる。
 
 入れ方は `gh skill install shoji9x9/skills <スキル名> --agent claude-code --scope project`。
+入れ直して、スキルが同梱する第三者のコード（`scripts/skill-config/vendor/` など）が増えたか変わったら、`THIRD_PARTY_NOTICES.md` を直す。
 
 `pr-finalize-loop` の再レビューの依頼先は `claude-code` にしている（`.config/skills/shoji9x9/common.jsonc`）。
 このリポジトリの Claude のレビュー（`claude-review.yml`）は、push のたびに自動で動き、`@claude review` のコメントには反応しない。

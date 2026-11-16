@@ -7,8 +7,9 @@
 - `.claude/skills/modern-web-guidance/`（[GoogleChrome/modern-web-guidance](#googlechromemodern-web-guidance)、Apache License 2.0）
 
 `.claude/skills/` のほかの 4 つ（`pr-finalize-loop`・`dependabot-merge`・`dependabot-alert-issue`・`browser-test`）は、[shoji9x9/skills](https://github.com/shoji9x9/skills) から入れたもので、このリポジトリと同じ著作権者の MIT License による。
+ただし、それぞれの `scripts/skill-config/vendor/` にある jsonc-parser（`jsonc-parser.mjs`・`jsonc-parser.d.mts`）は Microsoft の著作物で、MIT License による。ライセンスの全文は、同じディレクトリの `LICENSE.md` にある。
 
-解説の図（`apps/recipe-box-rs/public/assets/guide/*.svg`、D2 の生成物）には、D2 が Source Sans Pro（Adobe、SIL Open Font License 1.1）を埋め込んでいる。著作権とライセンスの表示は、埋め込まれたフォントの中にある。
+解説の図（`apps/recipe-box-rs/public/assets/guide/*.svg`、D2 の生成物）には、D2 が Source Sans Pro（Adobe、[SIL Open Font License 1.1](https://openfontlicense.org/)）を埋め込んでいる。このフォントは、このリポジトリのライセンス（MIT）によらない。
 
 サンプルの写真（`seed/photos/`）の出典と許諾は、[seed/photos/SOURCES.md](seed/photos/SOURCES.md) にある。
 
