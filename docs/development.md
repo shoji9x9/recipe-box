@@ -160,12 +160,17 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
 本番を止めて、Cloudflare のデータと、デプロイとレビューに使うトークンを消す手順。消したデータは戻せない。
 
 1. workflow を止める。`deploy.yml` は D1 と R2 のバケットが無ければ作るので、先に止めないと、後の手順で消しても作り直される。
+   ほかの workflow も、トークンを消した後に失敗し続けないよう止める。
 
    ```bash
    gh workflow disable deploy.yml
    gh workflow disable seed-demo.yml
+   gh workflow disable claude-review.yml
+   gh workflow disable dependabot-automerge.yml
+   gh workflow disable outdated.yml
    ```
 
+   Dependabot の PR も止めるなら、`.github/dependabot.yml` を消す PR をマージする。
 2. `apps/recipe-box-rs` で Worker を消す（`wrangler login` が要る）。Cron Trigger・secret・binding も一緒に消える。
 
    ```bash
@@ -178,7 +183,7 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
    pnpm exec wrangler r2 bucket lifecycle add recipe-box-photos expire-all --expire-days 1 -y
    ```
 
-4. 1〜2 日後に、`pnpm exec wrangler r2 bucket info recipe-box-photos` でオブジェクトが 0 個になったことを確かめ、バケットを消す。
+4. 1〜2 日後に、`pnpm exec wrangler r2 bucket info recipe-box-photos` でオブジェクトが 0 個になったことを確かめ、バケットを消す。この数は遅れて変わることがあるので、消すときに空でないと断られたら、時間をおいてやり直す。
 
    ```bash
    pnpm exec wrangler r2 bucket delete recipe-box-photos
@@ -192,8 +197,8 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
 
 6. `pnpm exec wrangler d1 list` と `pnpm exec wrangler r2 bucket list` と、Cloudflare のダッシュボードで、Worker・D1・R2 が消えたことを確かめる。
 7. トークンを消す。
-   - Cloudflare のダッシュボードで、デプロイ用の API トークン（`CLOUDFLARE_API_TOKEN`）と、ほかに作ったトークン（調べるための読み取り専用のものなど）があれば、それも消す。
-   - GitHub の Settings → Environments で、`production` と `claude-review` の secret（または Environment そのもの）を消す。
+   - Cloudflare のダッシュボードで、デプロイ用の API トークン（`CLOUDFLARE_API_TOKEN`）と、ほかに作ったトークンがあれば、それも消す。
+   - GitHub の Settings → Environments で、`production` と `claude-review` の secret を消す。Environment そのものは消さない（workflow を有効にし直したときに、main だけを許す設定の無い Environment が作り直されないようにするため）。
    - `claude setup-token` で作ったトークン（`CLAUDE_CODE_OAUTH_TOKEN`）を無効にする。
    - 手元の wrangler からログアウトする（`pnpm exec wrangler logout`）。
 
