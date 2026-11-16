@@ -16,7 +16,7 @@
     "happy-dom": "^21.0.4",
     "htmx.org": "2.0.11",
     "markdown-it": "15.0.3",
-    "modern-web-guidance": "0.0.197",
+    "modern-web-guidance": "0.0.205",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
     "wrangler": "^4.158.0"
