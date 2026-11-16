@@ -132,20 +132,16 @@ export function lstatWithoutLinks(path: string, base: string): Stats {
     throw new PathCheckError(`${path} が ${base} の下に無い`, "outside");
   }
   let current = base;
-  const stats = rel.split(sep).map((part) => {
+  let stat: Stats | undefined;
+  for (const part of rel.split(sep)) {
     current = join(current, part);
-    const stat = lstatSync(current);
+    stat = lstatSync(current);
     if (stat.isSymbolicLink()) {
       throw new PathCheckError(`${current} がシンボリックリンク`, "link");
     }
-    return stat;
-  });
-  // rel は空でないので、少なくとも 1 つはたどっている。
-  const last = stats.at(-1);
-  if (last === undefined) {
-    throw new Error(`${path} をたどれなかった`);
   }
-  return last;
+  // rel は空でないので、少なくとも 1 回は lstat している。
+  return stat as Stats;
 }
 
 // fs のシステムの失敗（ENOENT・EACCES など。syscall を持つ）なら、shown を読めないという SeedDataError にして投げる。

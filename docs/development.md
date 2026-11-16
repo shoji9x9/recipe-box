@@ -42,7 +42,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | --- | --- | --- |
 | Rust | 外から呼ぶ API と画面は `apps/recipe-box-rs/src/tests/`。モジュールの中だけの関数は、そのファイルの `#[cfg(test)] mod tests` | `cargo test` |
 | 画面の JavaScript（`apps/<app>/public/assets/`） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。happy-dom の DOM で動かす |
-| Node のスクリプト（`scripts/*.ts`） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす |
+| スクリプト（`scripts/` の TypeScript とシェルスクリプト） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす（シェルスクリプトは、子のプロセスとして動かして確かめる） |
 
 - JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
 - 画面のテストを `public/` の下に置かない。`public/` の下のファイルは、Workers の静的アセットとして誰でも取れる。

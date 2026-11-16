@@ -48,8 +48,8 @@ run = [
 ]
 
 [tasks.typecheck]
-description = "JavaScript とテストの型を確かめる（lint と、commit の前の lefthook から呼ぶ）"
-# 画面の JavaScript（JSDoc の型）とそのテストは tsconfig.json（DOM の型）、スクリプトのテストは scripts/tsconfig.json（Node の型）。
+description = "JavaScript と TypeScript の型を確かめる（lint と、commit の前の lefthook から呼ぶ）"
+# 画面の JavaScript（JSDoc の型）とそのテストは tsconfig.json（DOM の型）、スクリプトとそのテストは scripts/tsconfig.json（Node の型）。
 run = [
   "pnpm exec tsc -p tsconfig.json",
   "pnpm exec tsc -p scripts/tsconfig.json",

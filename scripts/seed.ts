@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 共有のデモのワークスペースを、サンプルのレシピと写真の状態に戻す（docs/spec.md の「デモ用のデータ」）。
-// Node が型の注釈を取り除いて、そのまま動かす（ビルドしない。docs/development.md の「テスト」）。
+// Node が型の注釈を取り除いて、そのまま動かす（ビルドしない。docs/development.md の「言語」）。
 //
 // 使い方: node scripts/seed.ts (--local | --remote) < <デモの ID を書いたファイル>
 //   --local:  ローカルの Worker（先に別の端末で mise run dev）と、そのローカルの D1・R2
@@ -55,16 +55,13 @@ const appDir = join(root, "apps", "recipe-box-rs");
 // 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
 const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
 // ログで . と ~ に置き換える、リポジトリとホームのディレクトリのパス（端末の利用者名が入る。seed-lib.ts の pathPattern）。
-const PATHS: PathRule[] = [];
-for (const [path, replacement] of [
+const PATHS: PathRule[] = [
   [root, "."],
   [homedir(), "~"],
-] as const) {
-  const pattern = pathPattern(path);
-  if (pattern !== null) {
-    PATHS.push([pattern, replacement]);
-  }
-}
+].flatMap(([path, replacement]): PathRule[] => {
+  const pattern = pathPattern(path as string);
+  return pattern === null ? [] : [[pattern, replacement as string]];
+});
 
 const BASE_URLS: Record<Target, string> = {
   "--local": "http://localhost:8787",
@@ -283,6 +280,10 @@ async function wranglerWithRetry(what: string, ...wranglerArgs: string[]): Promi
 // R2 の操作を、wrangler が失敗したら待ってやり直す。やり直しても失敗したら、投げずに false を返す。
 async function r2(action: keyof typeof R2_ACTIONS, photo: PhotoKey, ...extra: string[]): Promise<boolean> {
   const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
+  // 型は動かすときに消えるので、wrangler のサブコマンドに渡す操作を、動かすときにも決まったものに限る。
+  if (!Object.hasOwn(R2_ACTIONS, action)) {
+    throw new Error(`R2 の操作 ${action} は使わない`);
+  }
   const what = `写真 ${photo.file} の${R2_ACTIONS[action]}`;
   try {
     await wranglerWithRetry(what, "r2", "object", action, key, ...extra);
@@ -303,7 +304,9 @@ async function eachPhoto(photos: Photo[], task: (photo: Photo) => Promise<boolea
   const failed: Photo[] = [];
   let next = 0;
   async function worker(): Promise<void> {
-    for (let photo = photos[next]; photo !== undefined; photo = photos[next]) {
+    while (next < photos.length) {
+      // 取り出しと next を進めるのを、await の前にまとめて行う（ほかの worker が同じ写真を取らないように）。
+      const photo = photos[next] as Photo;
       next += 1;
       if (!(await task(photo))) {
         failed.push(photo);
@@ -413,7 +416,10 @@ async function main(): Promise<void> {
         `FROM workspaces w WHERE w.id = '${workspaceId}'`,
     ),
   );
-  const row = statusRows?.[0] as { pinned: number; total: number; demo: number } | undefined;
+  if (statusRows === undefined) {
+    fail("wrangler の d1 execute --json の出力の形が、思ったものと違う");
+  }
+  const row = statusRows[0] as { pinned: number; total: number; demo: number } | undefined;
   if (row === undefined) {
     fail("その ID のワークスペースが無い");
   }

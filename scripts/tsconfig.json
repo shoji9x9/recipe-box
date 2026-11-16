@@ -5,6 +5,9 @@
   "compilerOptions": {
     "lib": ["ES2023"],
     "types": ["node"],
+    // Node と同じ決まりで import を解決する（拡張子の無い import などを、動かす前に見つける）。
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     // スクリプトは、Node が型の注釈を取り除いてそのまま動かす（ビルドしない）。
     // Node が取り除けない書き方（enum・namespace・コンストラクターの引数のプロパティなど）を使わない。
     "erasableSyntaxOnly": true,
