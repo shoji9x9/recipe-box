@@ -7,12 +7,13 @@ import {
   githubSlug,
   expandDirectives,
   extractSnippet,
-  fontFallback,
   GuideError,
   REPOSITORY_BLOB,
   renderMarkdown,
   renderPage,
   slug,
+  SYSTEM_FONTS,
+  systemFonts,
 } from "./guide-lib.ts";
 
 describe("extractSnippet", () => {
@@ -112,36 +113,43 @@ describe("diagramSources", () => {
   });
 });
 
-describe("fontFallback", () => {
+describe("systemFonts", () => {
   const svg = [
+    '<style type="text/css"><![CDATA[',
     '.d2-1 .text {\n\tfont-family: "d2-1-font-regular";\n}',
-    '@font-face {\n\tfont-family: d2-1-font-regular;\n\tsrc: url("data:x");\n}',
+    '@font-face {\n\tfont-family: d2-1-font-regular;\n\tsrc: url("data:application/font-woff;base64,AAA=");\n}',
     '.d2-1 .text-bold {\n\tfont-family: "d2-1-font-bold";\n}',
-    '@font-face {\n\tfont-family: d2-1-font-bold;\n\tsrc: url("data:y");\n}',
+    '@font-face {\n\tfont-family: d2-1-font-bold;\n\tsrc: url("data:application/font-woff;base64,BBB=");\n}]]></style>',
   ].join("\n");
 
-  test("文字の class にゴシックを候補に足し、太字は class とフォントの両方に太さを書く", () => {
-    expect(fontFallback(svg)).toBe(
+  test("埋め込みのフォントを消し、文字の class を OS のフォントにする。太字は太さを書く", () => {
+    expect(systemFonts(svg)).toBe(
       [
-        '.d2-1 .text {\n\tfont-family: "d2-1-font-regular", sans-serif;\n}',
-        '@font-face {\n\tfont-family: d2-1-font-regular;\n\tsrc: url("data:x");\n}',
-        '.d2-1 .text-bold {\n\tfont-family: "d2-1-font-bold", sans-serif; font-weight: 700;\n}',
-        '@font-face {\n\tfont-family: d2-1-font-bold; font-weight: 700;\n\tsrc: url("data:y");\n}',
+        '<style type="text/css"><![CDATA[',
+        `.d2-1 .text {\n\tfont-family: ${SYSTEM_FONTS};\n}`,
+        `.d2-1 .text-bold {\n\tfont-family: ${SYSTEM_FONTS}; font-weight: 700;\n}]]></style>`,
       ].join("\n"),
     );
   });
 
+  test("OS のフォントの並びは、日本語のゴシックを経て sans-serif で終わる", () => {
+    expect(SYSTEM_FONTS).toContain('"Noto Sans JP"');
+    expect(SYSTEM_FONTS.endsWith("sans-serif")).toBe(true);
+  });
+
   test("フォントを埋め込まない SVG は、文字に font-bold などを含んでも変えない", () => {
     const text = "<svg><text>font-bold</text></svg>";
-    expect(fontFallback(text)).toBe(text);
+    expect(systemFonts(text)).toBe(text);
   });
 
   test.each([
     ["フォントが無い", '.d2-1 .text-bold { font-family: "d2-1-font-bold"; }'],
-    ["class が無い", "@font-face { font-family: d2-1-font-bold; }"],
+    ["class が無い", '@font-face { font-family: d2-1-font-bold; src: url("data:x"); }'],
     ["2 つある", `${svg}\n${svg}`],
+    ["src が data: でない", svg.replace("data:application/font-woff;base64,BBB=", "https://example.com/a.woff")],
+    ["知らない種類のフォントがある", `${svg}\n@font-face { font-family: d2-1-font-mono; src: url("data:z"); }`],
   ])("書き方が想定と違えば失敗する（%s）", (_, input) => {
-    expect(() => fontFallback(input)).toThrow(GuideError);
+    expect(() => systemFonts(input)).toThrow(GuideError);
   });
 });
 
