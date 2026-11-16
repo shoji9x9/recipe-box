@@ -15,6 +15,12 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 - main に直接 commit しない。ブランチを切って PR を作る。
 - PR は squash でマージする（`gh pr merge --squash`）。PR のタイトルが、そのまま main の commit message になる。
   タイトルは Conventional Commits の形（`feat: ...`・`fix: ...`・`chore: ...` など）にし、本文には変更の理由を書く。
+- 外から見える挙動（API の応答・上限・画面）が変わる PR は、タイトルを `feat:` か `fix:` にし、それを書いた文書（冒頭の決まりのとおり、`docs/spec.md`・`docs/security.md`・`README.md` の使い方など）も同じ PR で直す。
+  依存の更新とセキュリティの対応でも、挙動が変わるなら `chore:` にしない（例: `fix(deps): ...`）。
+  リライトをする人が、基準の commit から後に挙動が変わった変更を、この 2 つで見分けるためである（`docs/architecture.md` の「リライトの比較の基準」）。
+  - Dependabot の PR を `dependabot-merge` で確かめて、挙動が変わる更新を見つけたら、マージする前に PR のタイトルを `fix(deps): ...` に直し、
+    同じ PR に、それを書いた文書の修正を push する。
+  - 自動でマージされた更新（`dependabot-automerge.yml`）で、後から挙動が変わったと分かったら、`docs/spec.md` などを直す `fix:` の PR を作り、本文に、挙動を変えた元の PR を書く。
 
 ## ツールの版（mise）
 
