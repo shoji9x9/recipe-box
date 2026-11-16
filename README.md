@@ -50,7 +50,7 @@
 | [guide/about.md](guide/about.md) | このアプリの作りの解説の元の文章（アプリの `/about/` で読める） |
 | [AGENTS.md](AGENTS.md) | このリポジトリで作業するコーディングエージェント向けの決まり |
 | [SECURITY.md](SECURITY.md) | 脆弱性の報告の仕方 |
-| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 第三者の著作物（`.claude/skills/` の一部など）の出典とライセンス |
+| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 第三者の著作物（`.claude/skills/` の一部）の出典とライセンス |
 
 ## 開発
 
@@ -60,4 +60,4 @@
 
 [MIT License](LICENSE)
 
-ただし、第三者の著作物（`.claude/skills/` の一部と、解説の図に埋め込んだフォント）は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) のとおり、`seed/photos/` の写真は [seed/photos/SOURCES.md](seed/photos/SOURCES.md) のとおりです。
+ただし、第三者の著作物（`.claude/skills/` の一部）は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) のとおり、`seed/photos/` の写真は [seed/photos/SOURCES.md](seed/photos/SOURCES.md) のとおりです。

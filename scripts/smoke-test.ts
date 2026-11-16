@@ -12,7 +12,7 @@
 // 環境変数 SCHEDULED_LOG に wrangler dev --test-scheduled のログのファイルを渡したときだけ、定期の自動削除を動かして確かめる（CI で使う）。
 // この確認は、wrangler でローカルの D1 を直接書き換える（ワークスペースを古くし、写真の行に印を付ける）。
 // 環境変数 API_ONLY=1 のときは、API（docs/spec.md の「API」）だけを確かめ、今の作りに頼る画面と静的アセット
-// （/ の文字・/assets/ のファイル・/about の _headers）を確かめない。リライトの後の新しいアプリに当てるときに使う。
+// （/ の文字・/assets/ のファイル・/about と /assets/guide/ の _headers）を確かめない。リライトの後の新しいアプリに当てるときに使う。
 // SCHEDULED_LOG の確認も、今の作り（wrangler・ローカルの D1 の表・ログの文）に頼るので、新しいアプリには付けない。
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -281,6 +281,14 @@ async function checkScreens(): Promise<void> {
     if (responseHeaders.get("x-content-type-options") !== "nosniff") fail(`${path} に nosniff が付いていない`);
   }
   if (!text().includes("このアプリの作り")) fail("/about/ が解説でない");
+  // 解説の図は、押すとそのまま開くので、スクリプトもフォントも許さない CSP を付ける（図にフォントを埋め込まない。scripts/guide-lib.ts の systemFonts）。
+  await request("GET", "/assets/guide/architecture.svg");
+  expect(200, "GET /assets/guide/architecture.svg");
+  const svgCsp = responseHeaders.get("content-security-policy") ?? "";
+  if (!svgCsp.startsWith("default-src 'none'") || /script-src|font-src/.test(svgCsp)) {
+    fail(`/assets/guide/ の CSP が想定と違う（public/_headers）: ${svgCsp}`);
+  }
+  if (responseHeaders.get("x-content-type-options") !== "nosniff") fail("/assets/guide/ に nosniff が付いていない");
 }
 
 // 無い API のパスと、受け付けないメソッドも、ほかの失敗と同じ JSON の形で答える（docs/spec.md の「API」）。

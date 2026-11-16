@@ -83,27 +83,37 @@ export function diagramSources(files: string[]): string[] {
   return files.filter((file) => file.endsWith(".d2") && !file.startsWith("_")).sort();
 }
 
-/** d2 が SVG に埋め込むフォントの種類と、文字の class の名前。太字だけは太さを書く。 */
+/** d2 が SVG に埋め込むフォントの種類と、文字の class の名前と、OS のフォントで同じ形にするための指定。 */
 const D2_FONTS = [
-  { kind: "regular", className: "text", weight: "" },
-  { kind: "bold", className: "text-bold", weight: " font-weight: 700;" },
-  { kind: "italic", className: "text-italic", weight: "" },
+  { kind: "regular", className: "text", style: "" },
+  { kind: "bold", className: "text-bold", style: " font-weight: 700;" },
+  { kind: "italic", className: "text-italic", style: " font-style: italic;" },
 ] as const;
 
 /**
- * d2 が作った SVG の、日本語の文字の形をそろえる。
- * d2 は文字を、ラテン文字だけを持つ埋め込みのフォントで描き、ほかのフォントの候補も太さ（font-weight）も書かない。
- * そのフォントに無い日本語は、ブラウザの既定のフォント（明朝のことがある）の細い字で描くので、同じ文字の中で英字と日本語の形がそろわない。
- * - 文字の class に、ゴシック（sans-serif）を候補に足す。
- * - 太字は、class とそのフォントの両方に 700 を書く。英字は埋め込みのフォントのまま（太さを重ねて作らず）、日本語は太字になる。
- * 斜体は、日本語を斜めにできないので、図の元で使わない（guide/_style.d2）。
- * d2 の出力の形が変わって書き換えられなければ、失敗させる（黙って形のそろわない図に戻さない）。
+ * 図の文字に使う OS のフォント。アプリの画面の文字（apps/recipe-box-rs/public/assets/style.css の --font）と同じにする。
+ * 日本語のゴシック（Hiragino Sans・Noto Sans JP、無ければ sans-serif）まで並べ、明朝で描かれないようにする。
  */
-export function fontFallback(svg: string): string {
+export const SYSTEM_FONTS =
+  '-apple-system, system-ui, "Segoe UI", Roboto, "Helvetica Neue", "Hiragino Sans", "Noto Sans JP", sans-serif';
+
+/**
+ * d2 が作った SVG から埋め込みのフォントを取り除き、文字を OS のフォントで描く。
+ * d2 は文字を、図に使う文字だけに絞ったフォント（data: の URL の @font-face）で描く。そのフォントは配らない
+ * （ライセンスの表示が要り、日本語を持たないので英字と日本語の形がそろわない）。
+ * - @font-face を消す。
+ * - 文字の class のフォントを、OS のフォントの並び（SYSTEM_FONTS）にする。太字は太さ（700）を書く。
+ * 斜体は、日本語の斜体の字形が無いので、図の元で使わない（guide/_style.d2）。
+ * d2 の出力の形が変わって書き換えられなければ、失敗させる（黙ってフォントを埋め込んだ図を作らない）。
+ */
+export function systemFonts(svg: string): string {
   let out = svg;
-  for (const { kind, className, weight } of D2_FONTS) {
-    const rule = new RegExp(`(\\.d2-\\d+ \\.${className} \\{\\s*font-family: "d2-\\d+-font-${kind}");`, "g");
-    const face = new RegExp(`(@font-face \\{\\s*font-family: d2-\\d+-font-${kind};)`, "g");
+  for (const { kind, className, style } of D2_FONTS) {
+    const rule = new RegExp(`(\\.d2-\\d+ \\.${className} \\{\\s*font-family: )"d2-\\d+-font-${kind}";`, "g");
+    const face = new RegExp(
+      `\\n?@font-face \\{\\s*font-family: d2-\\d+-font-${kind};\\s*src: url\\("data:[^"]*"\\);\\s*\\}`,
+      "g",
+    );
     const rules = out.match(rule)?.length ?? 0;
     const faces = out.match(face)?.length ?? 0;
     if (rules === 0 && faces === 0) {
@@ -111,13 +121,15 @@ export function fontFallback(svg: string): string {
     }
     if (rules !== 1 || faces !== 1) {
       throw new GuideError(
-        `d2 の SVG のフォント（${kind}）の書き方が、想定と違います（scripts/guide-lib.ts の fontFallback）`,
+        `d2 の SVG のフォント（${kind}）の書き方が、想定と違います（scripts/guide-lib.ts の systemFonts）`,
       );
     }
-    out = out.replace(rule, `$1, sans-serif;${weight}`);
-    if (weight !== "") {
-      out = out.replace(face, `$1${weight}`);
-    }
+    out = out.replace(rule, `$1${SYSTEM_FONTS};${style}`).replace(face, "");
+  }
+  // 知らない種類のフォントが残っていれば、埋め込んだまま配らないよう失敗させる。図の文字（<text>）は見ず、<style> の中だけを見る。
+  const styles = out.match(/<style[^>]*>[\s\S]*?<\/style>/g) ?? [];
+  if (styles.some((style) => /@font-face|d2-\d+-font-/.test(style))) {
+    throw new GuideError("d2 の SVG に、取り除けなかったフォントがあります（scripts/guide-lib.ts の systemFonts）");
   }
   return out;
 }
