@@ -51,7 +51,7 @@
 
 ### 挙動が変わった変更を見分ける
 
-外から見える挙動（API の応答・上限・画面）を変えるときは、仕様（[spec.md](spec.md)）と、上限などの費用の対策（[security.md](security.md)）を一緒に直し、PR のタイトルを `feat:` か `fix:` にする（AGENTS.md の「ブランチと PR」）。
+外から見える挙動（API の応答・上限・画面）を変えるときは、仕様（[spec.md](spec.md)）と、上限などの費用の対策（[security.md](security.md)）と、作りや運用の説明を変えるならアプリの解説（`guide/about.md`）を一緒に直し、PR のタイトルを `feat:` か `fix:` にする（AGENTS.md の「ブランチと PR」）。
 依存の更新とセキュリティの対応でも同じにする。PR は squash でマージするので、PR のタイトルがそのまま main の commit message になる。
 そのため、基準の commit（下の `<基準>`）から後に挙動が変わった変更は、次の 2 つで分かる。
 

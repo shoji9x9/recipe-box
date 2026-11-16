@@ -2,7 +2,8 @@
 
 このリポジトリで作業するコーディングエージェント向けの決まり。
 アプリの概要と使い方は [README.md](README.md) に、仕様は [docs/spec.md](docs/spec.md) に、方針と技術構成は [docs/architecture.md](docs/architecture.md) に、セキュリティは [docs/security.md](docs/security.md) に、開発の手順は [docs/development.md](docs/development.md) にある。
-動きや値を変えるときは、それを書いた文書をすべて一緒に直す（仕様は `docs/spec.md`、上限などの費用の対策は `docs/security.md`、手順は `docs/development.md`、利用者に見える値や操作は `README.md` の使い方も）。
+動きや値を変えるときは、それを書いた文書をすべて一緒に直す（仕様は `docs/spec.md`、上限などの費用の対策は `docs/security.md`、手順は `docs/development.md`、利用者に見える値や操作は `README.md` の使い方も、作りや運用の説明はアプリの解説（`guide/about.md` と図の元の `guide/<名前>.d2`）も）。
+解説の直し方（作り直したものも commit する・引用するコードの印・値は原本へのリンクにする）は、`docs/development.md` の「解説（/about）」に従う。
 README.md には概要と使い方だけを書き、詳細は `docs/` に置く。
 
 ## 文書
@@ -15,7 +16,7 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 - main に直接 commit しない。ブランチを切って PR を作る。
 - PR は squash でマージする（`gh pr merge --squash`）。PR のタイトルが、そのまま main の commit message になる。
   タイトルは Conventional Commits の形（`feat: ...`・`fix: ...`・`chore: ...` など）にし、本文には変更の理由を書く。
-- 外から見える挙動（API の応答・上限・画面）が変わる PR は、タイトルを `feat:` か `fix:` にし、それを書いた文書（冒頭の決まりのとおり、`docs/spec.md`・`docs/security.md`・`README.md` の使い方など）も同じ PR で直す。
+- 外から見える挙動（API の応答・上限・画面）が変わる PR は、タイトルを `feat:` か `fix:` にし、それを書いた文書（冒頭の決まりのとおり、`docs/spec.md`・`docs/security.md`・`README.md` の使い方・`guide/about.md` など）も同じ PR で直す。
   依存の更新とセキュリティの対応でも、挙動が変わるなら `chore:` にしない（例: `fix(deps): ...`）。
   リライトをする人が、基準の commit から後に挙動が変わった変更を、この 2 つで見分けるためである（`docs/architecture.md` の「リライトの比較の基準」）。
   - Dependabot の PR を `dependabot-merge` で確かめて、挙動が変わる更新を見つけたら、マージする前に PR のタイトルを `fix(deps): ...` に直し、
@@ -49,6 +50,7 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
   - レビューする範囲は、ブランチの最初の push ではベースブランチとの差分、2 回目からは前の push からの差分にする。
     `pr-finalize-loop` が反復ごとに push するときも同じで、PR の差分の全体をレビューし直さない（反復のたびに費用が増え、変えていないコードへの指摘で収束しなくなるため）。
   - アプリの文書（`README.md`・`docs/` など）だけの変更では、2 を省いてよい。
+    解説（`guide/` と、そこから作る `public/about/`・`public/assets/guide/`）の変更は省かない。公開するページを作り直し、`<!-- code: -->` の印でリポジトリのファイルを引用できるため。
     エージェントへの指示になるファイル（`AGENTS.md`・`CLAUDE.md`・`.claude/` の下）の変更は、`.md` でも省かない。悪意のある指示が入ると、エージェントが自律して push などをするため。
   - 直さないと決めた指摘は、理由を PR のトップレベルのコメントに書く（PR の本文には書かない）。最初の push で PR がまだ無ければ、PR を作った直後に書く。
 
