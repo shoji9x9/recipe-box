@@ -94,7 +94,7 @@ run = "scripts/pin-workspace.sh"
 
 [tasks.seed]
 description = "共有のデモを、サンプルのレシピと写真の状態に戻す（ID は標準入力で渡す。例: mise run seed -- --remote < <ID のファイル>）"
-run = "node scripts/seed.mjs"
+run = "node scripts/seed.ts"
 
 [tasks.dev]
 description = "ローカルの D1 にマイグレーションを当て、Worker を起動する（http://localhost:8787）"

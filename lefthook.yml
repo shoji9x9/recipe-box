@@ -51,7 +51,7 @@ pre-commit:
               - "*.{js,mjs,ts}"
               - "tsconfig.json"
               - "scripts/tsconfig.json"
-              # 型の定義（typescript・vitest・happy-dom・@types/node）の版を上げたときにも確かめる（入れてある node_modules で確かめるので、先に pnpm install する）。
+              # 型の定義（typescript・vitest・happy-dom・@types/node・@commitlint/types）の版を上げたときにも確かめる（入れてある node_modules で確かめるので、先に pnpm install する）。
               - "package.json"
               - "pnpm-lock.yaml"
             run: mise run typecheck

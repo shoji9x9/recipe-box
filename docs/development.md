@@ -42,12 +42,19 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | --- | --- | --- |
 | Rust | 外から呼ぶ API と画面は `apps/recipe-box-rs/src/tests/`。モジュールの中だけの関数は、そのファイルの `#[cfg(test)] mod tests` | `cargo test` |
 | 画面の JavaScript（`apps/<app>/public/assets/`） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。happy-dom の DOM で動かす |
-| Node のスクリプト（`scripts/`） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす |
+| Node のスクリプト（`scripts/*.ts`） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす |
 
 - JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
 - 画面のテストを `public/` の下に置かない。`public/` の下のファイルは、Workers の静的アセットとして誰でも取れる。
-- 型は `mise run typecheck`（`mise run lint` と commit の前の lefthook から呼ぶ）の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトのテストは `scripts/tsconfig.json`（Node の型）。
-  画面の JavaScript は、ビルドせずに配るので JavaScript のまま書き、型は JSDoc で書く。スクリプト（`.mjs`）には型を付けていないので、テストの `.ts` だけを確かめる。
+- 型は `mise run typecheck`（`mise run lint` と commit の前の lefthook から呼ぶ）の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトとそのテストは `scripts/tsconfig.json`（Node の型）。
+
+### 言語
+
+- Node で動かすスクリプト（`scripts/`）と設定（`commitlint.config.ts`・`vitest.config.ts`）は、TypeScript で書く。
+  スクリプトはビルドせず、Node が型の注釈を取り除いてそのまま動かす（`node scripts/seed.ts`）。そのため、Node が取り除けない書き方（`enum`・`namespace`・コンストラクターの引数のプロパティなど）は使わない（`scripts/tsconfig.json` の `erasableSyntaxOnly`）。
+  ほかのスクリプトは `./seed-lib.ts` のように `.ts` の拡張子で import する。
+- 画面の JavaScript（`public/assets/`）は、ビルドせずにそのまま配るので、JavaScript のまま書き、型は JSDoc で書く（ブラウザは TypeScript を動かせない）。
+- 小さな手順（`scripts/*.sh`）は、シェルスクリプトで書き、shellcheck で確かめる。
 
 ### ディレクトリ
 
@@ -58,8 +65,8 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `apps/recipe-box-rs/public/` | Workers の静的アセット（CSS・画面の JavaScript・アイコン）。ここに置いたファイルは誰でも取れるので、テストなどを置かない |
 | `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（上の「テスト」） |
 | `apps/recipe-box-rs/js-types/` | 画面の JavaScript が使う、ほかのライブラリ（htmx）の型の宣言 |
-| `scripts/seed.mjs` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
-| `scripts/seed-lib.mjs` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
+| `scripts/seed.ts` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
+| `scripts/seed-lib.ts` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
 | `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |

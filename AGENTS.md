@@ -50,6 +50,7 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
 
 - 動きを変えたら、テストも足すか直す。テストを置く場所と仕組みは、`docs/development.md` の「テスト」に従う。
 - JavaScript のテストは vitest で、TypeScript で書く（`node --test` など、ほかの仕組みを足さない）。
+- Node で動かすスクリプトは TypeScript で書く。画面の JavaScript は JavaScript のまま書き、型は JSDoc で書く（`docs/development.md` の「言語」）。
 
 ## SQL
 
