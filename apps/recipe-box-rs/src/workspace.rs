@@ -14,7 +14,7 @@ use crate::{
     error::{ApiError, log_error, run_to_completion_or_internal},
     id,
     limits::{DAY_MILLIS, client_key, start_of_utc_day},
-    photo::{self, PendingCleanup, object_key},
+    photo::{self, PendingCleanup, object_keys},
     recipe::RecipeId,
 };
 
@@ -265,7 +265,7 @@ pub(crate) fn pick_for_run<T>(mut items: Vec<T>, now: i64, count: usize) -> (Vec
 pub const MAX_SUBREQUESTS_PER_RUN: i64 = 50;
 /// 1 つのワークスペースを消すのに使う呼び出しの数の最大（[`remove_with_photos`]）。
 /// 写真を隠す D1 の 1 回・R2 の削除・D1 の削除の 1 回・R2 の削除（写真が無ければ R2 は呼ばない）。
-/// 1 つのワークスペースの写真は、R2 の 1 回の削除で消せる（[`photo::MAX_KEYS_PER_DELETE`]）。
+/// 1 つのワークスペースの写真は、R2 の 1 回の削除で消せる（[`photo::MAX_PHOTOS_PER_DELETE`]。元の写真と小さな版のキー）。
 const SUBREQUESTS_PER_WORKSPACE: i64 = 4;
 /// 自動削除（[`delete_unused`]）の 1 回の実行の呼び出しの数の最大。
 /// 古い記録の削除の 1 回・書き込み中の写真の片付け・対象を選ぶ 1 回・ワークスペースごとの削除。
@@ -387,9 +387,12 @@ async fn remove_photo_objects<B: Backend>(
                 ));
                 ApiError::Internal
             })?;
-            Ok(object_key(workspace, &recipe, &photo.id))
+            Ok(object_keys(workspace, &recipe, &photo.id))
         })
-        .collect::<Result<_, ApiError>>()?;
+        .collect::<Result<Vec<_>, ApiError>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     photo::delete_objects(backend, keys).await
 }
 

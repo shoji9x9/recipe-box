@@ -111,6 +111,8 @@ type RequestOptions = {
   json?: unknown;
   /** バイト列のまま送る本文（写真の API）。 */
   bytes?: Buffer;
+  /** 画面への書き込みとして送るときの、ワークスペースの Cookie の値（同じホストからの Origin も付ける）。 */
+  cookie?: string;
 };
 
 // API を呼び、状態コードを status に、本文を body に入れる。
@@ -118,6 +120,11 @@ async function request(method: string, path: string, options: RequestOptions = {
   const headers: Record<string, string> = {};
   if (options.workspace !== undefined) {
     headers["X-Workspace-Id"] = options.workspace;
+  }
+  if (options.cookie !== undefined) {
+    headers["Cookie"] = `__Host-workspace=${options.cookie}`;
+    // 画面の書き込みは、同じホストからの送信だけを受け付ける（src/screen.rs の same_origin）。
+    headers["Origin"] = new URL(baseUrl).origin;
   }
   let payload: string | Buffer | undefined;
   // fetch は GET に本文を付けられないので、GET では送らない（サーバーも GET の本文を読まない）。
@@ -149,7 +156,9 @@ async function request(method: string, path: string, options: RequestOptions = {
 async function withWriteRetry(method: string, path: string, send: () => Promise<void>): Promise<void> {
   for (let attempt = 1; attempt <= 8; attempt++) {
     await send();
-    if (status !== 429 || !retryOnWriteLimit || method === "GET" || !path.startsWith("/api/recipes")) {
+    // 画面の写真の書き込み（/recipes/.../photos...）も、API と同じ回数の制限を受ける。
+    const limited = path.startsWith("/api/recipes") || /^\/recipes\/[0-9a-f]{32}\/photos/.test(path);
+    if (status !== 429 || !retryOnWriteLimit || method === "GET" || !limited) {
       return;
     }
     console.log(`  書き込みの回数の制限に当たったので、10 秒待ってやり直す（${attempt} 回目）`);
@@ -332,6 +341,82 @@ async function checkScreens(): Promise<void> {
     fail(`/assets/guide/ の CSP が想定と違う（public/_headers）: ${svgCsp}`);
   }
   if (responseHeaders.get("x-content-type-options") !== "nosniff") fail("/assets/guide/ に nosniff が付いていない");
+}
+
+/**
+ * canvas が書き出すのと同じ形の、幅 `width`・高さ `height` の JPEG（JFIF・表・フレーム・画像のデータ）。
+ * `extra` は、フレームの前に足すセグメント（ブラウザが書く小さな Exif など）。
+ */
+function canvasJpeg(width: number, height: number, extra: Buffer[] = []): Buffer {
+  const frame = Buffer.from([8, 0, 0, 0, 0, 1, 1, 0x11, 0]);
+  frame.writeUInt16BE(height, 1);
+  frame.writeUInt16BE(width, 3);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    jpegSegment(0xe0, Buffer.from("4a46494600010100000100010000", "hex")),
+    ...extra,
+    jpegSegment(0xdb, Buffer.alloc(65)),
+    jpegSegment(0xc0, frame),
+    jpegSegment(0xda, Buffer.from([1, 1, 0, 0, 0x3f, 0])),
+    Buffer.from([0x12, 0x34, 0xff, 0xd9]),
+  ]);
+}
+
+// 写真の小さな版（docs/spec.md の「写真」の「小さな版」）。画面だけの仕組みなので、Cookie で画面のパスに送る。
+// ワークスペースは作らず、API で確かめたものを使い回す（1 日の作成の上限に近づかないため）。
+async function checkThumbnails(workspace: string): Promise<void> {
+  console.log("写真の小さな版（画面）");
+  await request("POST", "/api/recipes", { workspace, json: { name: "小さな版のカレー", servings: 2 } });
+  expect(201, "POST /api/recipes（小さな版）");
+  const recipe = checkedId(json<Recipe>().id);
+  const photos = `/recipes/${recipe}/photos`;
+  // 写真のバイト列そのものを画面のパスに送ると、204 と写真の ID（X-Photo-Id）が返る。
+  const addPhoto = async (what: string): Promise<string> => {
+    await request("POST", photos, { cookie: workspace, bytes: jpegWithLocation().bytes });
+    expect(204, what);
+    return checkedId(responseHeaders.get("x-photo-id") ?? fail(`${what}に X-Photo-Id が無い`));
+  };
+  const photo = await addPhoto("POST /recipes/{id}/photos（画面のバイト列）");
+  const thumbnail = canvasJpeg(100, 80);
+  await request("POST", `${photos}/${photo}/thumbnail?width=200`, { cookie: workspace, bytes: thumbnail });
+  expect(204, "POST /recipes/{id}/photos/{photo_id}/thumbnail");
+  await request("GET", `${photos}/${photo}/thumbnail`, { cookie: workspace });
+  expect(200, "GET /recipes/{id}/photos/{photo_id}/thumbnail");
+  if (responseHeaders.get("content-type") !== "image/jpeg") fail("小さな版の Content-Type が image/jpeg でない");
+  if (!body.equals(thumbnail)) fail("小さな版が、送ったものと違う");
+  // 一覧と詳細は、srcset で小さな版と元の写真を選ばせる。
+  const srcset = `srcset="${photos}/${photo}/thumbnail 100w, ${photos}/${photo} 200w"`;
+  for (const path of ["/", `/recipes/${recipe}`]) {
+    await request("GET", path, { cookie: workspace });
+    expect(200, `GET ${path}（小さな版）`);
+    if (!text().includes(srcset)) fail(`${path} に小さな版の srcset が無い`);
+  }
+  // 1 枚の写真に 1 つまで。
+  await request("POST", `${photos}/${photo}/thumbnail?width=200`, { cookie: workspace, bytes: thumbnail });
+  expect(409, "2 つ目の小さな版");
+  // 長い辺が 1280 ピクセルを超えるものと、JPEG でないものは断る。
+  const other = await addPhoto("POST /recipes/{id}/photos（画面のバイト列、2 枚目）");
+  await request("POST", `${photos}/${other}/thumbnail?width=2000`, { cookie: workspace, bytes: canvasJpeg(1281, 100) });
+  expect(415, "長い辺が 1281 ピクセルの小さな版");
+  await request("POST", `${photos}/${other}/thumbnail?width=200`, { cookie: workspace, bytes: PNG_1X1 });
+  expect(415, "JPEG でない小さな版");
+  await request("GET", `${photos}/${other}/thumbnail`, { cookie: workspace });
+  expect(404, "断った小さな版");
+  // 小さな版の Exif（位置情報に見立てた文字を入れる）は、保存する前に 0 で埋める（長さは変えない）。
+  const withExif = canvasJpeg(100, 80, [jpegSegment(0xe1, Buffer.concat([Buffer.from("Exif\0\0"), LOCATION_MARK]))]);
+  await request("POST", `${photos}/${other}/thumbnail?width=200`, { cookie: workspace, bytes: withExif });
+  expect(204, "Exif のある小さな版");
+  await request("GET", `${photos}/${other}/thumbnail`, { cookie: workspace });
+  expect(200, "GET Exif のある小さな版");
+  if (body.length !== withExif.length) fail("Exif のある小さな版の長さが、送ったものと違う");
+  if (body.includes(LOCATION_MARK)) fail("小さな版に、位置情報が残っている");
+  // 写真を消すと、小さな版も読めなくなる。
+  await request("DELETE", `/api/recipes/${recipe}/photos/${photo}`, { workspace });
+  expect(204, "DELETE /api/recipes/{id}/photos/{photo_id}（小さな版のある写真）");
+  await request("GET", `${photos}/${photo}/thumbnail`, { cookie: workspace });
+  expect(404, "消した写真の小さな版");
+  await request("DELETE", `/api/recipes/${recipe}`, { workspace });
+  expect(204, "DELETE /api/recipes/{id}（小さな版）");
 }
 
 // 無い API のパスと、受け付けないメソッドも、ほかの失敗と同じ JSON の形で答える（docs/spec.md の「API」）。
@@ -607,6 +692,8 @@ async function main(): Promise<void> {
   expect(201, "POST /api/recipes/{id}/photos（削除の後）");
 
   await checkApiFallbacks(workspaceA);
+  // 小さな版は画面だけの仕組みなので、画面を確かめないとき（API_ONLY）は確かめない。
+  if (!apiOnly) await checkThumbnails(workspaceA);
 
   console.log("削除");
   await request("DELETE", `/api/recipes/${recipeId}`, a);

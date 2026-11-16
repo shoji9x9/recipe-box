@@ -1,0 +1,24 @@
+# 写真の小さな版を足すときの順序。mise run guide が SVG にする（docs/development.md）。
+...@_style
+# 線の文字を斜体にしない（_style.d2）。
+(** -> **)[*].style.italic: false
+
+shape: sequence_diagram
+
+client: ブラウザ（photo-upload.js） {class: actor}
+worker: Worker {class: app}
+d1: D1 {class: store}
+r2: R2 {class: store}
+
+client -> worker: 写真のバイト列（すべての写真を 1 枚ずつ）
+worker -> client: 204 と写真の ID（X-Photo-Id）
+client -> client: canvas で長い辺を 1280 ピクセルまでに\n縮めた JPEG を作る（小さな写真には作らない）
+client -> worker: 小さな版（JPEG）と元の写真の幅
+worker -> worker: 形と大きさを確かめ、メタデータを\n0 で埋める（違えば 413・415）
+worker -> d1: 合計の上限を数えて、小さな版の枠を取る（1 つの文）
+d1 -> worker: 取れた（取れなければ 404・409）
+worker -> r2: 小さな版を書く
+r2 -> worker: 書けた（失敗したら枠を返す → 500）
+worker -> d1: 幅を入れて、画面に出す
+d1 -> worker: 入れたか（写真が消えていれば、R2 のデータを消して\n枠を返す → 404。D1 が失敗しても同じに片付ける → 500）
+worker -> client: 204

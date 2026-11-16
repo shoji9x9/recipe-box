@@ -6,6 +6,7 @@ mod photos;
 mod recipes;
 mod routing;
 mod screens;
+mod thumbnails;
 mod workspaces;
 
 use axum::{

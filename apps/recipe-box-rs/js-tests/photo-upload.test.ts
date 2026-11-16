@@ -10,8 +10,10 @@ import {
   editPathOf,
   failureReason,
   localReason,
+  makeThumbnail,
   remove,
   replaceFrom,
+  thumbnailSize,
   upload,
 } from "../public/assets/photo-upload.js";
 
@@ -114,7 +116,24 @@ describe("判定の関数", () => {
   });
 
   test("classify は、204 を追加できたとする", async () => {
-    expect(await classify(page(204, null))).toEqual({ kind: "added", reason: null });
+    expect(await classify(page(204, null))).toEqual({ kind: "added", reason: null, photoId: null });
+    const id = "0123456789abcdef0123456789abcdef";
+    const added = new Response(null, { status: 204, headers: { "X-Photo-Id": id } });
+    expect(await classify(added)).toEqual({ kind: "added", reason: null, photoId: id });
+    // ID の形でなければ、使わない（小さな版を送らない）。
+    const odd = new Response(null, { status: 204, headers: { "X-Photo-Id": "../x" } });
+    expect(await classify(odd)).toEqual({ kind: "added", reason: null, photoId: null });
+  });
+
+  test("thumbnailSize は、長い辺を上限に縮め、作っても小さくならない写真には null を返す", () => {
+    expect(thumbnailSize(4000, 3000, 1280, 10, 100)).toEqual({ width: 1280, height: 960 });
+    expect(thumbnailSize(3000, 4000, 1280, 10, 100)).toEqual({ width: 960, height: 1280 });
+    expect(thumbnailSize(10000, 10, 1280, 10, 100)).toEqual({ width: 1280, height: 1 });
+    expect(thumbnailSize(1280, 800, 1280, 100, 100)).toBeNull();
+    // 長い辺が短くても、ファイルが小さな版の上限より大きければ（PNG など）、同じ大きさの JPEG にする。
+    expect(thumbnailSize(1200, 800, 1280, 101, 100)).toEqual({ width: 1200, height: 800 });
+    expect(thumbnailSize(0, 800, 1280, 101, 100)).toBeNull();
+    expect(thumbnailSize(Number.NaN, 800, 1280, 101, 100)).toBeNull();
   });
 
   test("classify は、ほかの画面に移らされたら、ページごと読み直す", async () => {
@@ -584,5 +603,97 @@ describe("削除の流れ", () => {
     expect(document.activeElement?.textContent).toBe("写真");
     expect(messageAtFocus).toBe("");
     expect(messageText()).toBe("写真を削除しました");
+  });
+});
+
+describe("小さな版", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+  let drawn: number[][];
+  let types: string[];
+  let closed: number;
+
+  /** createImageBitmap と canvas を差し替える。blobType は toBlob が返す形式、sizes は品質ごとに返す大きさ。 */
+  function stubCanvas(bitmap: { width: number; height: number } | Error, blobType = "image/jpeg", sizes = [10]) {
+    drawn = [];
+    types = [];
+    closed = 0;
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => {
+        if (bitmap instanceof Error) throw bitmap;
+        return { ...bitmap, close: () => (closed += 1) };
+      }),
+    );
+    const context = {
+      imageSmoothingQuality: "low",
+      fillStyle: "",
+      fillRect: () => {},
+      drawImage: (_image: unknown, x: number, y: number, width: number, height: number) => drawn.push([x, y, width, height]),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      (() => context) as unknown as typeof HTMLCanvasElement.prototype.getContext,
+    );
+    let call = 0;
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
+      types.push(String(type));
+      const size = sizes[Math.min(call++, sizes.length - 1)] ?? 10;
+      callback(new Blob([new Uint8Array(size)], { type: blobType }));
+    });
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  test("長い辺を縮めた JPEG を作り、元の写真の幅を返す", async () => {
+    stubCanvas({ width: 4000, height: 3000 });
+    const result = await makeThumbnail(file("a.jpg", 5), { edge: 1280, bytes: 100 });
+    expect(result?.width).toBe(4000);
+    expect(result?.blob.type).toBe("image/jpeg");
+    expect(drawn).toEqual([[0, 0, 1280, 960]]);
+    expect(types).toEqual(["image/jpeg"]);
+    expect(closed).toBe(1);
+  });
+
+  test("大きすぎれば品質を下げて作り直し、それでも大きければ作らない", async () => {
+    stubCanvas({ width: 4000, height: 3000 }, "image/jpeg", [200, 50]);
+    expect((await makeThumbnail(file("a.jpg", 5), { edge: 1280, bytes: 100 }))?.blob.size).toBe(50);
+    stubCanvas({ width: 4000, height: 3000 }, "image/jpeg", [200, 150]);
+    expect(await makeThumbnail(file("a.jpg", 5), { edge: 1280, bytes: 100 })).toBeNull();
+  });
+
+  test("縮めなくてよい・読めない・JPEG を書き出せない写真には、作らない", async () => {
+    stubCanvas({ width: 1000, height: 800 });
+    expect(await makeThumbnail(file("a.jpg", 5), { edge: 1280, bytes: 100 })).toBeNull();
+    expect(closed).toBe(1);
+    stubCanvas(new Error("読めない"));
+    expect(await makeThumbnail(file("a.jpg", 5), { edge: 1280, bytes: 100 })).toBeNull();
+    stubCanvas({ width: 4000, height: 3000 }, "image/png");
+    expect(await makeThumbnail(file("a.jpg", 5), { edge: 1280, bytes: 100 })).toBeNull();
+  });
+
+  test("追加できた写真ごとに、写真の ID の小さな版として送る。送れなくても追加できた数に入れる", async () => {
+    window.history.replaceState(null, "", EDIT);
+    document.body.innerHTML = editPage("", [], 3);
+    const form = document.querySelector("form[data-photo-upload]") as HTMLFormElement;
+    form.dataset.thumbnailEdge = "1280";
+    form.dataset.thumbnailBytes = "500000";
+    stubCanvas({ width: 4000, height: 3000 });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method !== "POST") return html(200, editPage("", ["p1", "p2"], 1));
+      if (url.endsWith("/thumbnail?width=4000")) throw new Error("通信できない");
+      return new Response(null, { status: 204, headers: { "X-Photo-Id": ID } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await upload(form, [file("a.jpg", 5), file("b.jpg", 5)]);
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").map(([url, init]) => [url, init?.headers]);
+    // 写真をすべて送ってから、小さな版を送る。
+    expect(posts).toEqual([
+      [form.action, { "Content-Type": "image/jpeg" }],
+      [form.action, { "Content-Type": "image/jpeg" }],
+      [`${form.action}/${ID}/thumbnail?width=4000`, { "Content-Type": "image/jpeg" }],
+      [`${form.action}/${ID}/thumbnail?width=4000`, { "Content-Type": "image/jpeg" }],
+    ]);
+    expect(document.querySelector("#messages .message")?.textContent).toBe("2 枚の写真を追加しました");
   });
 });
