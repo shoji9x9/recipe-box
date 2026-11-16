@@ -72,7 +72,7 @@ Dependabot の更新のうち自動でマージされたもの（`dependabot-aut
 | --- | --- |
 | 言語 | Rust。開発用の Node のスクリプト（seed など）は TypeScript（Node がそのまま動かす）。画面の小さな JavaScript は、ビルドしないよう JavaScript のまま（型は JSDoc） |
 | Web フレームワーク | [axum](https://github.com/tokio-rs/axum)（[workers-rs](https://github.com/cloudflare/workers-rs) の `http` 機能で Workers 上で動かす） |
-| 画面 | [askama](https://github.com/askama-rs/askama)（HTML テンプレート）と [htmx](https://htmx.org/)。編集の画面で写真をまとめて追加し、追加・削除の後に写真の欄だけを入れ替える小さな JavaScript（`apps/recipe-box-rs/public/assets/photo-upload.js`）と、検索で日本語の変換中に検索しないための JavaScript（`apps/recipe-box-rs/public/assets/search.js`）だけを自分で書く。どちらも ES モジュール。ビルドの手順を増やさないよう、TypeScript にせず JavaScript のまま配り、型は JSDoc で書いて `tsc --noEmit` で確かめる |
+| 画面 | [askama](https://github.com/askama-rs/askama)（HTML テンプレート）と [htmx](https://htmx.org/)。編集の画面で写真をまとめて追加し、追加・削除の後に写真の欄だけを入れ替える小さな JavaScript（`apps/recipe-box-rs/public/assets/photo-upload.js`）と、検索で日本語の変換中に検索しないための JavaScript（`apps/recipe-box-rs/public/assets/search.js`）と、hx-boost で画面が移った後のフォーカスと Invoker Commands に対応していないブラウザでの削除のダイアログの開閉を補う JavaScript（`apps/recipe-box-rs/public/assets/page.js`）だけを自分で書く。どれも ES モジュール。ビルドの手順を増やさないよう、TypeScript にせず JavaScript のまま配り、型は JSDoc で書いて `tsc --noEmit` で確かめる |
 | スタイル | 1 つの CSS ファイル（`apps/recipe-box-rs/public/assets/style.css`）。色・主な余白・幅を変数にし、CSS の入れ子（`&`）で部品ごとにまとめる |
 | 実行環境 | Cloudflare Workers |
 | DB | Cloudflare D1 |
@@ -84,6 +84,7 @@ Dependabot の更新のうち自動でマージされたもの（`dependabot-aut
 | Node のパッケージマネージャー | pnpm |
 | git フック | lefthook |
 
-CSS の入れ子に対応したブラウザは、削除の確認に使う Invoker Commands（docs/spec.md）に対応したブラウザより広い。そのため、入れ子を使っても、使えるブラウザは変わらない。
+使えるブラウザの下限は、画面の CSS が使う入れ子と `:has()` に対応しているかで決まる。
+削除の確認に使う Invoker Commands（docs/spec.md）に対応していないブラウザでも、画面の JavaScript（`public/assets/page.js`）が同じダイアログを開くので、下限は変わらない。
 
 Cloudflare の新しい CLI の `cf` は 2026-09-28 に open beta になった。ただし公式ブログによると、Rust の Worker の開発とデプロイは wrangler に任せている。そのため wrangler を使う。リライト前の構成は wrangler で足りるので、`cf` に移すかは検討しない。

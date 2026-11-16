@@ -307,7 +307,7 @@ Hono と同じく、ミドルウェア（middleware）で前後の処理を足�
 <p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/list.html">apps/recipe-box-rs/templates/list.html</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">&lt;input id=&quot;q&quot; type=&quot;search&quot; name=&quot;q&quot; value=&quot;{{ q }}&quot; placeholder=&quot;料理名で探す&quot; autocomplete=&quot;off&quot; data-search-input
        hx-get=&quot;/&quot; hx-trigger=&quot;search-input changed delay:300ms, search&quot;
-       hx-target=&quot;#results&quot; hx-select=&quot;#results&quot; hx-swap=&quot;outerHTML&quot; hx-push-url=&quot;true&quot;&gt;
+       hx-target=&quot;#results&quot; hx-select=&quot;#results&quot; hx-swap=&quot;outerHTML&quot; hx-select-oob=&quot;#results-count:innerHTML&quot; hx-push-url=&quot;true&quot;&gt;
 </code></pre>
 <p>React で同じことをすると、API から JSON を取り、ブラウザで HTML を組み立てます。htmx では、HTML を作るのはいつもサーバーで、画面の状態をブラウザに持ちません。
 CSP でインラインのスクリプトと <code>eval</code> を禁じているので、htmx もそれらを使わない設定にしています（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/base.html">apps/recipe-box-rs/templates/base.html</a> の <code>htmx-config</code>）。</p>
@@ -347,14 +347,15 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 <ul>
 <li>画面の移動とフォームは、ふつうのリンクとフォーム（<code>&lt;a&gt;</code>・<code>&lt;form method=&quot;post&quot;&gt;</code>）です。<code>&lt;body hx-boost=&quot;true&quot;&gt;</code> で、htmx が動けば、ページの全体を読み直さずに中身を入れ替えます。htmx が動かなければ、ふつうに移動します。</li>
 <li>書き込みは、POST の後に別の画面へ移す（リダイレクトする）ので、再読み込みで二重に送りません。</li>
-<li>削除の確認のダイアログは、Invoker Commands（<code>commandfor</code>・<code>command</code> 属性）で開閉します。ボタンの属性だけで <code>&lt;dialog&gt;</code> を開けるので、スクリプトが要りません。</li>
+<li>削除の確認のダイアログは、Invoker Commands（<code>commandfor</code>・<code>command</code> 属性）で開閉します。ボタンの属性だけで <code>&lt;dialog&gt;</code> を開けるので、スクリプトが要りません。
+Invoker Commands に対応していない少し古いブラウザでは、小さなスクリプト（<code>page.js</code>）が同じ属性を読んで、同じダイアログを開きます。</li>
 </ul>
 <p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/delete_dialog.html">apps/recipe-box-rs/templates/delete_dialog.html</a> から:</p>
-<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action) %}
-&lt;button type=&quot;button&quot; class=&quot;text danger&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;show-modal&quot;&gt;{{ dialog_open }}&lt;/button&gt;
-&lt;dialog id=&quot;{{ dialog_id }}&quot; class=&quot;confirm&quot; aria-labelledby=&quot;{{ dialog_id }}-title&quot;&gt;
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action, dialog_open_label = &quot;&quot;) %}
+&lt;button type=&quot;button&quot; class=&quot;text danger&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;show-modal&quot;{% if !dialog_open_label.is_empty() %} aria-label=&quot;{{ dialog_open_label }}&quot;{% endif %}&gt;{{ dialog_open }}&lt;/button&gt;
+&lt;dialog id=&quot;{{ dialog_id }}&quot; class=&quot;confirm&quot; aria-labelledby=&quot;{{ dialog_id }}-title&quot; aria-describedby=&quot;{{ dialog_id }}-text&quot;&gt;
   &lt;h2 id=&quot;{{ dialog_id }}-title&quot;&gt;{{ dialog_title }}&lt;/h2&gt;
-  &lt;p&gt;{{ dialog_text }}&lt;/p&gt;
+  &lt;p id=&quot;{{ dialog_id }}-text&quot;&gt;{{ dialog_text }}&lt;/p&gt;
   &lt;div class=&quot;actions&quot;&gt;
     &lt;button type=&quot;button&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;close&quot;&gt;やめる&lt;/button&gt;
     &lt;form method=&quot;post&quot; action=&quot;{{ dialog_action }}&quot;&gt;
@@ -365,7 +366,7 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 &lt;/dialog&gt;
 {%- endmacro %}
 </code></pre>
-<p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）だけです。どちらも、動かなければふつうのフォームとして働きます。</p>
+<p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）と、画面が移った後のフォーカスと古いブラウザでのダイアログを補うもの（<code>page.js</code>）だけです。写真と検索のものは、動かなければふつうのフォームとして働きます。</p>
 <h3 id="テストの仕組み">テストの仕組み</h3>
 <p>アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分は、<code>Backend</code> トレイトにまとめています。</p>
 <p>次は、トレイトの先頭（乱数・時計・回数の制限）だけです。ワークスペース・レシピ・写真を読み書きするメソッドが続きます（全体は <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a>）。</p>

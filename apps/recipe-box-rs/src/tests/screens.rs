@@ -131,6 +131,30 @@ async fn landing_is_shown_without_workspace_and_creates_nothing() {
     assert!(csp.contains("script-src 'self'"), "{csp}");
     assert_eq!(response.headers[header::CACHE_CONTROL], "no-store");
     assert_eq!(response.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // hx-boost の後のフォーカスと、Invoker Commands に対応していないブラウザのダイアログは、自分のドメインのファイルで補う。
+    assert!(
+        response
+            .body
+            .contains(r#"<script src="/assets/page.js" type="module"></script>"#)
+    );
+}
+
+#[tokio::test]
+async fn workspace_delete_button_is_named() {
+    let backend = backend_with_workspaces();
+    let response = screen_get(&backend, "/workspace", Some(&cookie(WORKSPACE_A))).await;
+    assert!(
+        response
+            .body
+            .contains(r#"command="show-modal">ワークスペースを削除する</button>"#),
+        "{}",
+        response.body
+    );
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="delete-workspace-text""#)
+    );
 }
 
 #[tokio::test]
@@ -146,6 +170,12 @@ async fn demo_is_shown_without_cookie_and_its_id_is_hidden() {
     assert_eq!(response.status, StatusCode::OK);
     assert!(response.body.contains("共有のデモ"), "{}", response.body);
     assert!(response.body.contains("デモのカレー"));
+    // デモの帯は、名前の付いた区画（ランドマーク）にし、読み上げで見つけられるようにする。
+    assert!(
+        response
+            .body
+            .contains(r#"<section class="demo-banner" aria-label="共有のデモ">"#)
+    );
     // デモの ID は、一覧にもワークスペースの画面にも出さない。
     assert!(!response.body.contains(DEMO));
     let response = screen_get(&backend, "/workspace", None).await;
@@ -373,6 +403,13 @@ async fn names_are_escaped() {
         assert!(!response.body.contains("<script>alert"), "{page}");
         // askama は < を &#60; に、" を &#34; にする。
         assert!(response.body.contains("&#60;script&#62;alert"), "{page}");
+        // 削除のボタンの名前（属性の値）でも、エスケープする。
+        assert!(
+            response.body.contains(
+                r#"aria-label="「&#60;script&#62;alert(&#34;x&#34;)&#60;/script&#62;」を削除""#
+            ),
+            "{page}"
+        );
     }
 }
 
@@ -470,6 +507,13 @@ async fn list_pages_keep_the_search() {
                 r#"<p class="message error" role="alert">{message}</p>"#
             )),
             "{path}: {results}"
+        );
+        // 件数は出さない（件数の読み上げの入れ物は、空のまま残す）。
+        assert!(
+            response
+                .body
+                .contains(r#"<p id="results-count" class="count" role="status"></p>"#),
+            "{path}"
         );
     }
     // 入力した検索の文字列は、検索欄に残す。
@@ -691,7 +735,7 @@ async fn flash_message_is_shown_once() {
     assert!(
         response
             .body
-            .contains(r#"role="status">レシピを登録しました"#),
+            .contains(r#"<div id="messages-status" role="status"><p class="message success">レシピを登録しました</p></div>"#),
         "{}",
         response.body
     );
@@ -700,8 +744,19 @@ async fn flash_message_is_shown_once() {
             .is_some_and(|cookie| cookie.contains("Max-Age=0"))
     );
     // 知らない種類のコードは出さない（文は Cookie に入れない）。
+    // 知らせの入れ物は、読み上げのために、知らせが無くても置く。
     let response = screen_get(&backend, "/", Some(&format!("{a}; __Host-flash=<script>"))).await;
-    assert!(!response.body.contains(r#"role="status""#));
+    assert!(!response.body.contains("message success"));
+    assert!(
+        response
+            .body
+            .contains(r#"<div id="messages-status" role="status"></div>"#)
+    );
+    assert!(
+        response
+            .body
+            .contains(r#"<div id="messages-alert" role="alert"></div>"#)
+    );
 }
 
 #[tokio::test]
@@ -876,6 +931,20 @@ async fn delete_asks_with_a_dialog_without_javascript() {
                 .body
                 .contains(&format!(r#"<dialog id="delete-{id}""#))
         );
+        // 一覧では「削除」のボタンが並ぶので、何を消すかを名前（aria-label）に含める。
+        assert!(
+            response
+                .body
+                .contains(r#"aria-label="「カレー」を削除">削除</button>"#),
+            "{page}"
+        );
+        // ダイアログの説明を、開いたときに見出しと一緒に読み上げる。
+        assert!(response.body.contains(&format!(
+            r#"aria-labelledby="delete-{id}-title" aria-describedby="delete-{id}-text""#
+        )));
+        assert!(response.body.contains(&format!(
+            r#"<p id="delete-{id}-text">「カレー」を削除します。"#
+        )));
         assert!(response.body.contains("元には戻せません"));
         assert!(!response.body.contains("hx-confirm"));
     }
@@ -915,6 +984,7 @@ async fn fields_are_checked_on_submit_then_on_blur() {
     let response = screen_get(&backend, "/recipes/new", Some(&a)).await;
     assert!(!response.body.contains("hx-post"));
     // 送信して誤りが出た後は、どの欄も、離れたときに確かめ直す（reValidateMode: onBlur）。
+    // 確かめるだけのルートは登録の画面の形で返すので、そのタイトルは使わない（編集の画面のタイトルを残す。ignoreTitle）。
     let response = screen_post(&backend, "/recipes", Some(&a), "name=&servings=2").await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     // 誤りの一覧は送信したときに出す。
@@ -922,7 +992,7 @@ async fn fields_are_checked_on_submit_then_on_blur() {
     for field in ["name", "servings", "ingredients", "steps"] {
         assert!(
             response.body.contains(&format!(
-                r##"hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}" hx-swap="outerHTML">"##
+                r##"hx-post="/recipes/check" hx-trigger="blur" hx-include="closest form" hx-target="#field-{field}" hx-select="#field-{field}" hx-swap="outerHTML ignoreTitle:true">"##
             )),
             "{field}"
         );
@@ -1133,6 +1203,8 @@ async fn photo_can_be_added_shown_and_deleted_on_the_edit_page() {
     assert!(!recipe_form.contains(r#"id="photos""#));
     assert!(rest.contains(r#"<section class="section" id="photos" data-photo-section"#));
     assert!(rest.contains("すぐ保存されます"));
+    // 送っている間などの知らせの入れ物は、読み上げのために、空でも前から置く。
+    assert!(rest.contains(r#"<p class="note" role="status" data-photo-status></p>"#));
 
     // JavaScript が動かないときは、普通のフォームとして送り、編集の画面に戻る。
     let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
@@ -1148,6 +1220,12 @@ async fn photo_can_be_added_shown_and_deleted_on_the_edit_page() {
     assert_eq!(srcs.len(), 1);
     assert!(response.body.contains(r#"alt="カレーの写真 1""#));
     assert!(response.body.contains("写真を削除"));
+    // 写真の削除のボタンは同じ文字が並ぶので、何枚目かを名前（aria-label）に含める。
+    assert!(
+        response
+            .body
+            .contains(r#"aria-label="1 枚目の写真を削除">写真を削除</button>"#)
+    );
 
     // 詳細の画面は、写真を見せるだけにする。
     let response = screen_get(&backend, &path, Some(&a)).await;
@@ -1245,6 +1323,21 @@ async fn search_waits_for_the_ime_to_commit() {
             .contains(r#"<script src="/assets/search.js" type="module"></script>"#)
     );
     assert!(response.body.contains(" data-search-input"));
+    // 件数の文は、一覧の外に置いた読み上げの入れ物で、中身だけを入れ替える。
+    assert!(
+        response
+            .body
+            .contains(r##"hx-select-oob="#results-count:innerHTML""##)
+    );
+    let (count, results) = response
+        .body
+        .split_once(r#"<section id="results">"#)
+        .unwrap();
+    assert!(
+        count.contains(r#"<p id="results-count" class="count" role="status">0 件</p>"#),
+        "{count}"
+    );
+    assert!(!results.contains("results-count"));
     assert!(
         response
             .body

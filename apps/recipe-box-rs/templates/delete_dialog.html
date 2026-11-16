@@ -1,19 +1,23 @@
 {#- 削除の確認のダイアログ。JavaScript を使わず、Invoker Commands（commandfor・command）で <dialog> を開閉する。
+    Invoker Commands に対応していないブラウザでは、page.js が同じ属性を読んで開閉する。
     使う側は {% import "delete_dialog.html" as dialog %} で読み、{% call %} で呼ぶ。 #}
 
 {#- 削除の確認のダイアログと、それを開くボタン。
     引数は、caller の中で使う変数（id など）と重ならないよう、どれも dialog_ で始める。重なると、caller の中でもこちらの値になる。
     - dialog_id: <dialog> の id（ページの中で一意にする）
     - dialog_open: ダイアログを開くボタンの文字
+    - dialog_open_label: ダイアログを開くボタンの名前（aria-label）。一覧の「削除」のように同じ文字のボタンが並ぶとき、
+      何を消すかを含めて見分けられるようにする。dialog_open の文字を含める（声で操作する人が、見える文字で呼べるように）。
+      見える文字だけで見分けられるボタン（ワークスペースの削除）では省き、aria-label を付けない
     - dialog_title・dialog_text: ダイアログの見出しと説明
     - dialog_action: 削除を送る先
     {% call %} の中身（caller）は、削除と一緒に送る hidden の欄にする。無ければ空にする。 #}
 {#- guide:start invoker-dialog #}
-{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action) %}
-<button type="button" class="text danger" commandfor="{{ dialog_id }}" command="show-modal">{{ dialog_open }}</button>
-<dialog id="{{ dialog_id }}" class="confirm" aria-labelledby="{{ dialog_id }}-title">
+{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action, dialog_open_label = "") %}
+<button type="button" class="text danger" commandfor="{{ dialog_id }}" command="show-modal"{% if !dialog_open_label.is_empty() %} aria-label="{{ dialog_open_label }}"{% endif %}>{{ dialog_open }}</button>
+<dialog id="{{ dialog_id }}" class="confirm" aria-labelledby="{{ dialog_id }}-title" aria-describedby="{{ dialog_id }}-text">
   <h2 id="{{ dialog_id }}-title">{{ dialog_title }}</h2>
-  <p>{{ dialog_text }}</p>
+  <p id="{{ dialog_id }}-text">{{ dialog_text }}</p>
   <div class="actions">
     <button type="button" commandfor="{{ dialog_id }}" command="close">やめる</button>
     <form method="post" action="{{ dialog_action }}">
@@ -28,7 +32,7 @@
 {#- レシピの削除。一覧と詳細の画面で同じ文言にする。
     back は、一覧から消したときに戻る検索の条件とページ（詳細の画面では None::<(&str, i64)>）。 #}
 {%- macro recipe_delete_dialog(recipe, back) %}
-{%- call delete_dialog("delete-{}"|format(recipe.id), "削除", "レシピを削除しますか？", "「{}」を削除します。元には戻せません。"|format(recipe.name), "/recipes/{}/delete"|format(recipe.id)) %}
+{%- call delete_dialog("delete-{}"|format(recipe.id), "削除", "レシピを削除しますか？", "「{}」を削除します。元には戻せません。"|format(recipe.name), "/recipes/{}/delete"|format(recipe.id), "「{}」を削除"|format(recipe.name)) %}
       {%- if let Some((q, page)) = back %}
       <input type="hidden" name="q" value="{{ q }}">
       <input type="hidden" name="page" value="{{ page }}">
