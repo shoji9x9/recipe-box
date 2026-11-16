@@ -351,8 +351,8 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 Invoker Commands に対応していない少し古いブラウザでは、小さなスクリプト（<code>page.js</code>）が同じ属性を読んで、同じダイアログを開きます。</li>
 </ul>
 <p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/delete_dialog.html">apps/recipe-box-rs/templates/delete_dialog.html</a> から:</p>
-<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">{%- macro delete_dialog(dialog_id, dialog_open, dialog_open_label, dialog_title, dialog_text, dialog_action) %}
-&lt;button type=&quot;button&quot; class=&quot;text danger&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;show-modal&quot; aria-label=&quot;{{ dialog_open_label }}&quot;&gt;{{ dialog_open }}&lt;/button&gt;
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action, dialog_open_label = &quot;&quot;) %}
+&lt;button type=&quot;button&quot; class=&quot;text danger&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;show-modal&quot;{% if !dialog_open_label.is_empty() %} aria-label=&quot;{{ dialog_open_label }}&quot;{% endif %}&gt;{{ dialog_open }}&lt;/button&gt;
 &lt;dialog id=&quot;{{ dialog_id }}&quot; class=&quot;confirm&quot; aria-labelledby=&quot;{{ dialog_id }}-title&quot; aria-describedby=&quot;{{ dialog_id }}-text&quot;&gt;
   &lt;h2 id=&quot;{{ dialog_id }}-title&quot;&gt;{{ dialog_title }}&lt;/h2&gt;
   &lt;p id=&quot;{{ dialog_id }}-text&quot;&gt;{{ dialog_text }}&lt;/p&gt;
