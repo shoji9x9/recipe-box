@@ -105,3 +105,20 @@ GitHub の Settings → Environments に、次の値を置く。
 | `claude-review` | secret | `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` で作る |
 
 値が無い間、`deploy.yml` は何もせずに終わり、`seed-demo.yml` と `claude-review.yml` は失敗する。
+
+## リライトの比較の基準の環境
+
+リライトで比べる現行の側は、選んだ commit をローカルで動かした環境にする（理由と、ローカルと本番の違いは [architecture.md](architecture.md) の「リライトの比較の基準」）。Cloudflare のアカウントは要らない。
+
+```bash
+git switch --detach <基準の commit>
+mise install                     # mise.lock のとおりにツールを入れる
+pnpm install --frozen-lockfile   # pnpm-lock.yaml のとおりに wrangler（workerd を含む）などを入れる
+rm -rf apps/recipe-box-rs/.wrangler/state   # 前の環境のローカルの D1 と R2 を消し、空から始める
+mise run dev                     # ビルドし、ローカルの D1 にマイグレーションを当て、http://localhost:8787 で起動する
+```
+
+- 動いていることは、別の端末で `mise run smoke` を実行して確かめる。
+- 定期実行（使われていないワークスペースの自動削除）を比べるときは、`mise run dev` の代わりに、`mise run migrate` の後で `apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動する。
+  `curl "http://localhost:8787/__scheduled?cron=0+18+*+*+*"` で 1 回動き、結果を起動した端末のログ（「使われていないワークスペースの自動削除」）に出す。
+- 共有のデモのデータを入れるときは、上の「CI と CD」の、共有のデモをローカルで試す手順に従う。
