@@ -438,6 +438,7 @@ Unicode の正規化（NFC・NFKC）と、全角・半角をそろえること�
   接続の失敗と 5xx では、待ち時間を延ばしながら、GET と DELETE だけをやり直す（POST は、登録できた後で応答だけが失われると、やり直しで同じレシピが 2 件できるため、やり直さない）。
 - 途中で失敗したら、もう一度実行すれば入れ直せる。
 - サンプルは `seed/recipes.json` と `seed/photos/` に置く。写真は自作かパブリックドメイン（CC0 を含む）のものだけを使い、出典と許諾を `seed/photos/SOURCES.md` に書く。
+  レシピの文章（`seed/recipes.json`）は、このリポジトリで書いたもので、リポジトリのライセンス（MIT）による。
 - デモ用のワークスペースの ID は公開しない。Worker の secret の `DEMO_WORKSPACE_ID` と、GitHub の Environment「production」の secret の `DEMO_WORKSPACE_ID` に置く。
   seed には標準入力で渡し、表示やシェルの履歴に残さない。
   設定されていて、そのワークスペースがあれば、Cookie の無い人の画面にデモを出す（「画面」）。
