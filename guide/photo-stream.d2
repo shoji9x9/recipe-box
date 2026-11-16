@@ -1,0 +1,25 @@
+# 写真のバイト列を追加するときに、JavaScript と Rust（Wasm）が何を渡し合うか。mise run guide が SVG にする（docs/development.md の「解説」）。
+...@_style
+# 線の文字を斜体にしない（_style.d2）。
+(** -> **)[*].style.italic: false
+
+shape: sequence_diagram
+
+runtime: ランタイム（本文のストリーム） {class: service}
+js: "photo-stream.js\n（手で書いた JavaScript）" {class: app}
+rust: "Rust\n（stream.rs・metadata.rs）" {class: app}
+d1: D1 {class: store}
+r2: R2 {class: store}
+
+runtime -> rust: リクエスト（本文は読まず、ストリームの参照だけを渡す）
+rust -> js: readAtLeast（要る大きさ。64 KiB ずつ）
+js -> runtime: reader.read() で塊を読む
+js -> rust: 頭の部分（Uint8Array。ここだけ Wasm のメモリーに写す）
+rust -> rust: metadata.rs が形式を決め、位置情報などを\n0 で埋める（足りなければ readAtLeast を繰り返す）
+rust -> d1: 上限を数えて、行を入れる
+rust -> js: joinPhoto（書き換えた頭を渡す）
+js -> rust: FixedLengthStream の読む側
+rust -> r2: put（読む側をそのまま渡す）
+js -> r2: 書き換えた頭と、読みすぎた分を書く
+runtime -> r2: 本文の残りを pipeTo で流す\n（JavaScript の関数も Wasm も通らない）
+r2 -> rust: 書けた

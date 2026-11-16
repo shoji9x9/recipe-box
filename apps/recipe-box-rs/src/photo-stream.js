@@ -92,6 +92,7 @@ export function cancelBody(body) {
  * @param {number} length
  * @returns {ReadableStream<Uint8Array>}
  */
+// guide:start join-photo
 export function joinPhoto(body, state, head, length) {
   state.reader.releaseLock();
   /** @type {FixedLengthStream} */
@@ -119,3 +120,4 @@ export function joinPhoto(body, state, head, length) {
     });
   return readable;
 }
+// guide:end join-photo

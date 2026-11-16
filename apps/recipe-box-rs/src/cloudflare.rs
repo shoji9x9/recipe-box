@@ -43,12 +43,14 @@ const RECIPE_PHOTOS_SQL: &str = "SELECT id FROM photos WHERE workspace_id = ? AN
 /// レシピを読むときの列。`Recipe` の項目と同じ名前・順番にする。
 const RECIPE_COLUMNS: &str = "id, name, servings, ingredients, steps, created_at, updated_at";
 
+// guide:start get-random-values
 #[wasm_bindgen]
 extern "C" {
     /// Web Crypto の `crypto.getRandomValues()`。暗号に使える質の乱数で `buf` を埋める。
     #[wasm_bindgen(js_namespace = crypto, js_name = getRandomValues)]
     fn get_random_values(buf: &mut [u8]);
 }
+// guide:end get-random-values
 
 /// Workers の環境（binding の入れ物）を持つ [`Backend`]。
 #[derive(Clone)]

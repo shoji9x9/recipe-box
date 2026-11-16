@@ -1,0 +1,41 @@
+# Worker の中の JavaScript と Rust（Wasm）の関係。mise run guide が SVG にする（docs/development.md の「解説」）。
+...@_style
+# 線の文字を斜体にしない（_style.d2）。この図は両向きの線（<->）を使うので、そちらにも書く。
+(** -> **)[*].style.italic: false
+(** <-> **)[*].style.italic: false
+
+direction: right
+
+# 左から、D1・R2 → ランタイム → worker-build が作る JavaScript → Rust（Wasm）の順に、外側から内側へ並べる。
+# 呼び出しと値は両方の向きに行き来するので、線は両向きにし、交差しないよう左から右へだけ結ぶ。
+stores: D1・R2 {
+  class: group
+  direction: down
+  d1: D1 {class: store}
+  r2: R2 {class: store}
+}
+
+worker: Worker {
+  class: [group; cloudflare]
+  runtime: Workers の\nランタイム（V8）\n\nリクエスト・\nbinding・\n本文のストリーム {class: service}
+  index: build/index.js\n（worker-build が作る） {
+    class: group
+    direction: down
+    glue: wasm-bindgen の\n橋渡しのコード {class: actor}
+    photo_stream: src/photo-stream.js\n（手で書いた\nJavaScript） {class: app}
+  }
+  rust: Rust を Wasm にしたもの {
+    class: group
+    direction: down
+    entry: "#[event(fetch)]\n→ axum" {class: app}
+    workers_rs: workers-rs\n（D1・R2 を包む） {class: app}
+    metadata: metadata.rs\n（形式と\nメタデータ） {class: app}
+  }
+
+  runtime <-> index.glue: fetch・\nbinding
+  index.glue <-> rust: 値を参照\n（JsValue）で
+  runtime <-> index.photo_stream: 本文を読む・\npipeTo
+  index.photo_stream <-> rust: 頭を渡す・\n書き換えた頭
+}
+
+stores <-> worker.runtime: 読み書き

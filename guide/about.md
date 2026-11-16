@@ -136,6 +136,52 @@ Rust から Workers の機能（リクエスト・D1・R2・Rate Limiting など
 
 ビルドは `worker-build` が行います。Rust を Wasm にし、wasm-bindgen で JavaScript との橋渡しのコードを作り、wasm-opt で小さくします。
 
+#### JavaScript と Rust（Wasm）の分担
+
+Rust で書いていても、Worker の中では JavaScript と Rust（Wasm）が一緒に動きます。Workers のランタイム（V8）が動かすのは JavaScript で、Wasm はその JavaScript から読み込まれるためです。
+Hono で書いた Worker なら全部が JavaScript ですが、このアプリでは次の 3 つの層に分かれます。
+
+1. **Workers のランタイム（V8）**: リクエストを受け取り、`wrangler.toml` の `main`（`build/index.js`）を動かします。D1・R2 の binding と、リクエストの本文のストリームもここにあります。
+2. **`build/index.js`**: `worker-build` が作る JavaScript です。wasm-bindgen が作る橋渡し（glue）のコードと、手で書いた [src/photo-stream.js](repo:apps/recipe-box-rs/src/photo-stream.js) を 1 つにまとめ、Wasm（`index_bg.wasm`）を読み込みます。リクエストが来ると、Rust の `#[event(fetch)]` の関数を呼びます。
+3. **Rust を Wasm にしたもの**: axum の Router・ハンドラー・上限の判定・写真のメタデータの書き換え（[src/metadata.rs](repo:apps/recipe-box-rs/src/metadata.rs)）など、決めることはすべてここで行います。
+
+<!-- diagram: worker-layers | Worker の中の層。Workers のランタイム（V8）がリクエストを受け、worker-build が作る build/index.js の wasm-bindgen の橋渡しが、Rust を Wasm にしたものの #[event(fetch)] と axum を呼ぶ。Rust は workers-rs を通して D1 と R2 を呼び、手で書いた photo-stream.js に、本文の頭を読ませて残りを pipeTo で流させる -->
+
+JavaScript の値（Request・Response、D1・R2 の binding、ReadableStream）は、Wasm のメモリーに写さず、JavaScript の側に置いたまま、参照（Rust の `JsValue` と、js-sys・web-sys の型）として Rust に渡します。
+中身（バイト列や文字列）を Rust で読むときだけ、Wasm のメモリーに写します。
+
+Rust から JavaScript を呼ぶ道は 3 つあります。
+
+- **workers-rs**: D1・R2・Rate Limiting などを、Rust の型と関数で包んだものです。Hono で `c.env.DB` を使うところを、Rust では workers-rs の型で使います（[src/cloudflare.rs](repo:apps/recipe-box-rs/src/cloudflare.rs)）。
+- **wasm-bindgen で JavaScript の関数を宣言する**: workers-rs に無いものは、`extern "C"` の中に JavaScript の関数の形を書いて直接呼びます。乱数は Web Crypto の `crypto.getRandomValues()` を呼びます。
+
+<!-- code: apps/recipe-box-rs/src/cloudflare.rs#get-random-values -->
+
+- **手で書いた JavaScript のファイルを読み込む**: `#[wasm_bindgen(module = ...)]` で、同じクレートの JavaScript のファイルの関数を、Rust の関数として呼びます。`worker-build` が、そのファイルを `build/index.js` にまとめます。
+
+<!-- code: apps/recipe-box-rs/src/stream.rs#photo-stream-extern -->
+
+##### photo-stream.js がある理由
+
+写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
+本文の全体を JavaScript の関数に流して書き換えても、1 回の追加で CPU 時間が 150〜200 ms 増えました。
+そこで、形式を決めてメタデータ（撮った場所など）を取り除く判断は Rust に置き、JavaScript には、頭の部分（画像のデータより前）を読んで Rust に渡すことと、書き換えた頭の後に残りを流すことだけをさせます。
+残りは、ランタイムの組み込みの `pipeTo` で R2 へ流すので、JavaScript の関数も Wasm も通りません。
+
+<!-- diagram: photo-stream | 写真のバイト列を追加するときに、JavaScript と Rust が何を渡し合うか。Rust が photo-stream.js に本文の頭を 64 KiB ずつ読ませ、頭だけを Wasm のメモリーに写す。Rust の metadata.rs が形式を決めて位置情報などを 0 で埋め、D1 に行を入れる。photo-stream.js が書き換えた頭と読みすぎた分を書き、残りはランタイムの pipeTo で R2 に流す -->
+
+<!-- code: apps/recipe-box-rs/src/photo-stream.js#join-photo -->
+
+測った値と経緯は [Issue #31](https://github.com/shoji9x9/recipe-box/issues/31) と [Issue #52](https://github.com/shoji9x9/recipe-box/issues/52) に、決まりは [docs/spec.md の「写真」](repo:docs/spec.md#写真)にあります。
+
+##### 境目を越えるときの費用と、テスト
+
+- JavaScript と Rust の境目を越えるたびに、wasm-bindgen の橋渡しのコードが動きます。値を参照で渡すだけなら軽いのですが、バイト列や文字列を写すと、大きさに比例して CPU 時間がかかります。
+  そのため、写真では頭の部分だけを、64 KiB ずつ写します（頭は 1 MiB までなので、読み足しは 16 回まで）。読みすぎた分は Wasm に写さず、JavaScript の側に残して、そのまま R2 に流します。
+- Rust のテスト（`cargo test`）は手元の OS で動き、JavaScript を動かせません。そのため、Rust の側は `Backend` トレイトの偽物で確かめ（[テストの仕組み](#テストの仕組み)）、本文を本文のまま渡す経路を通ります。
+  手で書いた JavaScript は、vitest で、DOM の無い Node の環境で確かめます（[apps/recipe-box-rs/js-tests/worker/](repo:apps/recipe-box-rs/js-tests/worker)。`FixedLengthStream` は代わりのものを置きます）。
+  両方をつないだ経路は、ローカルの Worker に当てるスモークテスト（`mise run smoke`）で確かめます。
+
 ### axum
 
 Rust の Web フレームワークです。パスとメソッドの組（Router）に、ハンドラーの関数を結び付けます。
@@ -185,10 +231,8 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 
 #### 本文を Wasm に写すときの CPU 時間
 
-写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
-そこで、写真のバイト列をそのまま送る追加では、本文を読みためず、形式を決めてメタデータ（撮った場所など）を取り除くための頭の部分（画像のデータより前）だけを読み、残りはストリームのまま R2 に流します。
-頭の部分は Rust で、長さを変えずに書き換えます（向きだけを残し、ほかは 0 で埋める）。本文の全体を JavaScript に流して書き換えると、CPU 時間が 1 回 150〜200 ms 増えたためです。
-測った値と経緯は [Issue #31](https://github.com/shoji9x9/recipe-box/issues/31) と [Issue #52](https://github.com/shoji9x9/recipe-box/issues/52) に、仕組みは [apps/recipe-box-rs/src/stream.rs](repo:apps/recipe-box-rs/src/stream.rs) と [docs/spec.md の「写真」](repo:docs/spec.md#写真)にあります。
+写真のような大きな本文を Wasm のメモリーに読みためると、CPU 時間が無料のプランの上限（1 回 10 ms）を大きく超えます。
+そのため、写真の本文は頭の部分だけを Rust に渡し、残りは JavaScript の側で R2 に流します（[photo-stream.js がある理由](#photo-streamjs-がある理由)）。
 
 ### リクエストの流れ
 

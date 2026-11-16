@@ -34,6 +34,7 @@ use crate::{
     photo::{self, PhotoFormat},
 };
 
+// guide:start photo-stream-extern
 #[wasm_bindgen(module = "/src/photo-stream.js")]
 extern "C" {
     /// 本文を読む reader と、読んだが渡していない残り（`rest`）を持つ状態を作る。
@@ -63,6 +64,7 @@ extern "C" {
         length: u32,
     ) -> Result<web_sys::ReadableStream, JsValue>;
 }
+// guide:end photo-stream-extern
 
 /// ストリームのまま扱う写真の本文。[`split_photo_body`] がリクエストの extension に入れる。
 ///
