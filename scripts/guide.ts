@@ -10,12 +10,12 @@
 //   apps/recipe-box-rs/public/about/index.html  解説のページ
 //   apps/recipe-box-rs/public/assets/guide/      図（SVG）
 // 引用するコードは、生成のたびにリポジトリのファイルの印から取り出す（scripts/guide-lib.ts）。印が無ければ失敗する。
-// 図は mise で版を固定した d2 で作る。同じ元からは同じ SVG ができる。日本語の太字が細くならないよう、出力の太字のフォントだけを書き換える（boldFallback）。
+// 図は mise で版を固定した d2 で作る。同じ元からは同じ SVG ができる。日本語の文字の形が英字とそろうよう、出力のフォントの指定だけを書き換える（fontFallback）。
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { boldFallback, diagramSources, expandDirectives, GuideError, renderMarkdown, renderPage } from "./guide-lib.ts";
+import { fontFallback, diagramSources, expandDirectives, GuideError, renderMarkdown, renderPage } from "./guide-lib.ts";
 
 const SOURCE = "guide/about.md";
 const DIAGRAM_SOURCE_DIR = "guide";
@@ -54,7 +54,7 @@ function build(): Outputs {
       execFileSync("d2", ["--pad", "16", "--scale", "1", "--no-xml-tag", source, out], {
         stdio: ["ignore", "ignore", "pipe"],
       });
-      outputs.set(join(DIAGRAM_OUT_DIR, `${name}.svg`), boldFallback(readFileSync(out, "utf8")));
+      outputs.set(join(DIAGRAM_OUT_DIR, `${name}.svg`), fontFallback(readFileSync(out, "utf8")));
     }
   } finally {
     rmSync(work, { recursive: true, force: true });

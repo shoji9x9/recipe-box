@@ -88,6 +88,9 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 アプリの作りの解説（`/about/`）は、元の文章（`guide/about.md`）と図の元（`guide/*.d2`）から `mise run guide` で作る。作ったもの（`apps/recipe-box-rs/public/about/index.html` と `apps/recipe-box-rs/public/assets/guide/*.svg`）も commit する。手で直さない。
 
 - Markdown は markdown-it（`package.json` で版を固定）で HTML にし、図は D2（`mise.toml` で版を固定）で SVG にする。どちらも外部と通信しない。
+  - D2 は文字を英字だけのフォントで描くので、日本語の形が英字とそろうよう、生成が SVG のフォントの指定を書き換える（ゴシックを候補に足し、太字は太さを書く。`scripts/guide-lib.ts` の `fontFallback`）。
+    D2 の版を上げて出力の形が変わると、生成が失敗する。そのときは、新しい出力に合わせて `fontFallback` を直す。
+  - 線の文字は斜体にしない（日本語は斜めにならず、英字とそろわない）。各図の元の `...@_style` の次に `(** -> **)[*].style.italic: false` を書く（読み込んだ設定の glob は、読み込んだ先の図に効かないため）。
 - コードと設定は、写して貼らない。`guide/about.md` に `<!-- code: <パス>#<名前> -->` と書き、引用する範囲をそのファイルのコメントの `guide:start <名前>` と `guide:end <名前>` で囲む。印が無いと、生成が失敗する。
   印のあるコードを動かしたり消したりするときは、印も一緒に動かし、`mise run guide` で作り直す。
 - 図は `<!-- diagram: <名前> | <図の説明> -->` と書き、`guide/<名前>.d2` に図の元を置く。

@@ -83,23 +83,43 @@ export function diagramSources(files: string[]): string[] {
   return files.filter((file) => file.endsWith(".d2") && !file.startsWith("_")).sort();
 }
 
+/** d2 が SVG に埋め込むフォントの種類と、文字の class の名前。太字だけは太さを書く。 */
+const D2_FONTS = [
+  { kind: "regular", className: "text", weight: "" },
+  { kind: "bold", className: "text-bold", weight: " font-weight: 700;" },
+  { kind: "italic", className: "text-italic", weight: "" },
+] as const;
+
 /**
- * d2 が作った SVG の太字を、日本語でも太くする。
- * d2 は太字を、ラテン文字だけを持つ埋め込みのフォントで描き、太さ（font-weight）を指定しない。
- * そのフォントに無い日本語は、ブラウザが既定のフォントの細い字で描くので、同じ見出しの中で英字だけが太く見える。
- * 太字の class とそのフォントの両方に 700 を書くと、英字は埋め込みのフォントのまま（太さを重ねて作らず）、日本語は既定のフォントの太字になる。
- * d2 の出力の形が変わって書き換えられなければ、失敗させる（黙って細い字に戻さない）。
+ * d2 が作った SVG の、日本語の文字の形をそろえる。
+ * d2 は文字を、ラテン文字だけを持つ埋め込みのフォントで描き、ほかのフォントの候補も太さ（font-weight）も書かない。
+ * そのフォントに無い日本語は、ブラウザの既定のフォント（明朝のことがある）の細い字で描くので、同じ文字の中で英字と日本語の形がそろわない。
+ * - 文字の class に、ゴシック（sans-serif）を候補に足す。
+ * - 太字は、class とそのフォントの両方に 700 を書く。英字は埋め込みのフォントのまま（太さを重ねて作らず）、日本語は太字になる。
+ * 斜体は、日本語を斜めにできないので、図の元で使わない（guide/_style.d2）。
+ * d2 の出力の形が変わって書き換えられなければ、失敗させる（黙って形のそろわない図に戻さない）。
  */
-export function boldFallback(svg: string): string {
-  const rule = /(\.d2-\d+ \.text-bold \{\s*font-family: "d2-\d+-font-bold";)/g;
-  const face = /(@font-face \{\s*font-family: d2-\d+-font-bold;)/g;
-  if (!svg.includes("font-bold")) {
-    return svg;
+export function fontFallback(svg: string): string {
+  let out = svg;
+  for (const { kind, className, weight } of D2_FONTS) {
+    const rule = new RegExp(`(\\.d2-\\d+ \\.${className} \\{\\s*font-family: "d2-\\d+-font-${kind}");`, "g");
+    const face = new RegExp(`(@font-face \\{\\s*font-family: d2-\\d+-font-${kind};)`, "g");
+    const rules = out.match(rule)?.length ?? 0;
+    const faces = out.match(face)?.length ?? 0;
+    if (rules === 0 && faces === 0) {
+      continue;
+    }
+    if (rules !== 1 || faces !== 1) {
+      throw new GuideError(
+        `d2 の SVG のフォント（${kind}）の書き方が、想定と違います（scripts/guide-lib.ts の fontFallback）`,
+      );
+    }
+    out = out.replace(rule, `$1, sans-serif;${weight}`);
+    if (weight !== "") {
+      out = out.replace(face, `$1${weight}`);
+    }
   }
-  if ((svg.match(rule) ?? []).length !== 1 || (svg.match(face) ?? []).length !== 1) {
-    throw new GuideError("d2 の SVG の太字のフォントの書き方が、想定と違います（scripts/guide-lib.ts の boldFallback）");
-  }
-  return svg.replace(rule, "$1 font-weight: 700;").replace(face, "$1 font-weight: 700;");
+  return out;
 }
 
 /** 名前（印と図）に使える文字。 */

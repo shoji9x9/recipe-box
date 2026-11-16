@@ -2,12 +2,12 @@
 import { describe, expect, test } from "vitest";
 
 import {
-  boldFallback,
   checkPath,
   diagramSources,
   githubSlug,
   expandDirectives,
   extractSnippet,
+  fontFallback,
   GuideError,
   REPOSITORY_BLOB,
   renderMarkdown,
@@ -112,27 +112,36 @@ describe("diagramSources", () => {
   });
 });
 
-describe("boldFallback", () => {
+describe("fontFallback", () => {
   const svg = [
+    '.d2-1 .text {\n\tfont-family: "d2-1-font-regular";\n}',
+    '@font-face {\n\tfont-family: d2-1-font-regular;\n\tsrc: url("data:x");\n}',
     '.d2-1 .text-bold {\n\tfont-family: "d2-1-font-bold";\n}',
-    '@font-face {\n\tfont-family: d2-1-font-bold;\n\tsrc: url("data:x");\n}',
+    '@font-face {\n\tfont-family: d2-1-font-bold;\n\tsrc: url("data:y");\n}',
   ].join("\n");
 
-  test("太字の class とフォントの両方に、太さを書く", () => {
-    expect(boldFallback(svg)).toBe(
+  test("文字の class にゴシックを候補に足し、太字は class とフォントの両方に太さを書く", () => {
+    expect(fontFallback(svg)).toBe(
       [
-        '.d2-1 .text-bold {\n\tfont-family: "d2-1-font-bold"; font-weight: 700;\n}',
-        '@font-face {\n\tfont-family: d2-1-font-bold; font-weight: 700;\n\tsrc: url("data:x");\n}',
+        '.d2-1 .text {\n\tfont-family: "d2-1-font-regular", sans-serif;\n}',
+        '@font-face {\n\tfont-family: d2-1-font-regular;\n\tsrc: url("data:x");\n}',
+        '.d2-1 .text-bold {\n\tfont-family: "d2-1-font-bold", sans-serif; font-weight: 700;\n}',
+        '@font-face {\n\tfont-family: d2-1-font-bold; font-weight: 700;\n\tsrc: url("data:y");\n}',
       ].join("\n"),
     );
   });
 
-  test("太字を使わない SVG は変えない", () => {
-    expect(boldFallback("<svg></svg>")).toBe("<svg></svg>");
+  test("フォントを埋め込まない SVG は、文字に font-bold などを含んでも変えない", () => {
+    const text = "<svg><text>font-bold</text></svg>";
+    expect(fontFallback(text)).toBe(text);
   });
 
-  test("書き方が想定と違えば失敗する", () => {
-    expect(() => boldFallback('.d2-1 .text-bold { font-family: "d2-1-font-bold"; }')).toThrow(GuideError);
+  test.each([
+    ["フォントが無い", '.d2-1 .text-bold { font-family: "d2-1-font-bold"; }'],
+    ["class が無い", "@font-face { font-family: d2-1-font-bold; }"],
+    ["2 つある", `${svg}\n${svg}`],
+  ])("書き方が想定と違えば失敗する（%s）", (_, input) => {
+    expect(() => fontFallback(input)).toThrow(GuideError);
   });
 });
 
