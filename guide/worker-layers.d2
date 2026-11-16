@@ -3,37 +3,51 @@
 # 線の文字を斜体にしない（_style.d2）。
 (** -> **)[*].style.italic: false
 
-direction: right
+# 解説の幅（628px）で横のスクロール無しに読めるよう、ランタイムの中を上から下へ縦に並べる。
+# 線を水平と垂直だけにするため、グリッドで並べる（グリッドの中の線は、要素の中心どうしをまっすぐ結ぶ）。
+# 左の列（使う人）・中の列（ランタイム）・右の列（Cloudflare のサービス）は同じ 5 段にし、
+# 空いた段には見えない箱を置いて、段の高さをそろえる。3 つの枠の名前は、同じ 2 行にする（枠の中の始まりの高さをそろえる）。
+# 矢印は呼ぶ向き。応答と呼んだ結果は、同じ線を逆にたどって戻る（本文に書く）。
+grid-columns: 3
+horizontal-gap: 70
 
-# 呼ぶ向きに、左から右へ一列に並べる。応答と結果は、同じ線を逆にたどって戻る。
-# 線を水平にするため、一列の要素は同じ高さにし、中に入れ子の枠を作らない（中身は文字で書く）。
-# 枠をまたぐ線は中心どうしを結ぶので、枠の外の要素（ブラウザと D1・R2）も同じ形の枠に入れ、中の要素と高さをそろえる。
-# build/index.js は、Rust を呼ぶ入口と、Rust から呼ばれる橋渡しの 2 か所に出てくるので、2 つに分けて描く。
-# 静的アセットの流れは、Worker を通らない別の流れなので、ブラウザを分けて別の段に描く。
-users: 使う人 {
+users: 使う人\n（ブラウザ） {
   class: group
-  browser: ブラウザ\n（画面・API） {class: actor; width: 150; height: 170; label.near: center-center}
-  browser_files: ブラウザ\n（CSS・\nJavaScript\nのファイル） {class: actor; width: 150; height: 90; label.near: center-center}
+  grid-rows: 5
+  vertical-gap: 50
+  browser: ブラウザ\n（画面・API） {class: actor; width: 150; height: 100}
+  s2: {style.opacity: 0; label: ""; width: 150; height: 100}
+  s3: {style.opacity: 0; label: ""; width: 150; height: 100}
+  s4: {style.opacity: 0; label: ""; width: 150; height: 100}
+  browser_files: ブラウザ\n（CSS などの\nファイル） {class: actor; width: 150; height: 100}
 }
 
-runtime: Workers のランタイム（V8）。build/index.js と Wasm は、この上で動く {
+runtime: Workers のランタイム（V8）\nこの上で動く {
   class: [group; cloudflare]
-  entry: build/index.js\n\nfetch のハンドラー\n（wasm-bindgen が作る） {class: actor; width: 220; height: 170; label.near: center-center}
-  wasm: "Rust を Wasm にしたもの\n（index_bg.wasm）\n\n#[event(fetch)] → axum\naskama のテンプレート（HTML）\nmetadata.rs・workers-rs" {class: app; width: 310; height: 170; label.near: center-center}
-  glue: build/index.js\n\nwasm-bindgen の橋渡し・\nphoto-stream.js {class: actor; width: 240; height: 170; label.near: center-center}
-  bindings: D1・R2 の binding\n\nJavaScript の値。\n通信はランタイムが行う {class: service; width: 220; height: 170; label.near: center-center}
-  assets: 静的アセット（public/）\nWorker を通さずに返す {class: service; width: 220; height: 90; label.near: center-center}
+  grid-rows: 5
+  vertical-gap: 50
+  entry: build/index.js\nfetch のハンドラー {class: actor; width: 290; height: 100}
+  wasm: Rust を Wasm にしたもの\naxum・askama のテンプレート・\nmetadata.rs・workers-rs {class: app; width: 290; height: 100}
+  glue: build/index.js\n橋渡しのコード・\nphoto-stream.js {class: actor; width: 290; height: 100}
+  bindings: D1・R2 の binding\n（JavaScript の値。\n通信はランタイムが行う） {class: service; width: 290; height: 100}
+  assets: 静的アセット（public/）\nWorker を通さずに返す {class: service; width: 290; height: 100}
 
-  entry -> wasm: Request を渡す
-  wasm -> glue: workers-rs・crypto・\nphoto-stream.js を呼ぶ
+  entry -> wasm: Rust を呼ぶ
+  wasm -> glue: JavaScript を呼ぶ
   glue -> bindings: binding を呼ぶ
 }
 
-services: Cloudflare のサービス {
+services: Cloudflare の\nサービス {
   class: group
-  stores: D1・R2 {class: store; width: 120; height: 170; label.near: center-center}
+  grid-rows: 5
+  vertical-gap: 50
+  s1: {style.opacity: 0; label: ""; width: 110; height: 100}
+  s2: {style.opacity: 0; label: ""; width: 110; height: 100}
+  s3: {style.opacity: 0; label: ""; width: 110; height: 100}
+  stores: D1・R2 {class: store; width: 110; height: 100}
+  s5: {style.opacity: 0; label: ""; width: 110; height: 100}
 }
 
 users.browser -> runtime.entry: リクエスト
 runtime.bindings -> services.stores: 読み書き
-users.browser_files -> runtime.assets: ファイルのパス
+users.browser_files -> runtime.assets: ファイル

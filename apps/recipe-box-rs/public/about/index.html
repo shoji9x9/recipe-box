@@ -324,47 +324,11 @@ extern &quot;C&quot; {
     ) -&gt; Result&lt;web_sys::ReadableStream, JsValue&gt;;
 }
 </code></pre>
-<h5 id="photo-streamjs-がある理由">photo-stream.js がある理由</h5>
-<p>写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
-本文の全体を JavaScript の関数に流して書き換えても、1 回の追加で CPU 時間が 150〜200 ms 増えました。
-そこで、形式を決めてメタデータ（撮った場所など）を取り除く判断は Rust に置き、JavaScript には、頭の部分（画像のデータより前）を読んで Rust に渡すことと、書き換えた頭の後に残りを流すことだけをさせます。
-残りは、ランタイムの組み込みの <code>pipeTo</code> で R2 へ流すので、JavaScript の関数も Wasm も通りません。</p>
-<p><a href="/assets/guide/photo-stream.svg"><img src="/assets/guide/photo-stream.svg" alt="写真のバイト列を追加するときに、JavaScript と Rust が何を渡し合うか。Rust が photo-stream.js に本文の頭を 64 KiB ずつ読ませ、頭だけを Wasm のメモリーに写す。Rust の metadata.rs が形式を決めて位置情報などを 0 で埋める。photo-stream.js が書き換えた頭と読みすぎた分を書き、残りはランタイムの pipeTo で R2 に流す"></a></p>
-<p>この図は、誰が読み、誰が決め、誰が流すかだけを描いています。D1 と R2 に書く順序と上限の判定は、<a href="#%E5%86%99%E7%9C%9F%E3%81%AE%E4%BF%9D%E7%AE%A1">写真の保管</a>の図にあります。</p>
-<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/photo-stream.js">apps/recipe-box-rs/src/photo-stream.js</a> から:</p>
-<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-javascript">export function joinPhoto(body, state, head, length) {
-  state.reader.releaseLock();
-  /** @type {FixedLengthStream} */
-  let fixed;
-  try {
-    fixed = new FixedLengthStream(length);
-  } catch (error) {
-    cancelBody(body);
-    throw error;
-  }
-  const { readable, writable } = fixed;
-  const writer = writable.getWriter();
-  const rest = state.rest;
-  writer
-    .write(head)
-    .then(() =&gt; (rest === null ? undefined : writer.write(rest)))
-    .then(() =&gt; {
-      writer.releaseLock();
-      return body.pipeTo(writable);
-    })
-    // 読む側（R2）が失敗するか取り消すと、書き込みか pipeTo が失敗する。本文の残りを取り消す
-    // （pipeTo の途中なら pipeTo が取り消すので、ここでは何もしない）。
-    .catch(() =&gt; {
-      cancelBody(body);
-    });
-  return readable;
-}
-</code></pre>
-<p>測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> と <a href="https://github.com/shoji9x9/recipe-box/issues/52">Issue #52</a> に、決まりは <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
+<p>写真の本文を JavaScript と Rust でどう分けて扱うか（先頭だけを Rust に渡し、残りは JavaScript の側で流す）は、<a href="#%E6%9C%AC%E6%96%87%E3%82%92-wasm-%E3%81%AB%E5%86%99%E3%81%99%E3%81%A8%E3%81%8D%E3%81%AE-cpu-%E6%99%82%E9%96%93">本文を Wasm に写すときの CPU 時間</a>にあります。</p>
 <h5 id="境目を越えるときの費用とテスト">境目を越えるときの費用と、テスト</h5>
 <ul>
 <li>JavaScript と Rust の境目を越えるたびに、wasm-bindgen の橋渡しのコードが動きます。値を参照で渡すだけなら軽いのですが、バイト列や文字列を写すと、大きさに比例して CPU 時間がかかります。
-そのため、写真では頭の部分だけを、64 KiB ずつ写します（頭は 1 MiB までなので、読み足しは 16 回まで）。読みすぎた分は Wasm に写さず、JavaScript の側に残して、そのまま R2 に流します。</li>
+そのため、写真では先頭だけを、64 KiB ずつ写します（先頭は 1 MiB までなので、読み足しは 16 回まで）。読みすぎた分は Wasm に写さず、JavaScript の側に残して、そのまま R2 に流します。</li>
 <li>Rust のテスト（<code>cargo test</code>）は手元の OS で動き、JavaScript を動かせません。そのため、Rust の側は <code>Backend</code> トレイトの偽物で確かめ（<a href="#%E3%83%86%E3%82%B9%E3%83%88%E3%81%AE%E4%BB%95%E7%B5%84%E3%81%BF">テストの仕組み</a>）、本文を本文のまま渡す経路を通ります。
 手で書いた JavaScript は、vitest で、DOM の無い Node の環境で確かめます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/js-tests/worker">apps/recipe-box-rs/js-tests/worker/</a>。<code>FixedLengthStream</code> は代わりのものを置きます）。
 両方をつないだ経路は、ローカルの Worker に当てるスモークテスト（<code>mise run smoke</code>）で確かめます。</li>
@@ -448,8 +412,49 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 <li>リリースのビルドは、<code>strip</code> を使いません。wasm-bindgen が Wasm の機能を調べる節まで消えるためです（ルートの <a href="https://github.com/shoji9x9/recipe-box/blob/main/Cargo.toml">Cargo.toml</a>）。</li>
 </ul>
 <h4 id="本文を-wasm-に写すときの-cpu-時間">本文を Wasm に写すときの CPU 時間</h4>
-<p>写真のような大きな本文を Wasm のメモリーに読みためると、CPU 時間が無料のプランの上限（1 回 10 ms）を大きく超えます。
-そのため、写真の本文は頭の部分だけを Rust に渡し、残りは JavaScript の側で R2 に流します（<a href="#photo-streamjs-%E3%81%8C%E3%81%82%E3%82%8B%E7%90%86%E7%94%B1">photo-stream.js がある理由</a>）。</p>
+<p>写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
+本文の全体を JavaScript の関数に流して書き換えても、1 回の追加で CPU 時間が 150〜200 ms 増えました。
+そこで、形式を決めてメタデータ（撮った場所など）を取り除く判断は Rust に置き、JavaScript には、写真の先頭を読んで Rust に渡すことと、書き換えた先頭の後に残りを流すことだけをさせます。
+残りは、ランタイムの組み込みの <code>pipeTo</code> で R2 へ流すので、JavaScript の関数も Wasm も通りません。</p>
+<p>ここで「先頭」は、写真のファイルの初めから、画像のデータ（画素）の直前までです。ファイルの形式を示す目印のほか、撮った場所や日時を持つ EXIF、XMP、色の情報（ICC プロファイル）、PNG の文字のチャンクなどが入ります。ふつうの写真では数十 KB で、取り除くメタデータはここにあります。</p>
+<p><a href="/assets/guide/photo-stream.svg"><img src="/assets/guide/photo-stream.svg" alt="写真のバイト列を追加するときに、JavaScript と Rust が何を渡し合うか。Rust が photo-stream.js の readAtLeast を呼び、photo-stream.js は reader.read() で本文を少しずつ読んで、返るのを待ってから読み足し、読んだバイト列を Rust に返す。Rust は先頭が終わるまで読み足し、metadata.rs が先頭の位置情報などを 0 で埋める。Rust が joinPhoto を呼ぶと、R2 に渡すストリームが返り、Rust がそれを R2 の put に渡す。R2 がストリームを読み始めると、書き換えた先頭と読みすぎた分が流れ、それを書き終えると photo-stream.js が pipeTo を始め、本文の残りがそのまま R2 に流れる"></a></p>
+<p>図の実線の矢印は呼び出しで、破線の矢印は、呼んだ側に返る値です。呼んだ側は、値が返るまで待ちます（JavaScript の <code>await</code>、Rust の <code>.await</code>）。</p>
+<ul>
+<li><code>reader.read()</code> は、本文の続きを少し（手元では 4 KiB ほど）ずつ返します。photo-stream.js は、返るのを待ってから次を読み、決めた大きさ（ふつうは 64 KiB）になってから、まとめて Rust に返します。</li>
+<li><code>joinPhoto</code> は、R2 に渡すストリームをすぐに返し、まだ何も流しません。流れ始めるきっかけは、R2 の <code>put</code> がそのストリームを読み始めることです。
+ストリームは、読む側が読んだ分だけ書けるので、R2 が読むにつれて、書き換えた先頭と読みすぎた分が流れます。それを書き終えると、photo-stream.js が <code>pipeTo</code> を始め、本文の残りを、ランタイムが JavaScript の関数も Rust も通さずに流します。</li>
+</ul>
+<p>この図は、誰が読み、誰が決め、誰が流すかだけを描いています。D1 と R2 に書く順序と上限の判定は、<a href="#%E5%86%99%E7%9C%9F%E3%81%AE%E4%BF%9D%E7%AE%A1">写真の保管</a>の図にあります。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/photo-stream.js">apps/recipe-box-rs/src/photo-stream.js</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-javascript">export function joinPhoto(body, state, head, length) {
+  state.reader.releaseLock();
+  /** @type {FixedLengthStream} */
+  let fixed;
+  try {
+    fixed = new FixedLengthStream(length);
+  } catch (error) {
+    cancelBody(body);
+    throw error;
+  }
+  const { readable, writable } = fixed;
+  const writer = writable.getWriter();
+  const rest = state.rest;
+  writer
+    .write(head)
+    .then(() =&gt; (rest === null ? undefined : writer.write(rest)))
+    .then(() =&gt; {
+      writer.releaseLock();
+      return body.pipeTo(writable);
+    })
+    // 読む側（R2）が失敗するか取り消すと、書き込みか pipeTo が失敗する。本文の残りを取り消す
+    // （pipeTo の途中なら pipeTo が取り消すので、ここでは何もしない）。
+    .catch(() =&gt; {
+      cancelBody(body);
+    });
+  return readable;
+}
+</code></pre>
+<p>測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> と <a href="https://github.com/shoji9x9/recipe-box/issues/52">Issue #52</a> に、決まりは <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
 <h3 id="リクエストの流れ">リクエストの流れ</h3>
 <p><a href="/assets/guide/request-flow.svg"><img src="/assets/guide/request-flow.svg" alt="リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口に進む。ルートが無ければ 404 か 405、書き込みの回数・本文の大きさ・送り元が許す範囲になければ 429・413・403 で断る。通れば、ワークスペースを使うルートなら使うワークスペースを決め（API で ID が誤っていれば 400 か 404 で断る。画面で自分のワークスペースも共有のデモも無ければ「はじめる」画面へ移す）、ハンドラーが入力を確かめ（通らなければ断る）、D1・R2 を使う。上限などで失敗すれば断り、うまくいけば応答を返す"></a></p>
 <p>図の見方: 楕円は始まりと終わりです。紫のひし形は「はい」と「いいえ」で先が分かれる問いで、断る応答は必ずひし形から出ます。赤の四角はこのアプリのコードの処理です。処理の中で決まる失敗（D1 に書くときに数える上限など）は、処理の後の「うまくいったか？」から断ります。赤の破線は断る応答を返す流れで、色の見分けにくい人や白黒の印刷でも通常の流れと区別できるよう、色に加えて破線にしています。</p>
@@ -658,7 +663,7 @@ let results = db
 <h3 id="写真の保管">写真の保管</h3>
 <p>写真は R2 に置き、行（大きさ・形式など）を D1 に置きます。上限は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。
 R2 は無料の範囲を超えると課金されるので、R2 に書く前に D1 で上限を判定します。書く順序は次のとおりです。</p>
-<p><a href="/assets/guide/photo-add.svg"><img src="/assets/guide/photo-add.svg" alt="写真を追加するときの順序。Worker が頭の部分で形式を決めてメタデータを取り除き、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す"></a></p>
+<p><a href="/assets/guide/photo-add.svg"><img src="/assets/guide/photo-add.svg" alt="写真を追加するときの順序。Worker が先頭で形式を決めてメタデータを取り除き、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す"></a></p>
 <ul>
 <li>印の付いた写真は、画面と API に見せません。上限には数えるので、同時に追加されても上限を超えません。</li>
 <li>消すときは、行に印を付けて隠してから、R2 のデータを先に消し、D1 の行を消します。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためです。R2 の削除が失敗したら、印を外して元に戻します。</li>
@@ -799,7 +804,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <td>写真の受け取り</td>
 <td>multipart のふつうのフォームと、API はバイト列そのもの。<code>Content-Length</code> で先に断る。画面の JavaScript は、写真の後に、ブラウザで作った小さな版を別のリクエストで送る。一覧と詳細は <code>srcset</code> で選ばせ、小さな版が無ければ元の写真を出す</td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F%E3%81%AE-api">写真の API</a>・<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%B0%8F%E3%81%95%E3%81%AA%E7%89%88">小さな版</a></td>
-<td>本文の上限、形式を頭の部分で決めること、メタデータを取り除くこと。小さな版をどこで作るか（ブラウザか、サーバーか、画像の変換のサービスか）は、CPU 時間の上限と料金で決める。作れないときに元の写真に戻ることを保つ</td>
+<td>本文の上限、形式を先頭で決めること、メタデータを取り除くこと。小さな版をどこで作るか（ブラウザか、サーバーか、画像の変換のサービスか）は、CPU 時間の上限と料金で決める。作れないときに元の写真に戻ることを保つ</td>
 </tr>
 <tr>
 <td>定期実行</td>

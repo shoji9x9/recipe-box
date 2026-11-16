@@ -1,25 +1,31 @@
 # 写真のバイト列を追加するときに、JavaScript と Rust（Wasm）が何を渡し合うか。mise run guide が SVG にする（docs/development.md の「解説」）。
 # 誰が読み、誰が決め、誰が流すかだけを描く。D1 と R2 に書く順序と上限の判定は、photo-add の図が描く。
+# 実線の矢印は呼び出し、破線の矢印は呼んだ側に返る値（呼んだ側は、返るまで待つ）。
 ...@_style
 # 線の文字を斜体にしない（_style.d2）。
 (** -> **)[*].style.italic: false
 
 shape: sequence_diagram
 
-runtime: ランタイム（本文のストリーム） {class: service}
+runtime: ランタイム\n（リクエストの本文） {class: service}
 js: "photo-stream.js\n（手で書いた JavaScript）" {class: app}
 rust: "Rust\n（stream.rs・metadata.rs）" {class: app}
 r2: R2 {class: store}
 
-runtime -> rust: リクエスト（本文は読まず、ストリームの参照だけを渡す）
-rust -> js: readAtLeast（要る大きさ。64 KiB ずつ）
-js -> runtime: reader.read() で塊を読む
-js -> rust: 頭の部分（Uint8Array。ここだけ Wasm のメモリーに写す）
-rust -> rust: metadata.rs が形式を決め、位置情報などを\n0 で埋める（足りなければ readAtLeast を繰り返す）
-rust -> rust: D1 に行を入れる（順序は「写真の保管」の図）
-rust -> js: joinPhoto（書き換えた頭を渡す）
-js -> rust: FixedLengthStream の読む側
-rust -> r2: put（読む側をそのまま渡す）
-js -> r2: 書き換えた頭と、読みすぎた分を書く
-runtime -> r2: 本文の残りを pipeTo で流す\n（JavaScript の関数も Wasm も通らない）
-r2 -> rust: 書けた
+runtime -> rust: リクエストを渡す（本文はまだ読まない）
+rust -> js: readAtLeast を呼ぶ\n（本文を 64 KiB 読んで）
+js -> runtime: reader.read() を呼ぶ
+runtime -> js: 本文の続き（数 KiB ずつ） {style: {stroke-dash: 4; stroke: "#6a6a6a"}}
+js -> js: 64 KiB になるまで、\nreader.read() を繰り返す
+js -> rust: 読んだバイト列\n（Rust のメモリーに写る） {style: {stroke-dash: 4; stroke: "#6a6a6a"}}
+rust -> rust: 先頭が終わるまで読めたか確かめる\n（足りなければ readAtLeast をもう一度）
+rust -> rust: metadata.rs が、先頭の位置情報などを\n0 で埋める
+rust -> rust: D1 に行を入れる\n（順序は「写真の保管」の図）
+rust -> js: joinPhoto を呼ぶ\n（書き換えた先頭を渡す）
+js -> rust: R2 に渡すストリーム\n（まだ何も流れていない） {style: {stroke-dash: 4; stroke: "#6a6a6a"}}
+rust -> r2: put を呼ぶ（そのストリームを渡す）
+r2 -> js: ストリームを読み始める
+js -> r2: 書き換えた先頭と、\n読みすぎた分が流れる
+js -> runtime: 書き終えたら\npipeTo を始める
+runtime -> r2: 本文の残りが、そのまま流れる\n（JavaScript も Rust も通らない）
+r2 -> rust: 書けた（put が終わる） {style: {stroke-dash: 4; stroke: "#6a6a6a"}}
