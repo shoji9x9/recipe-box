@@ -22,9 +22,14 @@
   --ink: #222222;
   --body: #3f3f3f;
   --muted: #6a6a6a;
-  /* 区切りの線と、カード・パネルの枠。部品の境目を示す線ではないので、薄くする */
+  /* 薄い線。部品の境目を示す線ではないので、薄くする。
+     --hairline は使えない欄の枠・写真なしの点線の枠・解説の図と表の枠、--hairline-soft はヘッダーの下などの区切りの線に使う */
   --hairline: #dddddd;
   --hairline-soft: #ebebeb;
+  /* カード（レシピの一覧）とパネルの枠。カードは全体を押せるが、押せることは料理名のリンクの文字で分かるので、枠は飾りで、
+     WCAG 1.4.11 の 3:1 は求められない（白との色の差は 1.74:1）。ただ、薄い線（--hairline）のままでは、
+     濃い入力の欄の枠（--field-border）と並んだときに浮いて見えるので、中くらいの灰色にする */
+  --card-border: #c4c4c4;
   --canvas: #ffffff;
   --surface-soft: #f7f7f7;
   --surface-strong: #f2f2f2;
@@ -432,7 +437,7 @@ button.primary.danger-fill {
     flex-direction: column;
     gap: var(--space-1);
     padding: var(--space-5);
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--card-border);
     border-radius: var(--radius-md);
     transition: box-shadow 0.2s;
 
@@ -759,7 +764,7 @@ dialog.confirm {
 .panel {
   max-width: var(--width-panel);
   padding: var(--space-8);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow);
 
