@@ -111,6 +111,8 @@ pub struct FakeBackend {
     pub d1_calls: Arc<AtomicUsize>,
     /// 写真の小さな版の大きさ（`thumbnail_size`）。写真の ID ごと（写真の ID は乱数なので、ID だけで見分ける）。
     pub thumbnail_sizes: Arc<Mutex<HashMap<String, i64>>>,
+    /// `true` なら、小さな版を出す（`finish_thumbnail`）のが失敗したことにする（D1 の失敗）。
+    pub broken_finish_thumbnail: bool,
     /// R2 を呼んだ回数。
     pub r2_calls: Arc<AtomicUsize>,
     /// D1 と R2 を合わせて、この回数を超えて呼ぶと失敗させる（本物の 1 回の実行の上限をまねる）。
@@ -157,6 +159,7 @@ impl Default for FakeBackend {
             used_after_hiding: None,
             d1_calls: Arc::default(),
             thumbnail_sizes: Arc::default(),
+            broken_finish_thumbnail: false,
             r2_calls: Arc::default(),
             max_calls: None,
         }
@@ -911,6 +914,9 @@ impl Backend for FakeBackend {
         size: i64,
         widths: (i64, i64),
     ) -> impl Future<Output = BackendResult<bool>> + Send {
+        if self.broken_finish_thumbnail {
+            return ready(Err(BackendError("壊れた DB（小さな版）".into())));
+        }
         ready(self.check().map(|()| {
             if self.thumbnail_sizes.lock().unwrap().get(id.as_str()) != Some(&size) {
                 return false;

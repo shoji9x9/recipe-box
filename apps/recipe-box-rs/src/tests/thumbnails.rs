@@ -6,7 +6,7 @@ use axum::{
 };
 
 use super::{
-    TestResponse, WORKSPACE_A,
+    TestResponse, WORKSPACE_A, WORKSPACE_B,
     fake::{FakeBackend, NOW},
     screens::{
         DEMO, HOST, backend_with_workspaces, cookie, create_recipe, post_photo, post_raw_photo,
@@ -451,4 +451,93 @@ async fn multipart_photo_has_no_thumbnail_and_demo_cannot_add_one() {
     )
     .await;
     assert_eq!(response.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn failed_finish_removes_the_thumbnail_and_releases_its_bytes() {
+    let backend = backend_with_workspaces();
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let photo = add_photo(&backend, &path).await;
+    let broken = FakeBackend {
+        broken_finish_thumbnail: true,
+        ..backend.clone()
+    };
+    let response = post_thumbnail(
+        &broken,
+        &path,
+        &photo,
+        "?width=200",
+        canvas_jpeg(100, 100, &[]),
+        WORKSPACE_A,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        !backend
+            .objects
+            .lock()
+            .unwrap()
+            .contains_key(&thumbnail_r2_key(&path, &photo))
+    );
+    assert!(backend.thumbnail_sizes.lock().unwrap().is_empty());
+    // 枠が返ったので、もう一度送れる。
+    let response = post_thumbnail(
+        &backend,
+        &path,
+        &photo,
+        "?width=200",
+        canvas_jpeg(100, 100, &[]),
+        WORKSPACE_A,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn other_workspace_cannot_read_or_add_thumbnails() {
+    let backend = backend_with_workspaces();
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let photo = add_photo(&backend, &path).await;
+    let response = post_thumbnail(
+        &backend,
+        &path,
+        &photo,
+        "?width=200",
+        canvas_jpeg(100, 100, &[]),
+        WORKSPACE_A,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+
+    let b = cookie(WORKSPACE_B);
+    let response = screen_get(
+        &backend,
+        &format!("{path}/photos/{photo}/thumbnail"),
+        Some(&b),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    // B のワークスペースからは、A の写真に小さな版を足せない（A の写真は、B には無い写真である）。
+    let other = add_photo(&backend, &path).await;
+    let response = post_thumbnail(
+        &backend,
+        &path,
+        &other,
+        "?width=200",
+        canvas_jpeg(100, 100, &[]),
+        WORKSPACE_B,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        backend
+            .objects
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|key| key.starts_with("thumbnails/"))
+            .count(),
+        1
+    );
+    assert_eq!(backend.thumbnail_sizes.lock().unwrap().len(), 1);
 }
