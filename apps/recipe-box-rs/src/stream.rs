@@ -211,11 +211,12 @@ fn is_photo_upload_path(path: &str) -> bool {
     photo::photo_recipe_path(path.strip_prefix("/api").unwrap_or(path)).is_some()
 }
 
-/// 頭の部分を読み足すときに、Wasm に写す大きさ（64 KiB。本文の残りがそれより短ければ残りのすべて。要る大きさがそれより大きければ、その大きさ）。
+/// 頭の部分を読み足すときに読み、Wasm に写す大きさ（64 KiB。本文の残りがそれより短ければ残りのすべて。要る大きさがそれより大きければ、その大きさ）。
 ///
-/// [`metadata::inspect`] は読み足すたびに頭を先頭から調べ直すので、細かく読み足すと、調べ直す回数が増える。
-/// 1 回に読む量の下限を決め、調べ直す回数を、頭の大きさの上限（[`metadata::MAX_HEAD_BYTES`]）÷ 64 KiB までに抑える。
-const MIN_READ_BYTES: usize = 64 * 1024;
+/// [`metadata::inspect`] は読み足すたびに頭を先頭から調べ直す。本文は小さな塊（手元の wrangler では 4 KiB）で届くので、
+/// 塊ごとに調べ直すと、回数が頭の大きさとともに増える。1 回に読む量を決め、調べ直す回数を、
+/// 頭の大きさの上限（[`metadata::MAX_HEAD_BYTES`]）÷ 64 KiB = 16 回までに抑える。読みすぎた分は Wasm に写さない。
+const READ_BYTES: usize = 64 * 1024;
 
 /// 本文の頭の部分だけを読んでメタデータを取り除き（[`metadata`]）、残りを R2 に流せる形にする。
 ///
@@ -230,12 +231,11 @@ pub async fn open(raw: RawPhotoBody) -> Result<PhotoStream, ApiError> {
             match metadata::inspect(&head, length) {
                 Ok(Inspection::NeedMore(n)) => {
                     // 頭の上限（1 MiB）以下なので u32 に収まる。
-                    let min = n - head.len();
-                    let max = min.max(MIN_READ_BYTES.min(length - head.len()));
-                    let to_u32 = |n: usize| {
-                        u32::try_from(n).map_err(|_| JsValue::from_str("頭が大きすぎる"))
-                    };
-                    let chunk = JsFuture::from(read_at_least(&state, to_u32(min)?, to_u32(max)?)?)
+                    // 要る分と READ_BYTES の大きいほうを読む（本文の残りより多くは読まない）。
+                    let want = (n - head.len()).max(READ_BYTES.min(length - head.len()));
+                    let want =
+                        u32::try_from(want).map_err(|_| JsValue::from_str("頭が大きすぎる"))?;
+                    let chunk = JsFuture::from(read_at_least(&state, want, want)?)
                         .await?
                         .dyn_into::<Uint8Array>()?;
                     // 本文が Content-Length より短い（送る途中で切れたときなど）。
