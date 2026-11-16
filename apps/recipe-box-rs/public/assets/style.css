@@ -338,7 +338,6 @@ button.primary.danger-fill {
 
     /* ブラウザが出す入力を消す × は Tab で選べないので隠し、代わりのボタン（.clear）を出す */
     &::-webkit-search-cancel-button {
-      appearance: none;
       display: none;
     }
 

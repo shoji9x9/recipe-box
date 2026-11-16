@@ -16,10 +16,15 @@
 (() => {
   const INPUT = "input[data-search-input]";
 
+  // htmx が待つ search-input を起こす（templates/list.html の hx-trigger）。
+  function search(input) {
+    input.dispatchEvent(new Event("search-input"));
+  }
+
   function notify(event) {
     const input = event.target;
     if (input instanceof HTMLInputElement && input.matches(INPUT)) {
-      input.dispatchEvent(new Event("search-input"));
+      search(input);
     }
   }
 
@@ -46,7 +51,7 @@
     }
     event.preventDefault();
     input.value = "";
-    input.dispatchEvent(new Event("search-input"));
+    search(input);
     input.focus();
   });
 })();
