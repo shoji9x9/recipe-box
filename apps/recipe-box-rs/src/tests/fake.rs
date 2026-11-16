@@ -90,6 +90,8 @@ pub struct FakeBackend {
     pub broken_records: bool,
     /// `true` なら、自動削除の対象を選ぶところだけが失敗したことにする。
     pub broken_list: bool,
+    /// `true` なら、レシピの登録と更新だけが失敗したことにする（D1 の一時的な失敗）。
+    pub broken_recipe_write: bool,
     /// 自動削除の対象を選んだ直後に、別のリクエストがこのワークスペースを使った（最終利用日時を今にした）ことにする。
     pub used_after_listing: Option<String>,
     /// `photo_added_after_first_delete` の写真を、もう追加したか。
@@ -137,6 +139,7 @@ impl Default for FakeBackend {
             used_after_listing: None,
             broken_list: false,
             broken_records: false,
+            broken_recipe_write: false,
             injected_photo: Arc::default(),
             broken_owner_delete: false,
             used_after_hiding: None,
@@ -302,6 +305,14 @@ impl FakeBackend {
         } else {
             Ok(())
         }
+    }
+
+    /// レシピの登録と更新の前の [`Self::check`]。`broken_recipe_write` でも失敗を返す。
+    fn check_recipe_write(&self) -> BackendResult<()> {
+        if self.broken_recipe_write {
+            return Err(BackendError("壊れた D1 の書き込み".into()));
+        }
+        self.check()
     }
 
     fn key(workspace: &WorkspaceId, id: &str) -> RecipeKey {
@@ -510,7 +521,7 @@ impl Backend for FakeBackend {
         recipe: &Recipe,
         max_recipes: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        ready(self.check().map(|()| {
+        ready(self.check_recipe_write().map(|()| {
             let mut recipes = self.recipes.lock().unwrap();
             let count = recipes
                 .keys()
@@ -545,7 +556,7 @@ impl Backend for FakeBackend {
         fields: &RecipeFields,
         now: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        ready(self.check().map(|()| {
+        ready(self.check_recipe_write().map(|()| {
             let mut recipes = self.recipes.lock().unwrap();
             let Some(recipe) = recipes.get_mut(&Self::key(workspace, id.as_str())) else {
                 return false;

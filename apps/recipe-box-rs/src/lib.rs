@@ -16,7 +16,7 @@ mod workspace;
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
-    http::{StatusCode, Uri},
+    http::Uri,
     middleware,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -107,6 +107,8 @@ fn photo_routes<B: Backend>(backend: B) -> Router<B> {
 ///
 /// 1. [`screen::security_headers`] — すべての応答に、セキュリティのためのヘッダーを付ける。
 /// 2. [`screen::guard_writes`] — 書き込み（POST）の送り元・回数・本文の大きさを確かめる。D1 を読む前に断るため、先に置く。
+///    ただし、理由を出す画面が決まっているフォーム（レシピの登録・更新、ワークスペースの作成・切り替え）は、回数の制限に当たっても
+///    断らずに印を付けて通す。その画面を出すために D1 を読むが、レシピやワークスペースは書き換えない（[`screen::WriteLimited`]）。
 /// 3. [`screen::identify`] — Cookie から、画面を見ている人のワークスペースを決める。
 ///
 /// 本文の大きさは API と同じ上限にする。`Content-Length` の無い本文（chunked）も、ここで止める。
@@ -141,6 +143,8 @@ fn screen_routes<B: Backend>(backend: B) -> Router<B> {
         ))
         .route_layer(middleware::from_fn(screen::security_headers))
         .merge(check_routes)
+        // route_layer は受け付けないメソッドには効かないので、ヘッダーは screen::method_not_allowed が付ける。
+        .method_not_allowed_fallback(screen::method_not_allowed)
         .layer(DefaultBodyLimit::max(recipe::MAX_BODY_BYTES))
 }
 
@@ -166,6 +170,7 @@ fn screen_photo_routes<B: Backend>(backend: B) -> Router<B> {
             screen::guard_photo_writes::<B>,
         ))
         .route_layer(middleware::from_fn(screen::security_headers))
+        .method_not_allowed_fallback(screen::method_not_allowed)
         .layer(DefaultBodyLimit::max(screen::PHOTO_FORM_MAX_BYTES))
 }
 
@@ -178,13 +183,13 @@ fn screen_check_routes<B: Backend>() -> Router<B> {
         .route_layer(middleware::from_fn(screen::security_headers))
 }
 
-/// 無いパスへの応答。API（`/api` とその下）には JSON の形で、画面には本文の無い 404 で答える。
+/// 無いパスへの応答。API（`/api` とその下）には JSON の形で、ほか（画面と、無い静的アセット）には 404 のエラーの画面で答える。
 async fn not_found(uri: Uri) -> Response {
     let path = uri.path();
     if path == "/api" || path.starts_with("/api/") {
         ApiError::NotFound.into_response()
     } else {
-        StatusCode::NOT_FOUND.into_response()
+        screen::not_found_page()
     }
 }
 

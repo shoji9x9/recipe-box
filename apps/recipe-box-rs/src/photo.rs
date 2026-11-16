@@ -210,7 +210,7 @@ fn parse_recipe_id(path: &str) -> Result<RecipeId, ApiError> {
 }
 
 /// パスのレシピと写真の ID を読む。
-fn parse_ids(
+pub(crate) fn parse_ids(
     path: Result<Path<(String, String)>, PathRejection>,
 ) -> Result<(RecipeId, PhotoId), ApiError> {
     let Path((recipe, photo)) = path.map_err(|_| ApiError::RecipeNotFound)?;
