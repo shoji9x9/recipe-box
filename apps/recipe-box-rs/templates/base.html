@@ -8,6 +8,8 @@
         閲覧の履歴をブラウザの localStorage に残さない（historyCacheSize）。 #}
     <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"responseHandling":[{"code":"...","swap":true}]}'>
     <title>{% block title %}{% endblock %} - recipe-box</title>
+    {#- 検索の結果などに出る説明。どの画面でも同じにし、レシピの中身は書かない（ワークスペースの中身は、その ID を知る人だけが見るため）。 #}
+    <meta name="description" content="料理名・何人分か・材料・手順と写真を書き留める、ログインのいらないレシピ帳です。">
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/assets/style.css">
     <script src="/assets/htmx.min.js" defer></script>

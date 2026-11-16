@@ -13,8 +13,9 @@
   color-scheme: light;
 
   /* 色 */
-  --primary: #ff385c;
-  --primary-active: #e00b41;
+  /* 白い文字を載せるので、白との色の差を 4.5:1 以上にする（--primary は 4.89:1、--primary-active は 6.71:1） */
+  --primary: #e00b41;
+  --primary-active: #b80935;
   --primary-disabled: #ffd1da;
   --error: #c13515;
   --error-active: #a52d12;
@@ -399,6 +400,8 @@ button.primary.danger-fill {
   list-style: none;
 
   & li {
+    /* 料理名のリンク（.card-link）の押せる範囲を、カードの全体に広げる基準 */
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
@@ -411,7 +414,13 @@ button.primary.danger-fill {
       box-shadow: var(--shadow);
     }
 
-    /* 先頭の写真。大きさを決めておき、読み込んだときに並びがずれないようにする（width・height の属性と同じ比） */
+    /* キーボードで料理名のリンクに来たときは、カードの全体に枠を出す（押せる範囲がカードの全体のため） */
+    &:has(.card-link:focus-visible) {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+
+    /* 先頭の写真と、写真の無いときの枠。大きさを決めておき、読み込んだときに並びがずれないようにする（width・height の属性と同じ比） */
     & .thumb {
       width: 100%;
       height: auto;
@@ -422,7 +431,19 @@ button.primary.danger-fill {
       background: var(--surface-soft);
     }
 
-    & > a {
+    /* 写真が無いことを、読み込み中の無地の枠と見分けられるよう、図と文字で示す */
+    & .no-photo {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      justify-content: center;
+      align-items: center;
+      border: 1px dashed var(--hairline);
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    & .card-link {
       font-weight: 600;
       line-height: 1.25;
       text-decoration: none;
@@ -431,6 +452,24 @@ button.primary.danger-fill {
       &:hover {
         text-decoration: underline;
       }
+
+      &:focus-visible {
+        outline: none;
+      }
+
+      /* 押せる範囲をカードの全体（写真を含む）に広げる。カードの文字は、なぞって選べなくなる（押すと詳細の画面に移る） */
+      &::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+      }
+    }
+
+    /* 削除のボタンなど、ほかの操作は広げた範囲より上に置き、押せるようにする。
+       入れ物（.card-actions）ではなく操作の要素に付ける。入れ物の何も無い所を押したときに、詳細の画面に移らなくなるため */
+    & :is(a:not(.card-link), button) {
+      position: relative;
+      z-index: 1;
     }
   }
 }
@@ -561,9 +600,10 @@ button.primary.danger-fill {
   }
 }
 
-/* フォーム */
+/* フォーム。下に続く写真の欄の線（.section）や注記と、「保存する」のボタンの間を空ける */
 .recipe-form {
   max-width: var(--width-content);
+  margin-bottom: var(--space-8);
 }
 
 /* 共有のデモの帯: ヘッダーのすぐ下に、どの画面にも出す */
