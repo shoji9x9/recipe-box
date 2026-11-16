@@ -1,0 +1,46 @@
+# リクエストが届いてから応答を返すまで。mise run guide が SVG にする（docs/development.md の「解説」）。
+# 形の使い分け（解説の本文の「図の見方」と合わせる）:
+#   楕円（terminal）: 始まりと終わり。
+#   ひし形（decision）: はい・いいえで先が分かれるところ。問いの形（「〜か？」）で書く。断る応答は、必ずひし形から出る。
+#   四角（app）: このアプリのコードの処理。処理の中で決まる失敗（D1 で数える上限など）は、
+#   処理の後の「うまくいったか？」のひし形から出す。
+#   赤の破線（reject）: 断る応答を返す流れ。色だけに頼らず、白黒でも通常の流れと見分けられるよう破線にする。
+...@_style
+# 線の文字を斜体にしない（_style.d2）。
+(** -> **)[*].style.italic: false
+
+direction: down
+
+req: リクエスト {class: terminal}
+assets: 静的アセットの\nファイルか？ {class: decision}
+file: ファイルを返す\n（Worker は動かない） {class: terminal}
+fetch: "Worker の入口（#[event(fetch)]）\n写真のバイト列なら、本文をストリームのまま分けておく" {class: app}
+router: パスとメソッドに合う\nルートか？\n（axum の Router） {class: decision}
+mw: "回数・大きさ・送り元は\n許す範囲か？（middleware）\n書き込みの回数（IP アドレスごと）\n本文の大きさ\n送り元（Origin。画面の書き込みだけ）" {class: decision}
+needs_ws: "ワークスペースを\n使うルートか？\n（作成などは使わない）" {class: decision}
+ws: "使うワークスペースは在るか？\nAPI: X-Workspace-Id の ID（extractor）\n画面: Cookie の ID か、無ければ共有のデモ" {class: decision}
+start: 「はじめる」画面へ移す\n（一覧はその場で出す） {class: terminal}
+check: "入力は正しいか？\n形と長さ・写真の形式・デモでの禁止\n（D1 も R2 も使わない確かめ）" {class: decision}
+work: "Backend を通して D1・R2 などを使う\n上限は、D1 に書くときに同じ文の中で数える" {class: app}
+ok: うまくいったか？ {class: decision}
+res: 応答を返す\n（HTML か JSON） {class: terminal}
+reject: 断る応答を返す {class: terminal}
+
+req -> assets
+assets -> file: はい
+assets -> fetch: いいえ
+fetch -> router
+router -> mw: はい
+mw -> needs_ws: はい
+needs_ws -> ws: はい
+needs_ws -> check: いいえ
+ws -> check: はい
+check -> work: はい
+work -> ok
+ok -> res: はい
+router -> reject: いいえ（404・405） {class: reject}
+mw -> reject: いいえ（429・413・403） {class: reject}
+ws -> reject: いいえ（API: 400・404） {class: reject}
+ws -> start: いいえ（画面）
+check -> reject: いいえ（400・403・413・415） {class: reject}
+ok -> reject: いいえ（404・409・429・503・500） {class: reject}

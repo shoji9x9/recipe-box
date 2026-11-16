@@ -1,0 +1,285 @@
+/*
+ * アプリの解説（/about）のスタイル。画面と同じ style.css の後に読む。
+ * 解説は mise run guide が作る静的なページで、CSP でインラインのスタイルを禁じているので、ここにまとめる。
+ *
+ * 色は画面の変数（style.css の :root）を使い、解説だけで使う色をここで足す。
+ * 主色の淡い色（--guide-accent-soft）は、図（guide/_style.d2）のこのアプリの要素（app）の塗りと同じにする。
+ */
+.guide {
+  --guide-accent-soft: #fff0f3;
+  --guide-code-bg: #1f2328;
+  --guide-code-ink: #e6edf3;
+  /* 目次を固定する、ページの上からの位置。上に固定したヘッダー（style.css。70〜80px ほど）より下にする。
+     ヘッダーの高さを変えたら、style.css の scroll-padding-top と一緒に直す。 */
+  --guide-toc-top: 96px;
+
+  background: var(--surface-soft);
+}
+
+/* 広い画面では、左に目次を固定し、右に本文を置く。狭い画面では、目次を本文の上に置く。 */
+.guide-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "toc"
+    "main";
+  gap: var(--space-6);
+  max-width: var(--width-page);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4) var(--space-16);
+
+  @media (min-width: 960px) {
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-areas: "toc main";
+    gap: var(--space-8);
+    padding-inline: var(--space-6);
+  }
+
+  & > main {
+    grid-area: main;
+    max-width: none;
+    margin: 0;
+    padding: var(--space-6) var(--space-4);
+    border: 1px solid var(--hairline-soft);
+    border-radius: var(--radius-md);
+    background: var(--canvas);
+
+    @media (min-width: 960px) {
+      padding: var(--space-12) var(--space-12);
+    }
+  }
+}
+
+.guide h1 {
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 4px solid var(--primary);
+}
+
+/* 目次 */
+.guide .toc {
+  grid-area: toc;
+  align-self: start;
+  padding: var(--space-4);
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+  font-size: 14px;
+
+  @media (min-width: 960px) {
+    position: sticky;
+    top: var(--guide-toc-top);
+    max-block-size: calc(100vh - var(--guide-toc-top) - var(--space-4));
+    overflow-y: auto;
+  }
+
+  & .toc-title {
+    margin: 0 0 var(--space-2);
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  & ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  & a {
+    display: block;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--body);
+    text-decoration: none;
+
+    &:hover {
+      background: var(--guide-accent-soft);
+      color: var(--ink);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 1px;
+    }
+  }
+
+  & .toc-2 {
+    margin-top: var(--space-2);
+
+    & > a {
+      font-weight: 600;
+      color: var(--ink);
+    }
+  }
+
+  & .toc-3 > a {
+    padding-left: var(--space-5);
+  }
+}
+
+/* 本文 */
+.guide article {
+  overflow-wrap: anywhere;
+
+  /* 最初の段落（このページの紹介）を、少し大きく、色の帯で目立たせる。 */
+  & > p:first-child {
+    margin-top: 0;
+    padding: var(--space-4) var(--space-5);
+    border-left: 4px solid var(--primary);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: var(--guide-accent-soft);
+    font-size: 17px;
+    color: var(--ink);
+  }
+
+  & h2 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-16);
+    font-size: 22px;
+
+    /* 見出しの左に、主色の短い線を置く。 */
+    &::before {
+      content: "";
+      flex: none;
+      inline-size: 6px;
+      block-size: 1.1em;
+      border-radius: var(--radius-full);
+      background: var(--primary);
+    }
+  }
+
+  & h3 {
+    margin: var(--space-12) 0 var(--space-2);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--hairline-soft);
+    font-size: 18px;
+  }
+
+  & h4 {
+    margin: var(--space-8) 0 var(--space-2);
+    font-size: 16px;
+    color: var(--primary-active);
+  }
+
+  & p,
+  & li {
+    line-height: 1.8;
+  }
+
+  & li {
+    color: var(--body);
+  }
+
+  & a {
+    color: var(--primary-active);
+    text-decoration-thickness: 1px;
+
+    &:hover {
+      text-decoration-thickness: 2px;
+    }
+  }
+
+  & strong {
+    color: var(--ink);
+  }
+
+  /* 図（押すと元の大きさで開く） */
+  & a:has(> img) {
+    display: block;
+    margin: var(--space-6) 0;
+    padding: var(--space-4);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);
+    background: var(--canvas);
+
+    &:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+  }
+
+  & img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+  }
+}
+
+/* 幅の広い表とコードは、その部分だけを横に動かす（scripts/guide-lib.ts が tabindex と名前を付ける）。 */
+.guide .scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: var(--space-4) 0 var(--space-6);
+
+  &:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+}
+
+.guide table {
+  border-collapse: collapse;
+  font-size: 14px;
+
+  & th,
+  & td {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--hairline);
+    text-align: left;
+    vertical-align: top;
+    min-width: 8em;
+    line-height: 1.6;
+  }
+
+  & th {
+    background: var(--guide-accent-soft);
+    color: var(--ink);
+  }
+
+  & tbody tr:nth-child(even) {
+    background: var(--surface-soft);
+  }
+
+  /* 1 列目は、行の名前として太くする。 */
+  & td:first-child {
+    font-weight: 600;
+    color: var(--ink);
+  }
+}
+
+.guide pre {
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-sm);
+  background: var(--guide-code-bg);
+  color: var(--guide-code-ink);
+  font-size: 13px;
+  line-height: 1.6;
+
+  & code {
+    background: none;
+    color: inherit;
+  }
+}
+
+.guide code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.guide :not(pre) > code {
+  padding: 1px var(--space-1);
+  border-radius: 4px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* 引用するコードの前の「<ファイル> から:」の行（scripts/guide-lib.ts が cite のクラスを付ける） */
+.guide article p.cite {
+  margin-bottom: 0;
+  font-size: 13px;
+  color: var(--muted);
+}

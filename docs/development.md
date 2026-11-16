@@ -31,6 +31,7 @@ pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-
 | `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck・JavaScript とテストの型の確認（`tsc`））と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
 | `mise run pin -- (--local \| --remote) [--unpin] < <ID のファイル>` | ワークスペースに、自動削除と削除から外す印を付ける（外す）。共有のデモに使う管理用のコマンドで、本番（`--remote`）には wrangler の認証が要る。デモの ID を表示やシェルの履歴に残さないよう、ID は標準入力で渡す |
 | `mise run seed -- (--local \| --remote) < <ID のファイル>` | 共有のデモを、サンプルのレシピと写真（`seed/`）の状態に戻す。ローカル（`--local`）では先に別の端末で `mise run dev` を起動しておく。本番（`--remote`）には wrangler の認証が要る。印（`mise run pin`）の付いたワークスペースにだけ入れる。ID は標準入力で渡す |
+| `mise run guide` | アプリの解説（`/about/`）を、`guide/` の元の文章と図から作り直す（下の「解説」）。`mise run lint` は、作り直したものが commit したものと同じかを確かめる |
 | `mise run mwg -- (search \| list \| retrieve) ...` | Web の作り方の指針（modern-web-guidance）を引く。画面の HTML・CSS・JavaScript を書く前に使う（AGENTS.md の「スキル」）。利用統計を送らず、読むだけのサブコマンドに限る |
 | `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
 
@@ -72,6 +73,8 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（上の「テスト」） |
 | `scripts/seed.ts` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
 | `scripts/seed-lib.ts` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
+| `guide/` | アプリの解説（`/about/`）の元の文章（`about.md`）と図の元（`*.d2`。`_style.d2` は図に共通する設定） |
+| `scripts/guide.ts` | 解説を作るスクリプト（`mise run guide`）。印からコードを取り出す部分などは `scripts/guide-lib.ts`、単体テストは `scripts/guide-lib.test.ts` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
 | `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |
@@ -79,6 +82,25 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `scripts/pin-workspace.ts` | ワークスペースに、自動削除と削除から外す印を付ける・外す管理用のスクリプト（`mise run pin`）。出力の読み方は `scripts/pin-lib.ts` にあり、単体テストは `scripts/pin-lib.test.ts` |
 | `scripts/wrangler.ts` | seed と pin が wrangler を動かす部分（失敗の文の伏せ字と、ID の読み方） |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
+
+### 解説（/about）
+
+アプリの作りの解説（`/about/`）は、元の文章（`guide/about.md`）と図の元（`guide/*.d2`）から `mise run guide` で作る。作ったもの（`apps/recipe-box-rs/public/about/index.html` と `apps/recipe-box-rs/public/assets/guide/*.svg`）も commit する。手で直さない。
+
+- Markdown は markdown-it（`package.json` で版を固定）で HTML にし、図は D2（`mise.toml` で版を固定）で SVG にする。どちらも外部と通信しない。
+  - D2 は文字を英字だけのフォントで描くので、日本語の形が英字とそろうよう、生成が SVG のフォントの指定を書き換える（ゴシックを候補に足し、太字は太さを書く。`scripts/guide-lib.ts` の `fontFallback`）。
+    D2 の版を上げて出力の形が変わると、生成が失敗する。そのときは、新しい出力に合わせて `fontFallback` を直す。
+  - 線の文字は斜体にしない（日本語は斜めにならず、英字とそろわない）。各図の元の `...@_style` の次に `(** -> **)[*].style.italic: false` を書く（読み込んだ設定の glob は、読み込んだ先の図に効かないため）。
+- コードと設定は、写して貼らない。`guide/about.md` に `<!-- code: <パス>#<名前> -->` と書き、引用する範囲をそのファイルのコメントの `guide:start <名前>` と `guide:end <名前>` で囲む。印が無いと、生成が失敗する。
+  印のあるコードを動かしたり消したりするときは、印も一緒に動かし、`mise run guide` で作り直す。
+- 図は `<!-- diagram: <名前> | <図の説明> -->` と書き、`guide/<名前>.d2` に図の元を置く。
+  - 図の元の先頭で `...@_style` と書き、共通の設定（`guide/_style.d2`）を読む。配置は ELK（線を水平と垂直の線分で描く）にし、色は役割ごとの class（`actor`・`app`・`service`・`store` など）で付ける。
+  - フロー図では、楕円を始まりと終わり、ひし形を分かれ道（「〜か？」の問いの形で書く）、四角を処理にする。断る（失敗の）流れは必ずひし形から出し、赤の破線（`reject`）で描く。処理の中で決まる失敗は、処理の後に「うまくいったか？」のひし形を置いて、そこから出す（処理の前の確かめに移さない。コードの順と食い違うため）。
+  - 線の交差を最も避け、次に曲がりを減らす。直線で結べるものは直線にする。交差が残るときは、`direction`・要素と線を書く順・線の結び先（枠か、中の要素か）を変えて試す。
+  - 作った SVG は、ブラウザで開いて目で確かめる（`mise run dev` の後に `http://localhost:8787/assets/guide/<名前>.svg`）。
+- リポジトリのファイルへのリンクは `[文字](repo:<パス>)` と書く。公開リポジトリの main のファイルへのリンクになり、ファイルが無ければ生成が失敗する。
+- 上限などの値は、解説に書かずに、原本（docs/spec.md・docs/security.md）へのリンクにする。
+- コードや文書を変えて引用の元が変わったら、`mise run guide` で作り直して一緒に commit する。CI（`mise run lint`）は、作り直したものが commit したものと違えば失敗する。
 
 ## CI と CD
 

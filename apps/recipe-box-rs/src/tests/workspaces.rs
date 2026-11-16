@@ -27,6 +27,7 @@ fn create_workspace_request() -> Request<Body> {
         .unwrap()
 }
 
+// guide:start fake-backend-test
 #[tokio::test]
 async fn create_workspace_returns_new_id() {
     let backend = FakeBackend::default();
@@ -46,6 +47,7 @@ async fn create_workspace_returns_new_id() {
         ["192.0.2.1", "192.0.2.1"]
     );
 }
+// guide:end fake-backend-test
 
 #[tokio::test]
 async fn create_workspace_without_client_ip_uses_unknown_key() {

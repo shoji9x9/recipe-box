@@ -770,3 +770,16 @@ dialog.confirm {
     flex-direction: column;
   }
 }
+
+/* どの画面にも出す、ページの下のリンク（解説の /about など） */
+footer {
+  max-width: var(--width-page);
+  margin: 0 auto;
+  padding: var(--space-6);
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 14px;
+
+  & a {
+    color: var(--muted);
+  }
+}

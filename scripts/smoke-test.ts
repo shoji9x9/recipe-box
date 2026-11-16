@@ -36,6 +36,7 @@ let retryOnWriteLimit = true;
 // 最後の応答。fail は、その本文を出す。
 let status = 0;
 let body = Buffer.alloc(0);
+let responseHeaders = new Headers();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -81,6 +82,7 @@ async function request(method: string, path: string, options: RequestOptions = {
       signal: AbortSignal.timeout(30_000),
     });
     status = response.status;
+    responseHeaders = response.headers;
     body = Buffer.from(await response.arrayBuffer());
   });
 }
@@ -186,6 +188,17 @@ async function main(): Promise<void> {
   await request("GET", "/assets/htmx.min.js");
   expect(200, "GET /assets/htmx.min.js");
   if (!text().includes("htmx")) fail("/assets/htmx.min.js が htmx でない");
+  // 解説（/about）も静的アセットで、Worker が動かないので、CSP などのヘッダーは public/_headers で付ける。
+  // /about は /about/ に移す応答で、どちらにもヘッダーを付ける。
+  for (const [path, expected] of [["/about", 307], ["/about/", 200]] as const) {
+    await request("GET", path);
+    expect(expected, `GET ${path}`);
+    if (!responseHeaders.get("content-security-policy")?.startsWith("default-src 'none'")) {
+      fail(`${path} に CSP が付いていない（public/_headers）`);
+    }
+    if (responseHeaders.get("x-content-type-options") !== "nosniff") fail(`${path} に nosniff が付いていない`);
+  }
+  if (!text().includes("このアプリの作り")) fail("/about/ が解説でない");
 
   console.log("ワークスペースを 2 つ作る");
   await request("POST", "/api/workspaces");

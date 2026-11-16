@@ -1,0 +1,41 @@
+# 全体の構成。mise run guide が SVG にする（docs/development.md の「解説」）。
+...@_style
+# 線の文字を斜体にしない（_style.d2）。
+(** -> **)[*].style.italic: false
+
+direction: down
+
+users: 使う人 {
+  class: group
+  browser: ブラウザ（画面） {class: actor}
+  api_client: API の利用者\n（スモークテスト・seed） {class: actor}
+}
+
+cloudflare: Cloudflare {
+  class: [group; cloudflare]
+  assets: 静的アセット\nCSS・JavaScript・解説 {class: service}
+  worker: Worker\nRust・axum を Wasm で動かす {class: app}
+  cron: Cron Trigger\n毎日 UTC 18 時 {class: service}
+  ratelimit: Rate Limiting\nIP アドレスごとの回数\n（Cloudflare が数える） {class: service}
+  d1: D1\nレシピ・ワークスペース {class: store}
+  r2: R2\n写真のデータ {class: store}
+
+  cron -> worker: 自動削除
+  worker -> ratelimit
+  worker -> d1
+  worker -> r2
+}
+
+# GitHub Actions は、使う人より後に書き、図の下の方に置く。
+# 中の 2 つから別々に線を引くと、使う人からの線と交差するので、線は枠から 1 本にし、何をするかは中の要素に書く。
+github: GitHub Actions {
+  class: [group; github]
+  deploy: deploy.yml\nmain に入ったら\nマイグレーションとデプロイ {class: actor}
+  seed: seed-demo.yml\n毎日 UTC 19 時\nデモを入れ直す（API と wrangler） {class: actor}
+}
+
+users.browser -> cloudflare.assets: ファイルのパス
+users.api_client -> cloudflare.worker: API
+users.browser -> cloudflare.worker: 画面
+cloudflare <- github: デプロイ・デモの入れ直し
+

@@ -64,6 +64,7 @@ const HX_PUSH_URL: HeaderName = HeaderName::from_static("hx-push-url");
 /// - CSP: スクリプトとスタイルは自分のドメインのファイル（htmx・写真の追加の JavaScript・CSS）だけにし、インラインを禁じる。
 ///   写真の追加の JavaScript は、同じドメインに写真を送り（`connect-src`）、失敗の応答の画面から知らせの文を読む。
 /// - Cache-Control: 画面にはワークスペースのデータが入るので、共有のキャッシュに残さない。
+// guide:start security-headers
 const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
     (
         header::CONTENT_SECURITY_POLICY,
@@ -74,6 +75,7 @@ const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
     (header::REFERRER_POLICY, "same-origin"),
     (header::CACHE_CONTROL, "no-store"),
 ];
+// guide:end security-headers
 
 /// 次の画面に一度だけ出す、操作が済んだことの知らせ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

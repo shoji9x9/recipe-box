@@ -28,6 +28,8 @@
 
 ワークスペースは、14 日使わないと、レシピと写真ごと自動で消えます。
 
+このアプリの作り（使っている技術と、その理由）は、[解説のページ](https://recipe-box.shoji9x9.workers.dev/about/)で読めます。アプリのどの画面にもある「このアプリの作り」のリンクからも開けます。
+
 ### 用語
 
 | 用語 | 意味 |
@@ -45,6 +47,7 @@
 | [docs/architecture.md](docs/architecture.md) | 方針と技術構成 |
 | [docs/security.md](docs/security.md) | セキュリティ（費用の対策・サプライチェーン攻撃の対策） |
 | [docs/development.md](docs/development.md) | 開発の始め方・よく使うコマンド・CI と CD |
+| [guide/about.md](guide/about.md) | このアプリの作りの解説の元の文章（アプリの `/about/` で読める） |
 | [AGENTS.md](AGENTS.md) | このリポジトリで作業するコーディングエージェント向けの決まり |
 | [SECURITY.md](SECURITY.md) | 脆弱性の報告の仕方 |
 

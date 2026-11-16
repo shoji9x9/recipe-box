@@ -23,6 +23,8 @@ rumdl = "0.3"
 ghalint = "1"
 # GitHub Actions の workflow lockfile を作る・確かめる gh の拡張機能。
 "github:github/gh-actions-lock" = { version = "0.4.1", bin = "gh-actions-lock" }
+# 解説（/about）の図を、テキストの元（guide/*.d2）から SVG にする（mise run guide）。
+d2 = "0.9"
 
 # よく使う作業。`mise run <名前>` で実行する。CI も同じタスクを使う。
 [tasks.fmt]
@@ -45,6 +47,8 @@ run = [
   { task = "typecheck" },
   # modern-web-guidance のスキルとパッケージの版がそろっているか（AGENTS.md の「スキル」）。
   "scripts/check-mwg-version.sh",
+  # アプリの解説（/about）が、元の文章と引用するファイルから作り直したものと同じか（mise run guide）。
+  "node scripts/guide.ts --check",
 ]
 
 [tasks.typecheck]
@@ -91,6 +95,10 @@ run = "node scripts/smoke-test.ts"
 [tasks.pin]
 description = "ワークスペースに、自動削除と削除から外す印を付ける（管理用。ID は標準入力で渡す。例: mise run pin -- --remote < <ID のファイル>）"
 run = "node scripts/pin-workspace.ts"
+
+[tasks.guide]
+description = "アプリの解説（/about）を、guide/ の元の文章と図から作り直す"
+run = "node scripts/guide.ts"
 
 [tasks.seed]
 description = "共有のデモを、サンプルのレシピと写真の状態に戻す（ID は標準入力で渡す。例: mise run seed -- --remote < <ID のファイル>）"

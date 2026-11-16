@@ -104,6 +104,7 @@ pub struct RecipePage {
 ///
 /// レシピを扱うメソッドは、必ずワークスペースの ID を受け取る。
 /// 実装は、そのワークスペースのレシピだけを読み書きする（ほかのワークスペースのレシピには触れない）。
+// guide:start backend-trait
 pub trait Backend: Clone + Send + Sync + 'static {
     /// 暗号に使える質の 128 ビットの乱数を返す。
     fn random_128(&self) -> [u8; 16];
@@ -124,6 +125,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
 
     /// 書き込む API を呼んでよいかを、呼ぶ人を表すキー（IP アドレスなど）ごとの回数で決める。
     fn allow_write(&self, client_key: &str) -> impl Future<Output = BackendResult<bool>> + Send;
+    // guide:end backend-trait
 
     /// ワークスペースを保存する。`limits` のどれかに達していれば保存せずに `false` を返す。
     /// 数えることと保存することを 1 つのトランザクションで行い、同時に作られても上限を超えないようにする。

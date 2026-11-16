@@ -1,0 +1,725 @@
+<!doctype html>
+<!-- このファイルは mise run guide が guide/about.md から作る。手で直さない（docs/development.md）。 -->
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>このアプリの作り - recipe-box</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/assets/style.css">
+    <link rel="stylesheet" href="/assets/guide.css">
+  </head>
+  <body class="guide">
+    <header>
+      <a class="brand" href="/">recipe-box</a>
+      <nav aria-label="サイト"><a href="/">レシピ帳に戻る</a></nav>
+    </header>
+    <div class="guide-layout">
+      <nav class="toc" aria-labelledby="toc-title">
+        <p class="toc-title" id="toc-title">目次</p>
+        <ol>
+          <li class="toc-2"><a href="#全体の構成">全体の構成</a></li>
+          <li class="toc-2"><a href="#cloudflare-の各サービス">Cloudflare の各サービス</a></li>
+          <li class="toc-3"><a href="#workers">Workers</a></li>
+          <li class="toc-3"><a href="#静的アセット">静的アセット</a></li>
+          <li class="toc-3"><a href="#d1">D1</a></li>
+          <li class="toc-3"><a href="#r2">R2</a></li>
+          <li class="toc-3"><a href="#rate-limiting">Rate Limiting</a></li>
+          <li class="toc-3"><a href="#cron-triggers">Cron Triggers</a></li>
+          <li class="toc-3"><a href="#ローカルの開発と本番へのデプロイ">ローカルの開発と本番へのデプロイ</a></li>
+          <li class="toc-3"><a href="#運用ログwrangler-tailmetrics">運用（ログ・wrangler tail・Metrics）</a></li>
+          <li class="toc-3"><a href="#無料枠などの制約">無料枠などの制約</a></li>
+          <li class="toc-2"><a href="#フロントエンドとバックエンドの技術スタック">フロントエンドとバックエンドの技術スタック</a></li>
+          <li class="toc-3"><a href="#rust">Rust</a></li>
+          <li class="toc-3"><a href="#workers-rs">workers-rs</a></li>
+          <li class="toc-3"><a href="#axum">axum</a></li>
+          <li class="toc-3"><a href="#askama">askama</a></li>
+          <li class="toc-3"><a href="#htmx">htmx</a></li>
+          <li class="toc-3"><a href="#使って分かった難しい点">使って分かった難しい点</a></li>
+          <li class="toc-3"><a href="#リクエストの流れ">リクエストの流れ</a></li>
+          <li class="toc-3"><a href="#javascript-が動かなくても使える作り">JavaScript が動かなくても使える作り</a></li>
+          <li class="toc-3"><a href="#テストの仕組み">テストの仕組み</a></li>
+          <li class="toc-2"><a href="#特徴的な機能">特徴的な機能</a></li>
+          <li class="toc-3"><a href="#ワークスペースによるデータの分離">ワークスペースによるデータの分離</a></li>
+          <li class="toc-3"><a href="#費用の対策">費用の対策</a></li>
+          <li class="toc-3"><a href="#写真の保管">写真の保管</a></li>
+          <li class="toc-3"><a href="#共有のデモと-seed">共有のデモと seed</a></li>
+          <li class="toc-3"><a href="#ciセキュリティサプライチェーン攻撃への対策">CI・セキュリティ・サプライチェーン攻撃への対策</a></li>
+          <li class="toc-2"><a href="#リライトで選ぶもの">リライトで選ぶもの</a></li>
+        </ol>
+      </nav>
+      <main>
+        <h1>このアプリの作り</h1>
+        <article>
+<p>recipe-box は、料理のレシピを登録・検索できる Web アプリです。ログインは無く、推測できない ID の「ワークスペース」でデータを分けます。
+このページは、アプリの作りを次の 2 者に向けて説明します。</p>
+<ul>
+<li>リライト前の技術スタック（Rust・Cloudflare Workers など）を初めて使う人。全体の構成と、それぞれの技術を選んだ理由・使い方。</li>
+<li>リライトをする人。言語やフレームワークのほかに、このアプリならではの仕組み（定期実行・写真の保管・レート制限など）の代わりに何を選ばなければならないかと、選ぶときに守る仕様。</li>
+</ul>
+<p>仕様の原本は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md">docs/spec.md</a>、上限などの費用の対策は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md">docs/security.md</a>、方針は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md">docs/architecture.md</a> です。
+このページは、それらへの案内と、コードの読み方の説明です。値が食い違うときは、原本が正しいものとします。</p>
+<p>このページは、元の文章（<a href="https://github.com/shoji9x9/recipe-box/blob/main/guide/about.md">guide/about.md</a>）から <code>mise run guide</code> で作ります。引用するコードは、作るたびにリポジトリのファイルから取り出すので、コードと食い違いません。</p>
+<h2 id="全体の構成">全体の構成</h2>
+<p><a href="/assets/guide/architecture.svg"><img src="/assets/guide/architecture.svg" alt="全体の構成。ブラウザと API の利用者が Cloudflare の Worker と静的アセットにアクセスし、Worker が D1・R2・Rate Limiting を使う。Cron Trigger が毎日 Worker を呼ぶ。GitHub Actions がデプロイとデモの入れ直しをする"></a></p>
+<p>図の見方: 枠は、まとまり（使う人・Cloudflare・GitHub Actions）で、名前は枠の左上の外に書きます。円柱はデータを置くところ（D1・R2）です。四角は、灰色が使う人と GitHub Actions のジョブ、橙が Cloudflare の機能、赤（画面のボタンと同じ色）がこのアプリのコード（Worker）です。</p>
+<ul>
+<li>画面（HTML）と API（JSON）を、同じ 1 つの Worker が返します。画面は API を呼ばず、Worker の中で同じ処理を使います。</li>
+<li>CSS・JavaScript・このページなどのファイルは、Workers の静的アセットとして配ります。Worker は動きません。</li>
+<li>データは D1（SQLite）に、写真のデータは R2（オブジェクトストレージ）に置きます。</li>
+<li>使われていないワークスペースは、Cron Trigger で毎日消します。</li>
+<li>デプロイと、共有のデモの入れ直しは、GitHub Actions が行います。</li>
+</ul>
+<h2 id="cloudflare-の各サービス">Cloudflare の各サービス</h2>
+<p>使っているサービスは、すべて <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/wrangler.toml">apps/recipe-box-rs/wrangler.toml</a> に書いています。binding（<code>DB</code> など）は、コードからサービスを使うときの名前です。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/wrangler.toml">apps/recipe-box-rs/wrangler.toml</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-toml"># レシピなどを保存する D1 のデータベース。
+# database_id はアカウントごとの値なので書かない。wrangler は database_name で探す。
+[[d1_databases]]
+binding = &quot;DB&quot;
+database_name = &quot;recipe-box&quot;
+
+# 写真を置く R2 のバケット。無ければ deploy.yml が作る。
+# 上限（docs/security.md の「費用の対策」）は、書き込む前に D1 で判定する。
+[[r2_buckets]]
+binding = &quot;PHOTOS&quot;
+bucket_name = &quot;recipe-box-photos&quot;
+
+# 定期実行。毎日 UTC の 18 時（日本時間の 3 時）に、14 日使われていないワークスペースを消す（src/workspace.rs の delete_unused）。
+[triggers]
+crons = [&quot;0 18 * * *&quot;]
+
+# 共有のデモのワークスペースの ID は、secret の DEMO_WORKSPACE_ID に置く（ID を知れば API で書き込めるので、公開しない）。
+# 無ければ、Cookie の無い人には説明とワークスペースを作るボタンだけを出す。
+
+# ワークスペースを作る回数の制限。1 つの IP アドレスから 60 秒に 10 回まで。
+# Cloudflare の拠点ごとに数える、おおよその制限である。
+[[ratelimits]]
+name = &quot;WORKSPACE_CREATION_LIMITER&quot;
+# アカウントの中で重ならない正の整数。
+namespace_id = &quot;1001&quot;
+simple = { limit = 10, period = 60 }
+
+# 書き込む API（レシピの登録・更新・削除と、写真の追加・削除）の回数の制限。1 つの IP アドレスから 60 秒に 30 回まで。
+# ワークスペースを調べる前に断り、D1 の読み書きを連打で増やさせない。おおよその制限である。
+[[ratelimits]]
+name = &quot;WRITE_LIMITER&quot;
+namespace_id = &quot;1002&quot;
+simple = { limit = 30, period = 60 }
+</code></pre>
+<h3 id="workers">Workers</h3>
+<p>Cloudflare の拠点で、リクエストごとにコードを動かす実行環境です。サーバーを用意せず、リクエストが来たときだけ動きます。
+このアプリは Rust を WebAssembly（Wasm）にして動かします（<a href="#workers-rs">workers-rs</a>）。</p>
+<p>制約で作りが変わるのは、次の 2 つです（値は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">docs/security.md の「費用の対策」</a>）。</p>
+<ul>
+<li>無料のプランでは、1 回のリクエストの CPU 時間が 10 ms に決まっています。写真のように大きな本文を Wasm に読みためると、これを大きく超えます（<a href="#%E5%86%99%E7%9C%9F%E3%81%AE%E4%BF%9D%E7%AE%A1">写真の保管</a>）。</li>
+<li>無料のプランでは、1 日のリクエストの数に上限があり、超えると止まります。課金はされません。</li>
+</ul>
+<h3 id="静的アセット">静的アセット</h3>
+<p><code>apps/recipe-box-rs/public/</code> の下のファイルを、Worker を起動せずに配ります。パスがファイルに当たらないリクエストだけを、Worker が受け取ります。
+Worker のリクエストの数に入らないので、費用がかかりません。このページ（<code>/about</code>）も静的アセットです。</p>
+<p>画面の応答のヘッダー（CSP など）は Worker が付けますが、静的アセットには Worker が動かないので、<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/public/_headers">public/_headers</a> で付けます。</p>
+<h3 id="d1">D1</h3>
+<p>SQLite を元にしたデータベースです。ワークスペース・レシピ・写真の行（大きさなど）を置きます。
+SQL は標準の範囲で書き、リライトで別の DB（PostgreSQL など）へ移しても差が出にくいようにしています（<a href="https://github.com/shoji9x9/recipe-box/blob/main/AGENTS.md">AGENTS.md の「SQL」</a>）。
+標準から外れるのは、ページ分けの <code>LIMIT ? OFFSET ?</code> と、料理名の部分一致の <code>instr</code> です。</p>
+<p>D1 は、複数の文を <code>batch</code> で 1 つのトランザクションとして実行できます。上限を数えることと保存することを 1 つにまとめ、同時に作られても上限を超えないようにしています（<a href="#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a>）。
+テーブルを作る SQL は、番号を付けたマイグレーションのファイル（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/migrations">apps/recipe-box-rs/migrations/</a>）です。デプロイでは、コードを入れ替える前にマイグレーションを当てるので、マイグレーションは表や列を足すだけにします。</p>
+<h3 id="r2">R2</h3>
+<p>写真のデータを置くオブジェクトストレージです。キーと、写真のバイト列を置きます。
+無料の範囲を超えると課金され、利用を止める上限の設定がありません。そのため、R2 に書き込む前に、D1 で上限を判定します（<a href="#%E5%86%99%E7%9C%9F%E3%81%AE%E4%BF%9D%E7%AE%A1">写真の保管</a>）。</p>
+<h3 id="rate-limiting">Rate Limiting</h3>
+<p>キー（このアプリでは IP アドレス）ごとに、決まった時間の中の回数を数える機能です。Worker の binding として使います。
+Cloudflare の拠点ごとに数える、おおよその制限です。厳密な上限は、D1 で数えるアプリ全体の上限が担います（<a href="#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a>）。</p>
+<h3 id="cron-triggers">Cron Triggers</h3>
+<p>決まった時刻に Worker を呼ぶ機能です。毎日 UTC の 18 時（日本時間の 3 時）に、14 日使われていないワークスペースを消します（<a href="#%E3%83%AF%E3%83%BC%E3%82%AF%E3%82%B9%E3%83%9A%E3%83%BC%E3%82%B9%E3%81%AB%E3%82%88%E3%82%8B%E3%83%87%E3%83%BC%E3%82%BF%E3%81%AE%E5%88%86%E9%9B%A2">ワークスペースによるデータの分離</a>）。
+Worker は、リクエストの入口（<code>fetch</code>）とは別の入口（<code>scheduled</code>）で呼ばれます。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[event(scheduled)]
+async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
+    console_error_panic_hook::set_once();
+    let summary = workspace::delete_unused(&amp;CloudflareBackend::new(env)).await;
+    // 失敗の理由は、失敗したところでログに出している（error::log_error）。
+    if summary.has_failure() {
+        worker::console_error!(&quot;使われていないワークスペースの自動削除: {summary:?}&quot;);
+    } else {
+        worker::console_log!(&quot;使われていないワークスペースの自動削除: {summary:?}&quot;);
+    }
+}
+</code></pre>
+<h3 id="ローカルの開発と本番へのデプロイ">ローカルの開発と本番へのデプロイ</h3>
+<p><code>wrangler</code> は、Workers の開発とデプロイの道具です。<code>wrangler dev</code>（<code>mise run dev</code>）は、Workers の実行環境（workerd）と、D1・R2・Rate Limiting をまねたもの（Miniflare）を手元で動かします。
+Cloudflare のアカウントは要りません。データは <code>apps/recipe-box-rs/.wrangler/state</code> に置かれます。
+手順は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/development.md">docs/development.md</a> にあります。</p>
+<p>main に入った変更は、GitHub Actions の <code>deploy.yml</code> が本番にデプロイします。D1 と R2 のバケットが無ければ作り、D1 にマイグレーションを当ててから、Worker を入れ替えます。
+ローカルと本番で動きが違うもの（Cron Trigger の起動のしかた、回数の制限の数え方など）は、<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E3%83%AA%E3%83%A9%E3%82%A4%E3%83%88%E3%81%AE%E6%AF%94%E8%BC%83%E3%81%AE%E5%9F%BA%E6%BA%96">docs/architecture.md の「リライトの比較の基準」</a>に表があります。</p>
+<h3 id="運用ログwrangler-tailmetrics">運用（ログ・wrangler tail・Metrics）</h3>
+<ul>
+<li>Workers のログ（<code>[observability]</code>）: アプリが <code>console</code> に出したもの（エラーなど）を、後からダッシュボードで見られます。
+リクエストごとの記録（invocation logs）は残しません。API の <code>X-Workspace-Id</code>（ワークスペースの ID）が残るかもしれないためです。</li>
+<li><code>wrangler tail</code>: 本番のリクエストとログを、その場で流して見ます。残りません。リクエストごとの CPU 時間は、ここで見ます。</li>
+<li>ダッシュボードの Metrics: リクエストの数・エラーの割合・CPU 時間の傾向を見ます。</li>
+</ul>
+<p>ワークスペースの ID は、知ればそのワークスペースを読み書きできる鍵なので、ログに残しません。アプリがエラーを出すときは、ID の形の文字の並びを伏せてから出します。
+理由は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E3%83%AD%E3%82%B0">docs/security.md の「ログ」</a>に、見方は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/development.md#%E6%9C%AC%E7%95%AA%E3%81%AE%E3%83%AD%E3%82%B0">docs/development.md の「本番のログ」</a>にあります。</p>
+<h3 id="無料枠などの制約">無料枠などの制約</h3>
+<p>サービスごとの無料の範囲と、使いすぎたときの動き（止まるか、課金されるか）は、<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">docs/security.md の「費用の対策」</a>の表にあります（2026-11 時点の公式の文書による）。
+無料の範囲は変わることがあるので、使う前に公式の文書で確かめてください。</p>
+<ul>
+<li><a href="https://developers.cloudflare.com/workers/platform/limits/">Workers の制限</a></li>
+<li><a href="https://developers.cloudflare.com/d1/platform/limits/">D1 の制限</a></li>
+<li><a href="https://developers.cloudflare.com/r2/pricing/">R2 の料金</a></li>
+</ul>
+<h2 id="フロントエンドとバックエンドの技術スタック">フロントエンドとバックエンドの技術スタック</h2>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>使うもの</th>
+<th>似た TypeScript の技術</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>言語</td>
+<td>Rust（Wasm にして動かす）</td>
+<td>TypeScript</td>
+</tr>
+<tr>
+<td>Workers との橋渡し</td>
+<td>workers-rs</td>
+<td>Workers の JavaScript の API をそのまま使う</td>
+</tr>
+<tr>
+<td>Web フレームワーク</td>
+<td>axum</td>
+<td>Hono・Express</td>
+</tr>
+<tr>
+<td>入力の確かめ</td>
+<td>serde と、自分で書いた確かめの関数</td>
+<td>Zod</td>
+</tr>
+<tr>
+<td>DB の読み書き</td>
+<td>SQL を直接書く（D1 の API）</td>
+<td>Drizzle・Kysely</td>
+</tr>
+<tr>
+<td>HTML</td>
+<td>askama（テンプレート）</td>
+<td>React（JSX）・Hono の JSX</td>
+</tr>
+<tr>
+<td>画面の部分の入れ替え</td>
+<td>htmx</td>
+<td>React・Alpine.js</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>全体の一覧は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E6%8A%80%E8%A1%93%E6%A7%8B%E6%88%90%E3%83%AA%E3%83%A9%E3%82%A4%E3%83%88%E5%89%8D">docs/architecture.md の「技術構成（リライト前）」</a>にあります。
+リライト後の技術スタックは決めていません。リライトの題材として差が出るよう、リライト前は、Web アプリでよく使われる TypeScript の構成とは異なる技術を選んでいます。表の右の列は、読む人が知っていそうな技術との対応で、リライト後の候補を示すものではありません。</p>
+<h3 id="rust">Rust</h3>
+<p>型と所有権で、メモリの安全とデータの競合の無さをコンパイルのときに確かめる言語です。
+Workers では Wasm にして動かします。JavaScript と違い、<code>null</code> の代わりに <code>Option</code>、例外の代わりに <code>Result</code> を使い、失敗しうる処理をすべて型で表します。</p>
+<p>TypeScript と比べた違い:</p>
+<ul>
+<li>型を実行のときに消さず、コンパイルのときにすべて確かめます。<code>any</code> に当たる抜け道がありません。</li>
+<li>ガベージコレクションが無く、値の持ち主（所有権）がスコープを出たときに片付けます。</li>
+<li>非同期の処理（<code>async</code>）は同じ考え方ですが、<code>Future</code> を動かす仕組み（ランタイム）を選ぶ必要があります。Workers では、JavaScript の Promise の上で動かします。</li>
+</ul>
+<h3 id="workers-rs">workers-rs</h3>
+<p>Rust から Workers の機能（リクエスト・D1・R2・Rate Limiting など）を使うためのライブラリです。
+<code>#[event(fetch)]</code> を付けた関数が、リクエストの入口になります。このアプリは、受け取ったリクエストを axum の Router に渡します。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[event(fetch)]
+async fn fetch(
+    req: worker::Request,
+    env: Env,
+    ctx: Context,
+) -&gt; worker::Result&lt;axum::http::Response&lt;axum::body::Body&gt;&gt; {
+    // panic したときに、原因をログに出す。
+    console_error_panic_hook::set_once();
+    // 写真のバイト列をそのまま送るリクエストは、本文を読みためずに R2 へ流す（[`stream`]）。
+    let req = stream::split_photo_body(req)?;
+    Ok(router(CloudflareBackend::with_context(env, ctx))
+        .call(req)
+        .await?)
+}
+</code></pre>
+<p>ビルドは <code>worker-build</code> が行います。Rust を Wasm にし、wasm-bindgen で JavaScript との橋渡しのコードを作り、wasm-opt で小さくします。</p>
+<h3 id="axum">axum</h3>
+<p>Rust の Web フレームワークです。パスとメソッドの組（Router）に、ハンドラーの関数を結び付けます。
+Hono と同じく、ミドルウェア（middleware）で前後の処理を足せます。このアプリは、書き込む API の前に、回数と本文の大きさを確かめる middleware を付けています。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/lib.rs">apps/recipe-box-rs/src/lib.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">fn recipe_routes&lt;B: Backend&gt;(backend: B) -&gt; Router&lt;B&gt; {
+    Router::new()
+        .route(&quot;/recipes&quot;, get(recipe::list::&lt;B&gt;).post(recipe::create::&lt;B&gt;))
+        .route(
+            &quot;/recipes/{id}&quot;,
+            get(recipe::get::&lt;B&gt;)
+                .put(recipe::update::&lt;B&gt;)
+                .delete(recipe::delete::&lt;B&gt;),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            backend,
+            limits::limit_writes::&lt;B&gt;,
+        ))
+}
+</code></pre>
+<p>axum らしい点は、extractor です。ハンドラーの引数の型を書くと、axum がリクエストからその値を取り出してから、ハンドラーを呼びます。
+取り出せなければ、ハンドラーを呼ばずに失敗の応答を返します。このアプリは、ワークスペースの ID を確かめる extractor（<code>Workspace</code>）を作り、ID の要る API の引数にしています。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/workspace.rs">apps/recipe-box-rs/src/workspace.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">impl&lt;B: Backend&gt; FromRequestParts&lt;B&gt; for Workspace {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &amp;mut Parts, backend: &amp;B) -&gt; Result&lt;Self, Self::Rejection&gt; {
+        let mut values = parts.headers.get_all(WORKSPACE_ID_HEADER).iter();
+        let value = values.next().ok_or(ApiError::WorkspaceIdMissing)?;
+        // 同じヘッダーが 2 つ以上あると、どちらのワークスペースか決められないので受け付けない。
+        if values.next().is_some() {
+            return Err(ApiError::WorkspaceIdInvalid);
+        }
+        // ASCII でない値（to_str が失敗する）・空・前後の空白も、ID の形でないので受け付けない。
+        let id = value
+            .to_str()
+            .ok()
+            .and_then(WorkspaceId::parse)
+            .ok_or(ApiError::WorkspaceIdInvalid)?;
+        if !touch(backend, &amp;id).await? {
+            return Err(ApiError::WorkspaceNotFound);
+        }
+        Ok(Self { id })
+    }
+}
+</code></pre>
+<p>Hono なら、<code>c.req.header()</code> で値を取り、ハンドラーの中で確かめます。axum では、引数に <code>Workspace</code> を書き忘れると ID を使えないので、確かめ忘れが起きにくくなります。
+入力の JSON は serde で型に読み込み、長さなどは自分で書いた関数で確かめます。Zod のように、1 つの定義から型と確かめの両方を作るものではありません。</p>
+<h3 id="askama">askama</h3>
+<p>HTML のテンプレートを、コンパイルのときに Rust のコードにするライブラリです。テンプレートが参照する値の名前と型を、コンパイルのときに確かめます。
+値は既定で HTML のエスケープを行います。テンプレートは <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates">apps/recipe-box-rs/templates/</a> にあります。</p>
+<p>React は、ブラウザ（か、サーバーの JavaScript）で部品を組み立てます。askama は、サーバーで HTML の文字列を作るだけで、ブラウザには HTML だけが届きます。</p>
+<h3 id="htmx">htmx</h3>
+<p>HTML の属性で、「この操作でサーバーに HTML を取りに行き、ページのこの部分を入れ替える」を書くライブラリです。
+一覧の検索では、入力しながら一覧の部分だけを入れ替えます。サーバーは、ふつうの一覧の画面の HTML を返し、htmx がその中の <code>#results</code> だけを取り出して入れ替えます。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/list.html">apps/recipe-box-rs/templates/list.html</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">&lt;input id=&quot;q&quot; type=&quot;search&quot; name=&quot;q&quot; value=&quot;{{ q }}&quot; placeholder=&quot;料理名で探す&quot; autocomplete=&quot;off&quot; data-search-input
+       hx-get=&quot;/&quot; hx-trigger=&quot;search-input changed delay:300ms, search&quot;
+       hx-target=&quot;#results&quot; hx-select=&quot;#results&quot; hx-swap=&quot;outerHTML&quot; hx-push-url=&quot;true&quot;&gt;
+</code></pre>
+<p>React で同じことをすると、API から JSON を取り、ブラウザで HTML を組み立てます。htmx では、HTML を作るのはいつもサーバーで、画面の状態をブラウザに持ちません。
+CSP でインラインのスクリプトと <code>eval</code> を禁じているので、htmx もそれらを使わない設定にしています（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/base.html">apps/recipe-box-rs/templates/base.html</a> の <code>htmx-config</code>）。</p>
+<h3 id="使って分かった難しい点">使って分かった難しい点</h3>
+<h4 id="send-の扱い"><code>Send</code> の扱い</h4>
+<p>axum は、ハンドラーの <code>Future</code> に <code>Send</code>（別のスレッドに渡せること）を求めます。ところが、Workers の値（D1 のデータベースなど）は JavaScript の値なので <code>Send</code> ではありません。
+Workers は 1 つのスレッドで動くので、実際には別のスレッドに渡ることはありません。そこで、workers-rs の <code>SendWrapper</code>・<code>SendFuture</code> で包んで、<code>Send</code> として扱います。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">apps/recipe-box-rs/src/cloudflare.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">pub struct CloudflareBackend {
+    env: SendWrapper&lt;Env&gt;,
+    /// リクエストの context（`waitUntil` に使う）。定期実行には無い。
+    ctx: Option&lt;SendWrapper&lt;Rc&lt;Context&gt;&gt;&gt;,
+}
+</code></pre>
+<h4 id="wasm-の上で動かす制約">Wasm の上で動かす制約</h4>
+<ul>
+<li>普通の <code>cargo test</code> は Wasm でなく手元の OS で動くので、D1 などの Workers の機能を使えません。そのため、外の機能を <code>Backend</code> トレイトに分け、テストでは偽物に差し替えます（<a href="#%E3%83%86%E3%82%B9%E3%83%88%E3%81%AE%E4%BB%95%E7%B5%84%E3%81%BF">テストの仕組み</a>）。</li>
+<li>乱数は、Workers の Web Crypto（<code>crypto.getRandomValues()</code>）を wasm-bindgen で呼びます。</li>
+<li>リリースのビルドは、<code>strip</code> を使いません。wasm-bindgen が Wasm の機能を調べる節まで消えるためです（ルートの <a href="https://github.com/shoji9x9/recipe-box/blob/main/Cargo.toml">Cargo.toml</a>）。</li>
+</ul>
+<h4 id="本文を-wasm-に写すときの-cpu-時間">本文を Wasm に写すときの CPU 時間</h4>
+<p>写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
+そこで、写真のバイト列をそのまま送る追加では、本文を読みためず、形式を決めるための先頭の数バイトだけを読み、残りはストリームのまま R2 に流します。
+測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> に、仕組みは <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a> と <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
+<h3 id="リクエストの流れ">リクエストの流れ</h3>
+<p><a href="/assets/guide/request-flow.svg"><img src="/assets/guide/request-flow.svg" alt="リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口に進む。ルートが無ければ 404 か 405、書き込みの回数・本文の大きさ・送り元が許す範囲になければ 429・413・403 で断る。通れば、ワークスペースを使うルートなら使うワークスペースを決め（API で ID が誤っていれば 400 か 404 で断る。画面で自分のワークスペースも共有のデモも無ければ「はじめる」画面へ移す）、ハンドラーが入力を確かめ（通らなければ断る）、D1・R2 を使う。上限などで失敗すれば断り、うまくいけば応答を返す"></a></p>
+<p>図の見方: 楕円は始まりと終わりです。紫のひし形は「はい」と「いいえ」で先が分かれる問いで、断る応答は必ずひし形から出ます。赤の四角はこのアプリのコードの処理です。処理の中で決まる失敗（D1 に書くときに数える上限など）は、処理の後の「うまくいったか？」から断ります。赤の破線は断る応答を返す流れで、色の見分けにくい人や白黒の印刷でも通常の流れと区別できるよう、色に加えて破線にしています。</p>
+<ul>
+<li>静的アセットに当たるパスは、Worker を通りません。</li>
+<li>画面の応答には、middleware が CSP などのヘッダーを付けます（図では省いています）。</li>
+<li>書き込む API と画面の書き込みには、middleware が IP アドレスごとの回数と本文の大きさを確かめます。</li>
+<li>ワークスペースは、API では extractor が <code>X-Workspace-Id</code> で確かめ、画面では middleware が Cookie の ID を使い、無ければ共有のデモを見せます。ID の要らない API（ワークスペースの作成など）は、図の「ワークスペースを使うルートか？」で「いいえ」に進みます。どちらも、ワークスペースを使うと最終利用日時を更新します（自動削除が見る日時です。前の更新から 1 時間以上たっているときだけ書き換えます）。</li>
+<li>ハンドラーは、<code>Backend</code> トレイトを通して D1・R2 を使います。</li>
+</ul>
+<h3 id="javascript-が動かなくても使える作り">JavaScript が動かなくても使える作り</h3>
+<p>画面は、JavaScript が動かなくても、すべての操作ができます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E7%94%BB%E9%9D%A2">docs/spec.md の「画面」</a>）。JavaScript は、使い心地を良くするためだけに使います。</p>
+<ul>
+<li>画面の移動とフォームは、ふつうのリンクとフォーム（<code>&lt;a&gt;</code>・<code>&lt;form method=&quot;post&quot;&gt;</code>）です。<code>&lt;body hx-boost=&quot;true&quot;&gt;</code> で、htmx が動けば、ページの全体を読み直さずに中身を入れ替えます。htmx が動かなければ、ふつうに移動します。</li>
+<li>書き込みは、POST の後に別の画面へ移す（リダイレクトする）ので、再読み込みで二重に送りません。</li>
+<li>削除の確認のダイアログは、Invoker Commands（<code>commandfor</code>・<code>command</code> 属性）で開閉します。ボタンの属性だけで <code>&lt;dialog&gt;</code> を開けるので、スクリプトが要りません。</li>
+</ul>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/delete_dialog.html">apps/recipe-box-rs/templates/delete_dialog.html</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-html">{%- macro delete_dialog(dialog_id, dialog_open, dialog_title, dialog_text, dialog_action) %}
+&lt;button type=&quot;button&quot; class=&quot;text danger&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;show-modal&quot;&gt;{{ dialog_open }}&lt;/button&gt;
+&lt;dialog id=&quot;{{ dialog_id }}&quot; class=&quot;confirm&quot; aria-labelledby=&quot;{{ dialog_id }}-title&quot;&gt;
+  &lt;h2 id=&quot;{{ dialog_id }}-title&quot;&gt;{{ dialog_title }}&lt;/h2&gt;
+  &lt;p&gt;{{ dialog_text }}&lt;/p&gt;
+  &lt;div class=&quot;actions&quot;&gt;
+    &lt;button type=&quot;button&quot; commandfor=&quot;{{ dialog_id }}&quot; command=&quot;close&quot;&gt;やめる&lt;/button&gt;
+    &lt;form method=&quot;post&quot; action=&quot;{{ dialog_action }}&quot;&gt;
+      {{- caller() }}
+      &lt;button type=&quot;submit&quot; class=&quot;primary danger-fill&quot;&gt;削除する&lt;/button&gt;
+    &lt;/form&gt;
+  &lt;/div&gt;
+&lt;/dialog&gt;
+{%- endmacro %}
+</code></pre>
+<p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）だけです。どちらも、動かなければふつうのフォームとして働きます。</p>
+<h3 id="テストの仕組み">テストの仕組み</h3>
+<p>アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分は、<code>Backend</code> トレイトにまとめています。</p>
+<p>次は、トレイトの先頭（乱数・時計・回数の制限）だけです。ワークスペース・レシピ・写真を読み書きするメソッドが続きます（全体は <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a>）。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">pub trait Backend: Clone + Send + Sync + 'static {
+    /// 暗号に使える質の 128 ビットの乱数を返す。
+    fn random_128(&amp;self) -&gt; [u8; 16];
+
+    /// 今の時刻を UNIX 時間のミリ秒で返す。
+    fn now_millis(&amp;self) -&gt; i64;
+
+    /// 共有のデモのワークスペースの ID。設定されていなければ `None`。
+    ///
+    /// ID を知れば誰でも API で書き込めるので、画面には出さない。
+    fn demo_workspace_id(&amp;self) -&gt; Option&lt;WorkspaceId&gt;;
+
+    /// ワークスペースを作ってよいかを、作る人を表すキー（IP アドレスなど）ごとの回数で決める。
+    fn allow_workspace_creation(
+        &amp;self,
+        client_key: &amp;str,
+    ) -&gt; impl Future&lt;Output = BackendResult&lt;bool&gt;&gt; + Send;
+
+    /// 書き込む API を呼んでよいかを、呼ぶ人を表すキー（IP アドレスなど）ごとの回数で決める。
+    fn allow_write(&amp;self, client_key: &amp;str) -&gt; impl Future&lt;Output = BackendResult&lt;bool&gt;&gt; + Send;
+</code></pre>
+<p>本番では Cloudflare の機能を使う実装（<code>CloudflareBackend</code>）を、テストではメモリの中で動く偽物（<code>FakeBackend</code>）を使います。
+テストは、偽物を入れた Router にリクエストを送り、応答と、偽物に残ったデータを確かめます。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/tests/workspaces.rs">apps/recipe-box-rs/src/tests/workspaces.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[tokio::test]
+async fn create_workspace_returns_new_id() {
+    let backend = FakeBackend::default();
+    let first = send(router(backend.clone()), create_workspace_request()).await;
+    let second = send(router(backend.clone()), create_workspace_request()).await;
+
+    assert_eq!(first.status, StatusCode::CREATED);
+    assert_eq!(first.content_type, &quot;application/json&quot;);
+    let id = first.json()[&quot;id&quot;].as_str().unwrap().to_owned();
+    assert!(WorkspaceId::parse(&amp;id).is_some(), &quot;{id}&quot;);
+    assert_ne!(second.json()[&quot;id&quot;].as_str().unwrap(), id);
+    // 作ったワークスペースが保存され、最終利用日時が今になっている。
+    assert_eq!(backend.workspaces.lock().unwrap().get(&amp;id), Some(&amp;NOW));
+    // 接続元の IP アドレスが、レート制限のキーとして渡っている。
+    assert_eq!(
+        *backend.rate_limit_keys.lock().unwrap(),
+        [&quot;192.0.2.1&quot;, &quot;192.0.2.1&quot;]
+    );
+}
+</code></pre>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>テスト</th>
+<th>確かめること</th>
+<th>動かし方</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rust のテスト（<code>apps/recipe-box-rs/src/tests/</code> など）</td>
+<td>API と画面の応答、上限、データの分離</td>
+<td><code>mise run test</code>（<code>cargo test</code>）</td>
+</tr>
+<tr>
+<td>JavaScript のテスト（vitest）</td>
+<td>画面の JavaScript と、Node のスクリプト（seed など）</td>
+<td><code>mise run test</code></td>
+</tr>
+<tr>
+<td>スモークテスト（<a href="https://github.com/shoji9x9/recipe-box/blob/main/scripts/smoke-test.ts">scripts/smoke-test.ts</a>）</td>
+<td>ローカルの Worker に API を呼び、本物に近い D1・R2・Rate Limiting を通して確かめる</td>
+<td><code>mise run smoke</code>（CI でも動く）</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>スモークテストは API だけを使うので、リライトの後の新しいアプリにも、そのまま当てられます。</p>
+<h2 id="特徴的な機能">特徴的な機能</h2>
+<h3 id="ワークスペースによるデータの分離">ワークスペースによるデータの分離</h3>
+<p>ログインの代わりに、推測できない ID でデータを分けます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%AF%E3%83%BC%E3%82%AF%E3%82%B9%E3%83%9A%E3%83%BC%E3%82%B9%E3%81%AB%E3%82%88%E3%82%8B%E3%83%87%E3%83%BC%E3%82%BF%E3%81%AE%E5%88%86%E9%9B%A2">docs/spec.md の「ワークスペースによるデータの分離」</a>）。</p>
+<ul>
+<li><strong>ID の作り方</strong>: 128 ビットの乱数（Web Crypto）を、16 進数の小文字 32 文字で表します。</li>
+<li><strong>受け取り方</strong>: API は <code>X-Workspace-Id</code> ヘッダーで、画面は Cookie（<code>__Host-</code> で始まる名前、HttpOnly・Secure・SameSite=Lax）で受け取ります。</li>
+<li><strong>データの分け方</strong>: すべてのクエリを <code>workspace_id</code> で絞り込みます。ID を知っている人だけが、そのワークスペースを読み書きできます。</li>
+<li><strong>ワークスペースの削除</strong>: 画面と API から、レシピと写真ごと消せます。共有のデモは消させません。</li>
+<li><strong>自動削除</strong>: 最後に使われてから 14 日たったワークスペースを、Cron Trigger で毎日消します。対象を選んでから 1 つずつ消すので、消す直前に、最終利用日時を読み直して、使われていれば消しません。</li>
+</ul>
+<p>最終利用日時は、ワークスペースを使うたびに書き換えると、読むだけの API でも DB に書き込むことになります。そのため、前の書き換えから 1 時間以上たっているときだけ書き換えます。</p>
+<h3 id="費用の対策">費用の対策</h3>
+<p>ログインの無い公開アプリなので、誰でも API を呼べます。上限は 3 つの層で設けます（値は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">docs/security.md の「費用の対策」</a>の表）。</p>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>層</th>
+<th>仕組み</th>
+<th>回避の手段</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IP アドレスごと</td>
+<td>Rate Limiting。おおよその回数</td>
+<td>IP アドレスを変える</td>
+</tr>
+<tr>
+<td>ワークスペースごと</td>
+<td>D1 で数える。レシピの数・本文の大きさ・写真の枚数と合計</td>
+<td>ワークスペースを作り直す</td>
+</tr>
+<tr>
+<td>アプリ全体</td>
+<td>D1 で数えて厳密に判定する。ワークスペースの数・1 日に作る数・写真の合計・1 日の追加の回数</td>
+<td>回避できない</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>IP アドレスごとの回数は、Cloudflare が入れる <code>cf-connecting-ip</code> ヘッダーで数えます。IPv6 は、1 人が使える範囲（上位 64 ビット）でまとめて数えます。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/limits.rs">apps/recipe-box-rs/src/limits.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">pub fn client_key(headers: &amp;HeaderMap) -&gt; String {
+    let ip = headers
+        .get(CLIENT_IP_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::&lt;IpAddr&gt;().ok())
+        // `::ffff:192.0.2.1` のような IPv4 射影アドレスは、IPv4 のアドレスにそろえる。
+        .map(|ip| ip.to_canonical());
+    match ip {
+        Some(IpAddr::V4(v4)) =&gt; v4.to_string(),
+        Some(IpAddr::V6(v6)) =&gt; {
+            // to_bits() は 128 ビットの整数を返す。下位 64 ビットを 0 にして、/64 の範囲の先頭にする。
+            let prefix = Ipv6Addr::from_bits(v6.to_bits() &amp; !u128::from(u64::MAX));
+            format!(&quot;{prefix}/64&quot;)
+        }
+        None =&gt; &quot;unknown&quot;.to_owned(),
+    }
+}
+</code></pre>
+<p>アプリ全体の上限は、数えることと保存することを 1 つのトランザクションにして、同時に作られても超えないようにします。
+1 日に作った数は、ワークスペースを消しても残る記録（<code>workspace_creations</code>）で数え、作ると消すを繰り返して超えさせません。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">apps/recipe-box-rs/src/cloudflare.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">// 上限の判定と保存を 1 つの文にして、同時に作られても上限を超えないようにする。
+// FROM の (VALUES (0)) は、1 行だけの表として使う（標準の SQL の書き方）。
+// 全体を数えるので、workspace_id では絞り込まない（AGENTS.md のワークスペースを作るクエリ）。
+// 1 日に作った数は、消しても残る workspace_creations で数える（作ると消すを繰り返して超えさせない）。
+let insert = db
+    .prepare(
+        &quot;INSERT INTO workspaces (id, created_at, last_used_at) \
+         SELECT ?, ?, ? FROM (VALUES (0)) AS one \
+         WHERE (SELECT COUNT(*) FROM workspaces) &lt; ? \
+         AND (SELECT COUNT(*) FROM workspace_creations WHERE created_at &gt;= ?) &lt; ?&quot;,
+    )
+    .bind(&amp;values.0)
+    .map_err(|e| backend_error(action, &amp;e))?;
+// 作れたときだけ、作った記録を入れる（上の文で行が入ったかを、同じ ID の行が在るかで見る）。
+let record = db
+    .prepare(
+        &quot;INSERT INTO workspace_creations (created_at) \
+         SELECT created_at FROM workspaces WHERE id = ?&quot;,
+    )
+    .bind(&amp;[values.0[0].clone()])
+    .map_err(|e| backend_error(action, &amp;e))?;
+// batch は 1 つのトランザクションとして、順に実行される。
+let results = db
+    .batch(vec![insert, record])
+    .await
+    .map_err(|e| backend_error(action, &amp;e))?;
+</code></pre>
+<h3 id="写真の保管">写真の保管</h3>
+<p>写真は R2 に置き、行（大きさ・形式など）を D1 に置きます。上限は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。
+R2 は無料の範囲を超えると課金されるので、R2 に書く前に D1 で上限を判定します。書く順序は次のとおりです。</p>
+<p><a href="/assets/guide/photo-add.svg"><img src="/assets/guide/photo-add.svg" alt="写真を追加するときの順序。Worker が先頭のバイトで形式を決め、D1 で上限を数えて行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書いた後に行が無くなっていれば R2 のデータを消す"></a></p>
+<ul>
+<li>消すときは逆に、R2 のデータを先に消してから D1 の行を消します。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためです。</li>
+<li>追加と削除が同時に起きても、どの行からもたどれない（合計に数えられない）データを R2 に残さないよう、追加の側は R2 に書いた後で行がまだ在るかを確かめます。</li>
+<li>D1 に行を入れてから R2 への書き込みと後始末までは、送り手との接続が切れても最後まで行います（Workers の <code>waitUntil</code>）。</li>
+</ul>
+<h3 id="共有のデモと-seed">共有のデモと seed</h3>
+<p>初めて開いた人には、誰でも見て編集できる共有のデモを見せます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%87%E3%83%A2%E7%94%A8%E3%81%AE%E3%83%87%E3%83%BC%E3%82%BF">docs/spec.md の「デモ用のデータ」</a>）。デモの ID は公開しません。</p>
+<ul>
+<li>サンプルのレシピと写真は <a href="https://github.com/shoji9x9/recipe-box/blob/main/seed">seed/</a> にあります。<code>mise run seed</code> が、デモをこの状態に戻します（<a href="https://github.com/shoji9x9/recipe-box/blob/main/scripts/seed.ts">scripts/seed.ts</a>）。</li>
+<li>GitHub Actions の <code>seed-demo.yml</code> が、毎日 UTC の 19 時に seed を流し、デモを入れ直します。</li>
+<li>デモでは、写真を API で追加・削除させません。デモの ID が漏れても R2 に書き込ませないためです。そのため seed は、レシピを公開 API で入れ、写真は wrangler で D1 の行と R2 のデータを直接入れます。</li>
+<li>デモのワークスペースには、自動削除と削除から外す印（<code>mise run pin</code>）を付けます。</li>
+</ul>
+<h3 id="ciセキュリティサプライチェーン攻撃への対策">CI・セキュリティ・サプライチェーン攻撃への対策</h3>
+<p>画面の応答には、CSP（スクリプトとスタイルは自分のドメインのファイルだけ、インラインは禁止）などのヘッダーを付けます。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/screen.rs">apps/recipe-box-rs/src/screen.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">const SECURITY_HEADERS: [(HeaderName, &amp;str); 4] = [
+    (
+        header::CONTENT_SECURITY_POLICY,
+        &quot;default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
+         connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'&quot;,
+    ),
+    (header::X_CONTENT_TYPE_OPTIONS, &quot;nosniff&quot;),
+    (header::REFERRER_POLICY, &quot;same-origin&quot;),
+    (header::CACHE_CONTROL, &quot;no-store&quot;),
+];
+</code></pre>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>対策</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ツールの版</td>
+<td>mise で入れ、<code>mise.lock</code> で版とチェックサムを固定する</td>
+</tr>
+<tr>
+<td>依存の版</td>
+<td><code>Cargo.lock</code>・<code>pnpm-lock.yaml</code> で固定する。CI は lockfile と食い違うと失敗する</td>
+</tr>
+<tr>
+<td>7 日の待ち</td>
+<td>公開から 7 日たっていない版を使わない（Dependabot・mise・pnpm）</td>
+</tr>
+<tr>
+<td>依存の検査</td>
+<td>cargo-deny（脆弱性・ライセンス・取得元）、pnpm の署名の確かめ</td>
+</tr>
+<tr>
+<td>GitHub Actions</td>
+<td>workflow lockfile で、使う action を commit に固定する。job ごとに最小の権限だけを与える</td>
+</tr>
+<tr>
+<td>秘密情報</td>
+<td>gitleaks（commit の前と CI）、GitHub の secret scanning</td>
+</tr>
+<tr>
+<td>静的解析</td>
+<td>clippy・CodeQL・actionlint・ghalint・zizmor</td>
+</tr>
+<tr>
+<td>レビュー</td>
+<td>PR ごとに Claude Code が自動でレビューする。エージェントは、push の前に不具合とセキュリティのレビューを行う</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>詳しくは <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md">docs/security.md</a> と、エージェントの決まりの <a href="https://github.com/shoji9x9/recipe-box/blob/main/AGENTS.md">AGENTS.md</a> にあります。</p>
+<h2 id="リライトで選ぶもの">リライトで選ぶもの</h2>
+<p>リライト後の技術スタック（言語・フレームワーク・実行環境・DB・写真の置き場など）は決めていません（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E6%96%B9%E9%87%9D">docs/architecture.md の「方針」</a>）。リライトをする人が選びます。
+ここでは、選ばなければならないものと、どれを選んでも守る仕様を挙げます。正解は書かず、選ぶ材料を書きます。</p>
+<p>比較の基準にする現行の環境は、選んだ commit をローカルで動かしたものです（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/architecture.md#%E3%83%AA%E3%83%A9%E3%82%A4%E3%83%88%E3%81%AE%E6%AF%94%E8%BC%83%E3%81%AE%E5%9F%BA%E6%BA%96">docs/architecture.md の「リライトの比較の基準」</a>）。</p>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>リライト前のやり方</th>
+<th>守る仕様</th>
+<th>選ぶときの注意</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>フロントエンドの言語・フレームワーク</td>
+<td>askama で HTML を作り、htmx で一部を入れ替える</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E7%94%BB%E9%9D%A2">画面</a></td>
+<td>画面は JavaScript が動かなくても使える仕様である。ブラウザだけで画面を組み立てる SPA にすると守れないので、サーバーで HTML を返すか、段階的な強化（progressive enhancement）にするかを決める</td>
+</tr>
+<tr>
+<td>バックエンドの言語・フレームワーク</td>
+<td>Rust・axum・workers-rs</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#api">API</a></td>
+<td>画面と API の両方を返す。API はリライトの前後で同じに保つ（スモークテストに使う）</td>
+</tr>
+<tr>
+<td>実行環境（ホスティング）</td>
+<td>Cloudflare Workers</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a></td>
+<td>Cloudflare のまま動かすか、ほかのプラットフォームに移すか。1 回の CPU 時間・本文の大きさの上限など、プラットフォームの制約で作りが変わる</td>
+</tr>
+<tr>
+<td>DB とクエリの書き方</td>
+<td>D1（SQLite）、標準の SQL、<code>LIMIT ? OFFSET ?</code>、<code>instr</code></td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%86%E3%83%BC%E3%83%96%E3%83%AB">テーブル</a></td>
+<td>どの DB にするか。SQL は標準の範囲で書いているが、標準から外れる <code>LIMIT ? OFFSET ?</code> と <code>instr</code>（PostgreSQL なら <code>strpos</code>）は、選んだ DB で確かめる。ほかに、上限の判定で条件を左から評価する前提（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a>）と、batch のトランザクションの意味も DB で変わる。<code>LOWER</code> を使わずアプリで作る <code>search_name</code> の決まりを保つ。マイグレーションは足すだけにする</td>
+</tr>
+<tr>
+<td>トランザクション</td>
+<td>D1 の batch で、数えることと保存することを 1 つにまとめる</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%AF%E3%83%BC%E3%82%AF%E3%82%B9%E3%83%9A%E3%83%BC%E3%82%B9%E3%81%AB%E3%82%88%E3%82%8B%E3%83%87%E3%83%BC%E3%82%BF%E3%81%AE%E5%88%86%E9%9B%A2">ワークスペースによるデータの分離</a></td>
+<td>上限の判定（同時に追加されても超えない）を、どの分離レベル・ロックで守るか</td>
+</tr>
+<tr>
+<td>写真の保管</td>
+<td>R2。D1 に行を入れて上限を判定してから R2 に書く</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">写真</a></td>
+<td>オブジェクトストレージ（R2・S3 など）に置くか、DB に置くか。どちらでも API の仕様は変えない。置き場の料金と制限が変わるので、大きさの上限・合計の上限を見直す（費用の対策を作り直す）</td>
+</tr>
+<tr>
+<td>写真の受け取り</td>
+<td>multipart のふつうのフォームと、API はバイト列そのもの。<code>Content-Length</code> で先に断る</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F%E3%81%AE-api">写真の API</a></td>
+<td>本文の上限、形式を先頭のバイトで決めること</td>
+</tr>
+<tr>
+<td>定期実行</td>
+<td>Cron Trigger（毎日 UTC の 18 時、使われないワークスペースを消す）</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%AF%E3%83%BC%E3%82%AF%E3%82%B9%E3%83%9A%E3%83%BC%E3%82%B9%E3%81%AB%E3%82%88%E3%82%8B%E3%83%87%E3%83%BC%E3%82%BF%E3%81%AE%E5%88%86%E9%9B%A2">ワークスペースによるデータの分離</a></td>
+<td>移した先の定期実行の仕組み。途中で使われたワークスペースを消さない確かめ直しを保つ</td>
+</tr>
+<tr>
+<td>デモのリセット</td>
+<td>GitHub Actions（<code>seed-demo.yml</code>）が毎日 seed を流す。写真は wrangler で D1 と R2 に直接入れる</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%87%E3%83%A2%E7%94%A8%E3%81%AE%E3%83%87%E3%83%BC%E3%82%BF">デモ用のデータ</a></td>
+<td>写真を入れる部分を書き直す。アプリと同じデータの層（ORM など）で入れられるか</td>
+</tr>
+<tr>
+<td>レート制限</td>
+<td>Cloudflare の Rate Limiting（IP アドレスごと、拠点ごとにおおよそ）</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E8%B2%BB%E7%94%A8%E3%81%AE%E5%AF%BE%E7%AD%96">費用の対策</a></td>
+<td>移した先で、何で IP アドレスごとに数えるか（ミドルウェアと共有の記憶、プラットフォームの機能など）。IP アドレスを、送る側が変えられないヘッダーから取る</td>
+</tr>
+<tr>
+<td>静的アセット</td>
+<td>Workers の静的アセット（Worker を起動しない）</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E7%94%BB%E9%9D%A2">画面</a></td>
+<td>CSS・htmx・アイコンの配り方と、CSP（外部の CDN から読まない）</td>
+</tr>
+<tr>
+<td>ID と乱数</td>
+<td>Web Crypto で 128 ビットの乱数</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%AF%E3%83%BC%E3%82%AF%E3%82%B9%E3%83%9A%E3%83%BC%E3%82%B9%E3%81%AB%E3%82%88%E3%82%8B%E3%83%87%E3%83%BC%E3%82%BF%E3%81%AE%E5%88%86%E9%9B%A2">ワークスペースによるデータの分離</a></td>
+<td>ID の形と長さを保つ（デモの ID を見分けられないことを含む）</td>
+</tr>
+<tr>
+<td>ログと監視</td>
+<td>Workers のログ・<code>wrangler tail</code></td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E3%83%AD%E3%82%B0">ログ</a></td>
+<td>ワークスペースの ID をログに残さない</td>
+</tr>
+<tr>
+<td>テスト</td>
+<td><code>Backend</code> トレイトの偽物・スモークテスト</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#api">API</a></td>
+<td>同じ API に当てるスモークテストは、そのまま新しいアプリにも使える</td>
+</tr>
+<tr>
+<td>開発のツールと依存の管理</td>
+<td>mise・pnpm・cargo-deny・7 日の待ち</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E3%82%B5%E3%83%97%E3%83%A9%E3%82%A4%E3%83%81%E3%82%A7%E3%83%BC%E3%83%B3%E6%94%BB%E6%92%83%E3%81%AE%E5%AF%BE%E7%AD%96">サプライチェーン攻撃の対策</a></td>
+<td>TypeScript の側の監査の道具</td>
+</tr>
+</tbody>
+</table>
+</div>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>
