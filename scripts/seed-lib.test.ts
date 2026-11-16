@@ -1,7 +1,17 @@
 // scripts/seed-lib.ts の単体テスト（mise run test の vitest で実行する）。
 // 伏せ字は、公開の Actions のログにデモの ID などを出さないための要なので、形ごとに確かめる。
 import assert from "node:assert/strict";
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, test } from "vitest";
@@ -25,6 +35,24 @@ import {
   shortReason,
   validateRecipes,
 } from "./seed-lib.ts";
+
+// アプリ（Rust）の定数の値。seed は API を通らずに写真を入れるので、写真の上限がアプリとずれないかを確かめる。
+// ワークスペースの合計の上限は、アプリ全体の写真の合計を守る前提でもある（docs/security.md）。
+function rustConst(file: string, name: string): number {
+  const source = readFileSync(join(import.meta.dirname, "..", "apps", "recipe-box-rs", "src", file), "utf8");
+  const match = new RegExp(`pub const ${name}: \\w+ = ([0-9_]+);`).exec(source);
+  const value = match?.[1];
+  assert.ok(value !== undefined, `${file} に ${name} が無い`);
+  return Number(value.replaceAll("_", ""));
+}
+
+describe("アプリと同じ写真の上限", () => {
+  test("photo.rs の値と同じ", () => {
+    assert.equal(MAX_PHOTO_BYTES, rustConst("photo.rs", "MAX_PHOTO_BYTES"));
+    assert.equal(MAX_PHOTOS_PER_RECIPE, rustConst("photo.rs", "MAX_PHOTOS_PER_RECIPE"));
+    assert.equal(MAX_WORKSPACE_PHOTO_BYTES, rustConst("photo.rs", "MAX_PHOTO_BYTES_PER_WORKSPACE"));
+  });
+});
 
 const HEX32 = "0123456789abcdef0123456789abcdef";
 const UUID = "01234567-89ab-cdef-0123-456789abcdef";

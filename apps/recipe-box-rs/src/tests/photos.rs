@@ -203,11 +203,8 @@ fn workspace_photo_bytes_keep_app_wide_total() {
     // 値は docs/spec.md と docs/security.md に書いている。変えたら文書も直す。
     assert_eq!(MAX_PHOTO_BYTES_PER_WORKSPACE, 50_000_000);
     assert_eq!(MAX_PHOTO_BYTES_TOTAL, 5_000_000_000);
-    // ちょうど合計の上限にしている（超えないことは、photo.rs でコンパイルのときにも確かめる）。
-    assert_eq!(
-        MAX_WORKSPACES * MAX_PHOTO_BYTES_PER_WORKSPACE,
-        MAX_PHOTO_BYTES_TOTAL
-    );
+    // MAX_WORKSPACES × MAX_PHOTO_BYTES_PER_WORKSPACE が合計を超えないことは、photo.rs でコンパイルのときに確かめる。
+    assert_eq!(MAX_WORKSPACES, 100);
     // 利用者に見せる文の値も同じにする。
     let megabytes = MAX_PHOTO_BYTES_PER_WORKSPACE / 1_000_000;
     let (_, _, message) = ApiError::PhotoStorageLimitReached.parts();
