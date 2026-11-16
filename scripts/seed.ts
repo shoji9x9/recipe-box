@@ -21,25 +21,20 @@
 //   5. 公開 API で、レシピの数と、写真をすべて読めて中身が同じことを確かめる。
 // 公開 API は、書き込みの回数の制限（429）なら待ってやり直し、接続の失敗と 5xx なら GET と DELETE だけをやり直す。
 // 何度実行しても同じ状態になる。途中で失敗したら、もう一度実行すれば入れ直せる。
-import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify, stripVTControlCharacters } from "node:util";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   d1Rows,
   hasOwnKey,
-  type PathRule,
   type PhotoFile,
-  pathPattern,
   regularFileWithoutLinks,
   SeedDataError,
-  redact as redactWith,
   shortReason,
   validateRecipes,
 } from "./seed-lib.ts";
+import { ID_PATTERN, readIdFromStdin, redact, root, type Target, wrangler as runWrangler } from "./wrangler.ts";
 
 /** 入れる写真。recipeId は登録したレシピの ID、id は seed が作った写真の ID。 */
 type Photo = PhotoFile & { recipeId: string; id: string };
@@ -47,24 +42,8 @@ type Photo = PhotoFile & { recipeId: string; id: string };
 /** R2 の操作に要る、写真を表す値（R2 の権限の確認では、ファイルの無い仮の写真を使う）。 */
 type PhotoKey = Pick<Photo, "file" | "recipeId" | "id">;
 
-type Target = "--local" | "--remote";
-
-const run = promisify(execFile);
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const seedDir = join(root, "seed");
 const photoDir = join(seedDir, "photos");
-const appDir = join(root, "apps", "recipe-box-rs");
-// 写真 1 枚ごとに pnpm を起こさないよう、pnpm install が入れた wrangler を直接動かす。
-const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
-// ログで . と ~ に置き換える、リポジトリとホームのディレクトリのパス（端末の利用者名が入る。seed-lib.ts の pathPattern）。
-const PATHS: PathRule[] = [
-  [root, "."],
-  [homedir(), "~"],
-].flatMap(([path, replacement]): PathRule[] => {
-  const pattern = pathPattern(path as string);
-  return pattern === null ? [] : [[pattern, replacement as string]];
-});
-
 const BASE_URLS: Record<Target, string> = {
   "--local": "http://localhost:8787",
   "--remote": "https://recipe-box.shoji9x9.workers.dev",
@@ -86,8 +65,6 @@ const UPLOAD_CONCURRENCY: Record<Target, number> = { "--local": 1, "--remote": 4
 // wrangler の R2 の書き込み・削除と、D1 の写真の行の読み取り・削除が失敗したときに試す回数と、やり直す前に待つ時間（回ごとに延ばす）。
 const RETRY_ATTEMPTS = 4;
 const RETRY_WAIT_MS = 5_000;
-
-const ID_PATTERN = /^[0-9a-f]{32}$/;
 
 // 失敗の文は、ここで必ず伏せる（redact）。呼ぶ側で伏せ忘れても、ID とパスを出さないためである。
 // 進み具合の表示（console.log）は ID もパスも含まないので、そのまま出す。手で消すキーの表示（shownKey）は、
@@ -115,16 +92,10 @@ const args = process.argv.slice(2);
 const target: Target = args.length === 1 && hasOwnKey(BASE_URLS, args[0]) ? args[0] : usage();
 const baseUrl = BASE_URLS[target];
 
-// 1 行目だけを読み、空白を除く。
-const workspaceId = (readFileSync(0, "utf8").split("\n")[0] ?? "").replace(/\s/g, "");
+const workspaceId = readIdFromStdin();
 // ID は R2 のキーと SQL に埋め込むので、形（16 進数の小文字 32 文字）を必ず確かめる。
 if (!ID_PATTERN.test(workspaceId)) {
   fail("ワークスペースの ID の形が正しくない（16 進数の小文字 32 文字）");
-}
-
-// 表示やエラーの文から、ID の形の値を伏せ、リポジトリとホームのパスを . と ~ に置き換える（seed-lib.ts の redact）。
-function redact(text: unknown): string {
-  return redactWith(text, PATHS);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -217,45 +188,9 @@ async function json<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-// wrangler を動かす。出力には ID が入るので、失敗したときだけ、ID を伏せて表示する。
-async function wrangler(...wranglerArgs: string[]): Promise<string> {
-  try {
-    const { stdout } = await run(wranglerBin, [...wranglerArgs, target], {
-      cwd: appDir,
-      // 色の制御文字を出させない（--json の出力を JSON として読むためと、制御文字で値が分かれると伏せられなくなるため）。
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return stdout;
-  } catch (error) {
-    // execFile の失敗は、出力（stdout・stderr）と、終了コードかシグナルを持つ。
-    const failure = error as {
-      stdout?: string;
-      stderr?: string;
-      code?: string | number | null;
-      signal?: string | null;
-      name?: string;
-    };
-    // 理由は stderr か stdout（--json のとき）にある。Node のエラーの文は、コマンドの全体（ホームのディレクトリのパスと SQL）を
-    // 含むので使わず、終了コードかシグナル（起動できなければ ENOENT などのコード）だけを添える。
-    // 制御文字（色など）は、伏せる前に取り除く（制御文字に挟まれた値も伏せるため）。
-    // ログのファイルの場所の行は、理由にならないので除く。
-    const output = redact(
-      stripVTControlCharacters(
-        [failure.stderr, failure.stdout]
-          .filter((text) => text?.trim())
-          .join("\n")
-          .split("\n")
-          .filter((line) => !line.includes("Logs were written"))
-          .join("\n"),
-      ),
-    );
-    // 終了コードもシグナルも無ければ（execFile ではふつう起きない）、エラーの名前を添える。
-    const detail = [failure.code, failure.signal].filter((value) => value != null).join("・") || failure.name;
-    // 伏せた後で切り詰める。長いときは、頭（stderr の [ERROR]）と終わり（stdout の JSON のエラー）の両方を残す。
-    const text = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
-    throw new Error(`wrangler が失敗した（${detail}）\n${text}`);
-  }
+// wrangler を、選んだ投入先（--local か --remote）で動かす（wrangler.ts。失敗の文は伏せてある）。
+function wrangler(...wranglerArgs: string[]): Promise<string> {
+  return runWrangler(target, ...wranglerArgs);
 }
 
 // wrangler を動かし、失敗したら待ち時間を延ばしながら RETRY_ATTEMPTS 回まで試す。最後の失敗は投げる。

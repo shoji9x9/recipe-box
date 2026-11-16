@@ -60,7 +60,7 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、JavaScript の単体テスト（画面と、seed・modern-web-guidance のスクリプト）を実行する"
+description = "Rust のテストと、JavaScript の単体テスト（画面と、seed・pin・modern-web-guidance のスクリプト）を実行する"
 run = [
   "cargo test --workspace --locked",
   # 画面（apps/*/js-tests/）とスクリプト（scripts/*.test.ts）。vitest.config.ts。
@@ -86,11 +86,11 @@ run = "pnpm exec wrangler d1 migrations apply DB --local"
 
 [tasks.smoke]
 description = "起動中のローカルの Worker に API を呼んで確かめる（先に別の端末で mise run dev）"
-run = "scripts/smoke-test.sh"
+run = "node scripts/smoke-test.ts"
 
 [tasks.pin]
 description = "ワークスペースに、自動削除と削除から外す印を付ける（管理用。ID は標準入力で渡す。例: mise run pin -- --remote < <ID のファイル>）"
-run = "scripts/pin-workspace.sh"
+run = "node scripts/pin-workspace.ts"
 
 [tasks.seed]
 description = "共有のデモを、サンプルのレシピと写真の状態に戻す（ID は標準入力で渡す。例: mise run seed -- --remote < <ID のファイル>）"
