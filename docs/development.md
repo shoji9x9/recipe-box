@@ -131,7 +131,7 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
 
 ### 本番のログ
 
-- アプリが出したエラー（`src/error.rs` の `log_error`）は、Workers のログ（`wrangler.toml` の `[observability]`）に残る。無料のプランでは 3 日残り、1 日 200,000 件までである。
+- アプリが出したエラー（`src/error.rs` の `log_error`）は、Workers のログ（`wrangler.toml` の `[observability]`）に残る。無料のプランでは、2026-11-30 までは 3 日残り、1 日 200,000 件までである。2026-12-01 からは 7 日残り、1 日 0.5 GB までに変わる（docs/security.md の「ログ」）。
   Cloudflare のダッシュボードで、Worker（`recipe-box`）の Observability を開いて見る。ワークスペースの ID は、ログに出す前に伏せている。
 - リクエストごとの記録（invocation logs）は残さない（docs/security.md の「ログ」）。リクエストごとの状態コードや CPU 時間は、その場で `wrangler tail` で見る。
   `apps/recipe-box-rs` で `pnpm exec wrangler tail recipe-box --format pretty` を実行する（`wrangler login` が要る）。流れている間だけ見え、残らない。
@@ -154,6 +154,48 @@ GitHub の Settings → Environments に、次の値を置く。
 Environment `production` は、「Deployment branches and tags」を「Selected branches and tags」にし、`main` だけを許す。
 本番のトークンとデモの ID を、レビューを経て main に入ったコードにだけ渡すためである（ほかのブランチから `workflow_dispatch` で動かしたり、ブランチの workflow が `environment: production` を名乗ったりしても渡さない）。
 これを守るのは Environment の設定である（ブランチの workflow は、自分の手順を書き換えられるため）。`deploy.yml` と `seed-demo.yml` は、誤って main 以外から手で動かしたときに気付けるよう、最初の手順で失敗する。
+
+## 使うのをやめるとき
+
+本番を止めて、Cloudflare のデータと、デプロイとレビューに使うトークンを消す手順。消したデータは戻せない。
+
+1. workflow を止める。`deploy.yml` は D1 と R2 のバケットが無ければ作るので、先に止めないと、後の手順で消しても作り直される。
+
+   ```bash
+   gh workflow disable deploy.yml
+   gh workflow disable seed-demo.yml
+   ```
+
+2. `apps/recipe-box-rs` で Worker を消す（`wrangler login` が要る）。Cron Trigger・secret・binding も一緒に消える。
+
+   ```bash
+   pnpm exec wrangler delete recipe-box
+   ```
+
+3. R2 のバケットを空にする。中身があるとバケットを消せず、wrangler には中身をまとめて消すコマンドが無いので、すべてを 1 日で消すライフサイクルのルールを足す。
+
+   ```bash
+   pnpm exec wrangler r2 bucket lifecycle add recipe-box-photos expire-all --expire-days 1 -y
+   ```
+
+4. 1〜2 日後に、`pnpm exec wrangler r2 bucket info recipe-box-photos` でオブジェクトが 0 個になったことを確かめ、バケットを消す。
+
+   ```bash
+   pnpm exec wrangler r2 bucket delete recipe-box-photos
+   ```
+
+5. D1 のデータベースを消す。Time Travel（過去の時点に戻す機能）でも戻せなくなる。
+
+   ```bash
+   pnpm exec wrangler d1 delete recipe-box
+   ```
+
+6. `pnpm exec wrangler d1 list` と `pnpm exec wrangler r2 bucket list` と、Cloudflare のダッシュボードで、Worker・D1・R2 が消えたことを確かめる。
+7. トークンを消す。
+   - Cloudflare のダッシュボードで、デプロイ用の API トークン（`CLOUDFLARE_API_TOKEN`）と、ほかに作ったトークン（調べるための読み取り専用のものなど）があれば、それも消す。
+   - GitHub の Settings → Environments で、`production` と `claude-review` の secret（または Environment そのもの）を消す。
+   - `claude setup-token` で作ったトークン（`CLAUDE_CODE_OAUTH_TOKEN`）を無効にする。
+   - 手元の wrangler からログアウトする（`pnpm exec wrangler logout`）。
 
 ## リライトの比較の基準の環境
 
