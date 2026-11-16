@@ -16,8 +16,8 @@ use worker::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
-        WorkspaceLimits, WorkspaceStatus,
+        Backend, BackendError, BackendResult, ListedRecipe, PhotoInsert, PhotoKey, PhotoLimits,
+        RecipePage, WorkspaceLimits, WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -94,6 +94,25 @@ fn int_to_js(value: i64) -> JsValue {
 
 /// 写真を読むときの列。`Photo` の項目と同じ名前・順番にする。
 const PHOTO_COLUMNS: &str = "id, content_type, size, created_at";
+
+/// 一覧のクエリの行。レシピの列と、先頭の写真の ID。
+#[derive(serde::Deserialize)]
+struct ListedRow {
+    #[serde(flatten)]
+    recipe: Recipe,
+    /// 先頭の写真を求めないクエリ（API の一覧）では、列が無いので `None` になる。
+    #[serde(default)]
+    first_photo_id: Option<String>,
+}
+
+/// 一覧のクエリで、レシピごとの先頭の写真（追加した日時の古い順、同じ日時なら ID の小さい順の最初）の ID を求める列。
+/// 写真の一覧（`list_photos`）の `ORDER BY created_at, id` の最初と同じになる。
+/// 標準の SQL で書くため、`ORDER BY ... LIMIT 1` ではなく、最も古い日時の写真のうち ID の最も小さいものを `MIN` で選ぶ。
+/// どちらの副問い合わせも、主キー（`workspace_id`・`recipe_id`・`id`）の先頭の 2 列で写真を絞る（1 レシピ 5 枚まで）。
+const FIRST_PHOTO_COLUMN: &str = "(SELECT MIN(p.id) FROM photos p \
+     WHERE p.workspace_id = recipes.workspace_id AND p.recipe_id = recipes.id \
+     AND p.created_at = (SELECT MIN(q.created_at) FROM photos q \
+     WHERE q.workspace_id = recipes.workspace_id AND q.recipe_id = recipes.id)) AS first_photo_id";
 
 /// `SELECT COUNT(*) AS total` の行。
 #[derive(serde::Deserialize)]
@@ -382,6 +401,7 @@ impl Backend for CloudflareBackend {
         query: Option<&str>,
         limit: i64,
         offset: i64,
+        with_first_photo: bool,
     ) -> impl Future<Output = BackendResult<RecipePage>> + Send {
         let env = self.env.clone();
         let workspace = workspace.to_string();
@@ -403,9 +423,15 @@ impl Backend for CloudflareBackend {
             // 並べ方は索引 (workspace_id, created_at, id) と同じ向きにして、並べ替えずに読む。
             // 同じ日時に作ったレシピの順番が毎回変わらないよう、ID でも並べる。
             // LIMIT と OFFSET は ISO の標準ではないが、PostgreSQL でも同じ意味で動く（AGENTS.md）。
+            // 先頭の写真は、画面の一覧のときだけ求める（API の一覧では、返さない値のために photos を読まない）。
+            let first_photo = if with_first_photo {
+                format!(", {FIRST_PHOTO_COLUMN}")
+            } else {
+                String::new()
+            };
             let page = db
                 .prepare(format!(
-                    "SELECT {RECIPE_COLUMNS} FROM recipes WHERE {condition} \
+                    "SELECT {RECIPE_COLUMNS}{first_photo} FROM recipes WHERE {condition} \
                      ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
                 ))
                 .bind(&page_values)
@@ -425,8 +451,14 @@ impl Backend for CloudflareBackend {
                 return Err(BackendError(format!("{action}: batch の結果の数が違う")));
             };
             let recipes = page
-                .results::<Recipe>()
-                .map_err(|e| backend_error(action, &e))?;
+                .results::<ListedRow>()
+                .map_err(|e| backend_error(action, &e))?
+                .into_iter()
+                .map(|row| ListedRecipe {
+                    recipe: row.recipe,
+                    first_photo_id: row.first_photo_id,
+                })
+                .collect();
             let total = count
                 .results::<Total>()
                 .map_err(|e| backend_error(action, &e))?

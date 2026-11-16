@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "delete_dialog.html" as dialog %}
 {% block title %}{{ heading }}{% endblock %}
 {% block heading %}{{ heading }}{% endblock %}
 {% block content %}
@@ -54,4 +55,11 @@
     <a class="button-link secondary" href="{{ cancel_href }}">やめる</a>
   </div>
 </form>
+{%- match photo_area %}
+{%- when PhotoArea::AfterSave %}
+<p class="note">写真は、保存した後に、編集の画面で追加できます。</p>
+{%- when PhotoArea::Section(section) %}
+{%- include "photo_section.html" %}
+{%- when PhotoArea::None %}
+{%- endmatch %}
 {% endblock %}

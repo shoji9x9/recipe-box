@@ -300,8 +300,9 @@ button.primary.danger-fill {
     margin: 0;
   }
 
-  & + .message,
-  & + .error-summary {
+  /* 見出しのすぐ下のメッセージ（#messages の中）と、メッセージが無いときの入力の誤りの一覧 */
+  & + .messages > .message:first-child,
+  & + .messages:not(:has(.message)) + .error-summary {
     margin-top: calc(-1 * var(--space-2));
   }
 }
@@ -408,6 +409,17 @@ button.primary.danger-fill {
 
     &:hover {
       box-shadow: var(--shadow);
+    }
+
+    /* 先頭の写真。大きさを決めておき、読み込んだときに並びがずれないようにする（width・height の属性と同じ比） */
+    & .thumb {
+      width: 100%;
+      height: auto;
+      aspect-ratio: 3 / 2;
+      margin-bottom: var(--space-2);
+      border-radius: var(--radius-sm);
+      object-fit: cover;
+      background: var(--surface-soft);
     }
 
     & > a {

@@ -14,8 +14,8 @@ use std::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, PhotoInsert, PhotoKey, PhotoLimits, RecipePage,
-        WorkspaceLimits, WorkspaceStatus,
+        Backend, BackendError, BackendResult, ListedRecipe, PhotoInsert, PhotoKey, PhotoLimits,
+        RecipePage, WorkspaceLimits, WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -135,6 +135,18 @@ impl FakeBackend {
 
     /// 写真の行だけを足す（R2 のデータは入れない）。上限の境界を、大きなデータを作らずに確かめるために使う。
     pub fn add_photo_row(&self, workspace: &str, recipe: &str, id: &str, size: i64) {
+        self.add_photo_row_at(workspace, recipe, id, size, self.now_millis());
+    }
+
+    /// [`Self::add_photo_row`] の、追加した日時を決めて入れるもの（並び順を確かめるテストで使う）。
+    pub fn add_photo_row_at(
+        &self,
+        workspace: &str,
+        recipe: &str,
+        id: &str,
+        size: i64,
+        created_at: i64,
+    ) {
         self.photos.lock().unwrap().push((
             workspace.to_owned(),
             recipe.to_owned(),
@@ -142,7 +154,7 @@ impl FakeBackend {
                 id: id.to_owned(),
                 content_type: "image/jpeg".to_owned(),
                 size,
-                created_at: self.now_millis(),
+                created_at,
             },
         ));
     }
@@ -331,6 +343,7 @@ impl Backend for FakeBackend {
         query: Option<&str>,
         limit: i64,
         offset: i64,
+        with_first_photo: bool,
     ) -> impl Future<Output = BackendResult<RecipePage>> + Send {
         ready(self.check().map(|()| {
             // 本物の `instr(search_name, ?) > 0` と同じく、検索に使う形の料理名が query を含むかで絞る。
@@ -345,10 +358,25 @@ impl Backend for FakeBackend {
                 .collect();
             recipes.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
             let total = i64::try_from(recipes.len()).unwrap();
+            // 本物の副問い合わせと同じく、写真の一覧（追加した日時の古い順、同じ日時なら ID の小さい順）の最初を先頭にする。
+            let photos = self.photos.lock().unwrap();
             let recipes = recipes
                 .into_iter()
                 .skip(usize::try_from(offset).unwrap())
                 .take(usize::try_from(limit).unwrap())
+                .map(|recipe| {
+                    let first_photo_id = photos
+                        .iter()
+                        .filter(|_| with_first_photo)
+                        .filter(|(w, r, _)| w == workspace.as_str() && *r == recipe.id)
+                        .map(|(_, _, photo)| photo)
+                        .min_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)))
+                        .map(|photo| photo.id.clone());
+                    ListedRecipe {
+                        recipe,
+                        first_photo_id,
+                    }
+                })
                 .collect();
             RecipePage { recipes, total }
         }))
