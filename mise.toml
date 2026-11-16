@@ -41,11 +41,18 @@ run = [
   "ghalint run",
   "zizmor --offline .github",
   "shellcheck scripts/*.sh",
-  # 画面の JavaScript（JSDoc の型）とそのテストの型（tsconfig.json）と、スクリプトのテストの型（scripts/tsconfig.json）。
-  "pnpm exec tsc -p tsconfig.json",
-  "pnpm exec tsc -p scripts/tsconfig.json",
+  # JavaScript とテストの型（mise run typecheck）。
+  { task = "typecheck" },
   # modern-web-guidance のスキルとパッケージの版がそろっているか（AGENTS.md の「スキル」）。
   "scripts/check-mwg-version.sh",
+]
+
+[tasks.typecheck]
+description = "JavaScript とテストの型を確かめる（lint と、commit の前の lefthook から呼ぶ）"
+# 画面の JavaScript（JSDoc の型）とそのテストは tsconfig.json（DOM の型）、スクリプトのテストは scripts/tsconfig.json（Node の型）。
+run = [
+  "pnpm exec tsc -p tsconfig.json",
+  "pnpm exec tsc -p scripts/tsconfig.json",
 ]
 
 [tasks.audit]

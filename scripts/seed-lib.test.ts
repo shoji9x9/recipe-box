@@ -106,8 +106,8 @@ describe("lstatWithoutLinks", () => {
       lstatWithoutLinks(path, base);
       return "ok";
     } catch (error) {
-      const { reason, code } = error as { reason?: string; code?: string };
-      return reason ?? code;
+      const failure = error as { reason?: string; code?: string };
+      return failure.reason ?? failure.code;
     }
   };
 

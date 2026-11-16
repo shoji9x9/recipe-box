@@ -14,7 +14,7 @@
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
-    // vitest（esbuild）はファイルごとに変換するので、型だけの import などを 1 ファイルで判断できる形に限る。
+    // vitest はファイルごとに変換するので、型だけの import などを 1 ファイルで判断できる形に限る。
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     // 型の確かめ方。

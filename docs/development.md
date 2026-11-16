@@ -40,13 +40,13 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 
 | 対象 | 置く場所 | 仕組み |
 | --- | --- | --- |
-| Rust | `apps/recipe-box-rs/src/tests/` | `cargo test` |
+| Rust | 外から呼ぶ API と画面は `apps/recipe-box-rs/src/tests/`。モジュールの中だけの関数は、そのファイルの `#[cfg(test)] mod tests` | `cargo test` |
 | 画面の JavaScript（`apps/<app>/public/assets/`） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。happy-dom の DOM で動かす |
 | Node のスクリプト（`scripts/`） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす |
 
 - JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
 - 画面のテストを `public/` の下に置かない。`public/` の下のファイルは、Workers の静的アセットとして誰でも取れる。
-- 型は `mise run lint` の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトのテストは `scripts/tsconfig.json`（Node の型）。
+- 型は `mise run typecheck`（`mise run lint` と commit の前の lefthook から呼ぶ）の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトのテストは `scripts/tsconfig.json`（Node の型）。
   画面の JavaScript は、ビルドせずに配るので JavaScript のまま書き、型は JSDoc で書く。スクリプト（`.mjs`）には型を付けていないので、テストの `.ts` だけを確かめる。
 
 ### ディレクトリ

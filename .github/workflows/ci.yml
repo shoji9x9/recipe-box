@@ -76,7 +76,7 @@ jobs:
       - uses: jdx/mise-action@v5.2.7
         with:
           cache: true
-      # 画面の JavaScript のテスト（vitest）に要る。
+      # JavaScript のテスト（vitest。画面とスクリプト）に要る。
       - name: Install Node packages
         run: pnpm install --frozen-lockfile
       - name: Test
