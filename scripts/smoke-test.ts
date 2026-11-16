@@ -156,7 +156,9 @@ async function request(method: string, path: string, options: RequestOptions = {
 async function withWriteRetry(method: string, path: string, send: () => Promise<void>): Promise<void> {
   for (let attempt = 1; attempt <= 8; attempt++) {
     await send();
-    if (status !== 429 || !retryOnWriteLimit || method === "GET" || !path.startsWith("/api/recipes")) {
+    // 画面の写真の書き込み（/recipes/.../photos...）も、API と同じ回数の制限を受ける。
+    const limited = path.startsWith("/api/recipes") || /^\/recipes\/[0-9a-f]{32}\/photos/.test(path);
+    if (status !== 429 || !retryOnWriteLimit || method === "GET" || !limited) {
       return;
     }
     console.log(`  書き込みの回数の制限に当たったので、10 秒待ってやり直す（${attempt} 回目）`);
@@ -341,14 +343,18 @@ async function checkScreens(): Promise<void> {
   if (responseHeaders.get("x-content-type-options") !== "nosniff") fail("/assets/guide/ に nosniff が付いていない");
 }
 
-/** canvas が書き出すのと同じ形の、幅 `width`・高さ `height` の JPEG（JFIF・表・フレーム・画像のデータ）。 */
-function canvasJpeg(width: number, height: number): Buffer {
+/**
+ * canvas が書き出すのと同じ形の、幅 `width`・高さ `height` の JPEG（JFIF・表・フレーム・画像のデータ）。
+ * `extra` は、フレームの前に足すセグメント（ブラウザが書く小さな Exif など）。
+ */
+function canvasJpeg(width: number, height: number, extra: Buffer[] = []): Buffer {
   const frame = Buffer.from([8, 0, 0, 0, 0, 1, 1, 0x11, 0]);
   frame.writeUInt16BE(height, 1);
   frame.writeUInt16BE(width, 3);
   return Buffer.concat([
     Buffer.from([0xff, 0xd8]),
     jpegSegment(0xe0, Buffer.from("4a46494600010100000100010000", "hex")),
+    ...extra,
     jpegSegment(0xdb, Buffer.alloc(65)),
     jpegSegment(0xc0, frame),
     jpegSegment(0xda, Buffer.from([1, 1, 0, 0, 0x3f, 0])),
@@ -396,6 +402,14 @@ async function checkThumbnails(workspace: string): Promise<void> {
   expect(415, "JPEG でない小さな版");
   await request("GET", `${photos}/${other}/thumbnail`, { cookie: workspace });
   expect(404, "断った小さな版");
+  // 小さな版の Exif（位置情報に見立てた文字を入れる）は、保存する前に 0 で埋める（長さは変えない）。
+  const withExif = canvasJpeg(100, 80, [jpegSegment(0xe1, Buffer.concat([Buffer.from("Exif\0\0"), LOCATION_MARK]))]);
+  await request("POST", `${photos}/${other}/thumbnail?width=200`, { cookie: workspace, bytes: withExif });
+  expect(204, "Exif のある小さな版");
+  await request("GET", `${photos}/${other}/thumbnail`, { cookie: workspace });
+  expect(200, "GET Exif のある小さな版");
+  if (body.length !== withExif.length) fail("Exif のある小さな版の長さが、送ったものと違う");
+  if (body.includes(LOCATION_MARK)) fail("小さな版に、位置情報が残っている");
   // 写真を消すと、小さな版も読めなくなる。
   await request("DELETE", `/api/recipes/${recipe}/photos/${photo}`, { workspace });
   expect(204, "DELETE /api/recipes/{id}/photos/{photo_id}（小さな版のある写真）");
