@@ -29,9 +29,10 @@ database_name = "recipe-box"
 binding = "PHOTOS"
 bucket_name = "recipe-box-photos"
 
-# 定期実行。毎日 UTC の 18 時（日本時間の 3 時）に、14 日使われていないワークスペースを消す（src/workspace.rs の delete_unused）。
+# 定期実行。6 時間ごと（UTC の 0・6・12・18 時）に、14 日使われていないワークスペースを消す（src/workspace.rs の delete_unused）。
+# 1 回の実行で呼べる D1 と R2 の数に上限があるので、1 回に消す数を絞っている（src/workspace.rs の CLEANUP_RUNS_PER_DAY と MAX_WORKSPACES_PER_RUN）。
 [triggers]
-crons = ["0 18 * * *"]
+crons = ["0 */6 * * *"]
 
 # 共有のデモのワークスペースの ID は、secret の DEMO_WORKSPACE_ID に置く（ID を知れば API で書き込めるので、公開しない）。
 # 無ければ、Cookie の無い人には説明とワークスペースを作るボタンだけを出す。

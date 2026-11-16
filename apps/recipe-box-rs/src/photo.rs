@@ -278,7 +278,7 @@ pub async fn create<B: Backend>(
 /// 4. 行の印を外す。外せなければ（書いている間にレシピが消された）、R2 のデータを消す。
 ///
 /// 2 から 4 は、送り手との接続が切れても最後まで動かす（[`Backend::run_to_completion`]）。
-/// それでも 3 か 4 が途中で失敗するか止められて、印が付いたまま行が残れば、毎日の自動削除が片付ける（[`clean_pending`]）。
+/// それでも 3 か 4 が途中で失敗するか止められて、印が付いたまま行が残れば、定期の自動削除が片付ける（[`clean_pending`]）。
 pub async fn add<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -454,7 +454,7 @@ pub async fn delete<B: Backend>(
 /// 先に行に印を付けて隠し、R2 を消してから D1 の行を消す。
 /// D1 の行を先に消して R2 の削除が失敗すると、合計に数えられないデータが R2 に残るため。
 /// R2 の削除が失敗したら、印を外して元に戻す（利用者がもう一度消せるように）。
-/// D1 の削除が失敗したら（R2 のデータはもう無い）、行は隠れたまま残り、毎日の自動削除が片付ける（[`clean_pending`]）。
+/// D1 の削除が失敗したら（R2 のデータはもう無い）、行は隠れたまま残り、定期の自動削除が片付ける（[`clean_pending`]）。
 pub async fn remove<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -486,6 +486,12 @@ pub async fn remove<B: Backend>(
 /// 写真の本文を 1 時間より長く送り続けると、追加の途中で片付けられ、その写真は `404`（`photo_not_found`）になる。
 pub const PENDING_CLEANUP_AFTER_MILLIS: i64 = 60 * 60 * 1_000;
 
+/// 定期実行の 1 回で片付ける、1,000 行（[`MAX_KEYS_PER_DELETE`]）ずつのまとまりの数の上限。残りは次の実行に回す。
+pub const MAX_PENDING_BATCHES_PER_RUN: i64 = 2;
+/// [`clean_pending`] が 1 回に使う D1 と R2 の呼び出しの数の最大。選ぶ 1 回と、まとまりごとに R2 と D1 の 1 回ずつ。
+/// 自動削除の 1 回の実行の呼び出しの数（[`crate::workspace::CLEANUP_SUBREQUESTS`]）に入る。
+pub const PENDING_CLEANUP_SUBREQUESTS: i64 = 1 + 2 * MAX_PENDING_BATCHES_PER_RUN;
+
 /// 印の付いた写真の行を片付けた結果。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PendingCleanup {
@@ -493,6 +499,8 @@ pub struct PendingCleanup {
     pub cleaned: usize,
     /// 片付けるのに失敗した行の数（理由はログに出す）。
     pub failed: usize,
+    /// 1 回に片付ける数の上限（[`MAX_PENDING_BATCHES_PER_RUN`]）を超えたので、次の実行に回した行の数。
+    pub deferred: usize,
     /// 片付ける行を選べなかったか。
     pub list_failed: bool,
 }
@@ -501,10 +509,11 @@ pub struct PendingCleanup {
 ///
 /// R2 を先に消す（[`remove`] と同じ理由）。R2 にデータが無くても（書く前に失敗した）、R2 の削除は失敗しない。
 /// R2 のデータを 1 回の削除で消せる数（1,000）ずつまとめて消し、消せた分の行を D1 の batch でまとめて消す。
-/// 呼び出しは、選ぶ 1 回と、1,000 行ごとに R2 と D1 の 1 回ずつ（行が 1,000 増えるごとに 2 回増える）。
-/// 無料のプランでは、cron の 1 回の実行の呼び出し（subrequest）の数に上限があり、先に動くワークスペースの自動削除と分け合う。
-/// D1 の batch は、中の文の数によらず 1 回のクエリに数えられる（D1 の 1 回の実行のクエリの数の上限）。
-/// 失敗した行は残し、次の日にもう一度試す。batch が失敗すると、その 1,000 行までの行がすべて残る
+/// D1 の batch は、中の文の数によらず 1 回のクエリに数えられる。
+/// 自動削除の 1 回の実行で呼べる D1 と R2 の数に上限がある（[`crate::workspace::MAX_SUBREQUESTS_PER_RUN`]）ので、
+/// 1 回に片付けるのは [`MAX_PENDING_BATCHES_PER_RUN`] まとまりまでにし、残りは次の実行に回す
+/// （呼び出しの数は [`PENDING_CLEANUP_SUBREQUESTS`] まで）。
+/// 失敗した行は残し、次の実行でもう一度試す。batch が失敗すると、その 1,000 行までの行がすべて残る
 /// （R2 のデータはもう無いが、行は隠れたまま上限に数えられる）。
 /// 消すときは、選んだときの条件（印を付けた日時）を D1 で確かめ直し、選んだ後に印が外れた行は消さない。
 pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup {
@@ -535,8 +544,11 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
         };
         targets.push((workspace, recipe, photo));
     }
-    // 1,000 は usize に収まる。
+    // 1,000 と 2 は usize に収まる。
     let per_delete = usize::try_from(MAX_KEYS_PER_DELETE).unwrap_or(1);
+    let per_run = usize::try_from(MAX_PENDING_BATCHES_PER_RUN).unwrap_or(1) * per_delete;
+    summary.deferred = targets.len().saturating_sub(per_run);
+    targets.truncate(per_run);
     for chunk in targets.chunks(per_delete) {
         let keys = chunk
             .iter()
@@ -574,7 +586,7 @@ pub async fn remove_objects<B: Backend>(
 }
 
 /// R2 の 1 回の削除で消せるキーの数。
-const MAX_KEYS_PER_DELETE: i64 = 1_000;
+pub const MAX_KEYS_PER_DELETE: i64 = 1_000;
 // 1 つのワークスペースの写真を、1 回の削除で消せるようにする（上限を上げたら、ここで気付く）。
 const _: () = assert!(
     crate::recipe::MAX_RECIPES_PER_WORKSPACE * MAX_PHOTOS_PER_RECIPE <= MAX_KEYS_PER_DELETE

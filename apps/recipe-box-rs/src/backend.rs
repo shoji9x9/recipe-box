@@ -64,6 +64,15 @@ pub struct PhotoKey {
     pub id: String,
 }
 
+/// 自動削除の対象のワークスペース。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct UnusedWorkspace {
+    /// ID。形は確かめていない（呼び出し側が確かめる）。
+    pub id: String,
+    /// 最終利用日時。古い順に消すのに使う。
+    pub last_used_at: i64,
+}
+
 /// 書き込みか削除が終わっていない印（`pending_since`）の付いた写真の行（自動削除が片付ける）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PendingPhoto {
@@ -155,12 +164,13 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &WorkspaceId,
     ) -> impl Future<Output = BackendResult<Option<WorkspaceStatus>>> + Send;
 
-    /// 印が無く、最終利用日時が `before` より前のワークスペースの ID を返す（自動削除の対象）。
+    /// 印が無く、最終利用日時が `before` より前のワークスペースの ID と最終利用日時を返す（自動削除の対象）。
+    /// 並びは決めない（呼び出し側が並べる）。
     /// ID の形は確かめない（呼び出し側が確かめ、正しくない行を失敗に数える）。
     fn list_unused_workspaces(
         &self,
         before: i64,
-    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send;
+    ) -> impl Future<Output = BackendResult<Vec<UnusedWorkspace>>> + Send;
 
     /// 1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、`before` より前のものを消す。
     fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send;
@@ -223,10 +233,17 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &RecipeId,
     ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send;
 
-    /// ワークスペースのすべての写真を返す。
-    fn list_workspace_photos(
+    /// ワークスペースの削除の始めに、すべての写真を返し、印の無い写真の行に削除が終わっていない印（日時は `now`）を付けて隠す。
+    /// 返すのは、印の有無にかかわらず、すべての写真である（R2 のデータを消すため）。
+    ///
+    /// ワークスペースが無いか、印（`pinned`）があるか、`last_used_before` があって最終利用日時がそれより前でなければ、
+    /// 何も隠さずに空を返す（[`Backend::delete_workspace`] と同じ条件）。
+    /// 読むことと印を付けることを 1 つのトランザクションで行い、隠した写真と返した写真を一致させる。
+    fn hide_workspace_photos(
         &self,
         workspace: &WorkspaceId,
+        now: i64,
+        last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send;
 
     /// ワークスペースと、そのレシピ・写真の行を消し、消した写真を返す。R2 のデータは消さない（呼び出し側が、返した写真で消す）。
@@ -286,11 +303,14 @@ pub trait Backend: Clone + Send + Sync + 'static {
         recipe: &RecipeId,
     ) -> impl Future<Output = BackendResult<Vec<Photo>>> + Send;
 
-    /// レシピの写真の行の ID を、印の有無にかかわらず返す（レシピを消すときに、R2 のデータを消すため）。
-    fn list_recipe_photo_ids(
+    /// レシピの削除の始めに、レシピの写真の行の ID を印の有無にかかわらず返し（R2 のデータを消すため）、
+    /// 印の無い行に削除が終わっていない印（日時は `now`）を付けて隠す。
+    /// 読むことと印を付けることを 1 つのトランザクションで行う。
+    fn hide_recipe_photos(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
+        now: i64,
     ) -> impl Future<Output = BackendResult<Vec<String>>> + Send;
 
     /// 写真の行を 1 件返す。無いか、印が付いていれば `None` を返す。

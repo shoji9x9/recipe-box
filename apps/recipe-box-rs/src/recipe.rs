@@ -17,8 +17,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backend::{Backend, RecipePage},
-    error::ApiError,
+    backend::{Backend, BackendError, RecipePage},
+    error::{ApiError, log_error},
     id, photo,
     workspace::{Workspace, WorkspaceId},
 };
@@ -448,9 +448,12 @@ pub async fn delete<B: Backend>(
 
 /// レシピと、その写真を消す。API と画面の両方から使う。
 ///
-/// 1. 今ある写真（印の付いた写真も）のデータを R2 から消す。ここで失敗しても、D1 の行が残るので、もう一度消せる。
-/// 2. D1 でレシピと写真の行を 1 つのトランザクションで消し、消した写真の ID を受け取る。
-/// 3. 2 で消した写真のデータを、もう一度すべて R2 から消す。1 の後に追加された写真や、
+/// 1. D1 で、レシピの写真（印の付いた写真も）の ID を読み、印の無い行に、削除が終わっていない印を付けて隠す（1 つのトランザクション）。
+/// 2. 1 で読んだ写真のデータを R2 から消す。ここで失敗すると、写真は隠れたまま残り、自動削除が片付ける（[`photo::clean_pending`]）。
+///    レシピは写真の無い状態で残り、もう一度消せる。
+/// 3. D1 でレシピと写真の行を 1 つのトランザクションで消し、消した写真の ID を受け取る。
+///    ここで失敗しても、写真は隠れたまま残るので、データの無い写真は見えない（自動削除が片付ける）。
+/// 4. 3 で消した写真のデータを、もう一度すべて R2 から消す。1 の後に追加された写真や、
 ///    1 の後に R2 に書かれた写真のデータを残さないため（無いキーは無視される）。
 ///    R2 の 1 つずつの削除（DeleteObject）は無料だが、ここで使うまとめての削除（DeleteObjects）は、
 ///    公式の料金の一覧に無く、無料かを確かめられていない（docs/security.md の「費用の対策」）。
@@ -458,19 +461,39 @@ pub async fn delete<B: Backend>(
 /// R2 を D1 より後にだけ消すと、R2 の削除が失敗したときに、どの行からもたどれないデータが残る。
 /// D1 より先にだけ消すと、その間に追加された写真のデータが残る
 /// （追加の側も、R2 に書いた後に行の印を外し、行が無くなっていて外せなければ R2 のデータを消す。[`photo::add`]）。
+/// 隠さずに R2 を先に消すと、D1 の削除が失敗したときに、データの無い写真が見えたまま残る。
+///
+/// 1 から 4 は、送り手との接続が切れても最後まで動かす（[`Backend::run_to_completion`]）。
 pub async fn remove<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
     id: &RecipeId,
 ) -> Result<(), ApiError> {
-    // 書き込みか削除の途中の印の付いた写真（画面と API に見せない）も消すので、印にかかわらず読む。
-    let before = backend.list_recipe_photo_ids(workspace, id).await?;
-    photo::remove_objects(backend, workspace, id, &before).await?;
+    let task = remove_with_photos(backend.clone(), workspace.clone(), id.clone());
+    let Some(result) = backend.run_to_completion(task).await else {
+        log_error(&BackendError(
+            "レシピを消す処理が、結果を返さずに終わった".into(),
+        ));
+        return Err(ApiError::Internal);
+    };
+    result
+}
+
+/// [`remove`] の 1 から 4。
+async fn remove_with_photos<B: Backend>(
+    backend: B,
+    workspace: WorkspaceId,
+    id: RecipeId,
+) -> Result<(), ApiError> {
+    let before = backend
+        .hide_recipe_photos(&workspace, &id, backend.now_millis())
+        .await?;
+    photo::remove_objects(&backend, &workspace, &id, &before).await?;
     let deleted = backend
-        .delete_recipe(workspace, id)
+        .delete_recipe(&workspace, &id)
         .await?
         .ok_or(ApiError::RecipeNotFound)?;
-    photo::remove_objects(backend, workspace, id, &deleted).await
+    photo::remove_objects(&backend, &workspace, &id, &deleted).await
 }
 
 #[cfg(test)]

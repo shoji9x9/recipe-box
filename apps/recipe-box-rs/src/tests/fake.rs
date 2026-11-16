@@ -15,7 +15,7 @@ use std::{
 use crate::{
     backend::{
         Backend, BackendError, BackendResult, ListedRecipe, PendingPhoto, PhotoInsert, PhotoKey,
-        PhotoLimits, RecipePage, WorkspaceLimits, WorkspaceStatus,
+        PhotoLimits, RecipePage, UnusedWorkspace, WorkspaceLimits, WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -94,6 +94,16 @@ pub struct FakeBackend {
     pub used_after_listing: Option<String>,
     /// `photo_added_after_first_delete` の写真を、もう追加したか。
     pub injected_photo: Arc<AtomicBool>,
+    /// `true` なら、レシピかワークスペースの D1 の削除（`delete_recipe`・`delete_workspace`）が失敗したことにする。
+    pub broken_owner_delete: bool,
+    /// ワークスペースの写真を隠した直後に、別のリクエストがこのワークスペースを使った（最終利用日時を今にした）ことにする。
+    pub used_after_hiding: Option<String>,
+    /// D1 を呼んだ回数（batch は 1 回）。本物の 1 回の実行のクエリの数の上限を確かめるのに使う。
+    pub d1_calls: Arc<AtomicUsize>,
+    /// R2 を呼んだ回数。
+    pub r2_calls: Arc<AtomicUsize>,
+    /// D1 と R2 を合わせて、この回数を超えて呼ぶと失敗させる（本物の 1 回の実行の上限をまねる）。
+    pub max_calls: Option<usize>,
 }
 
 impl Default for FakeBackend {
@@ -128,6 +138,11 @@ impl Default for FakeBackend {
             broken_list: false,
             broken_records: false,
             injected_photo: Arc::default(),
+            broken_owner_delete: false,
+            used_after_hiding: None,
+            d1_calls: Arc::default(),
+            r2_calls: Arc::default(),
+            max_calls: None,
         }
     }
 }
@@ -243,8 +258,45 @@ impl FakeBackend {
         self.now.fetch_add(millis, Ordering::Relaxed);
     }
 
-    /// DB が壊れたことにしているなら、失敗を返す。
+    /// D1 か R2 の呼び出しを 1 回数える。上限（`max_calls`）を超えたら失敗を返す。
+    fn count_call(&self, counter: &AtomicUsize) -> BackendResult<()> {
+        counter.fetch_add(1, Ordering::Relaxed);
+        let total = self.d1_calls.load(Ordering::Relaxed) + self.r2_calls.load(Ordering::Relaxed);
+        if self.max_calls.is_some_and(|max| total > max) {
+            return Err(BackendError("1 回の実行の呼び出しの上限を超えた".into()));
+        }
+        Ok(())
+    }
+
+    /// D1 の呼び出しを 1 回数える。
+    fn count_d1(&self) -> BackendResult<()> {
+        self.count_call(&self.d1_calls)
+    }
+
+    /// R2 の呼び出しを 1 回数える。
+    fn count_r2(&self) -> BackendResult<()> {
+        self.count_call(&self.r2_calls)
+    }
+
+    /// D1 の呼び出しを数え、DB が壊れたことにしているなら、失敗を返す。D1 のメソッドは、初めに 1 回だけ呼ぶ。
     fn check(&self) -> BackendResult<()> {
+        self.count_d1()?;
+        self.check_broken()
+    }
+
+    /// レシピかワークスペースの D1 の削除を失敗させることにしているなら、失敗を返す。
+    fn check_owner_delete(&self) -> BackendResult<()> {
+        if self.broken_owner_delete {
+            Err(BackendError(
+                "壊れた DB（レシピかワークスペースの削除）".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// DB が壊れたことにしているなら、失敗を返す（呼び出しは数えない）。
+    fn check_broken(&self) -> BackendResult<()> {
         if self.broken {
             Err(BackendError("壊れた DB".into()))
         } else {
@@ -342,40 +394,44 @@ impl Backend for FakeBackend {
     fn list_unused_workspaces(
         &self,
         before: i64,
-    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
-        if self.broken_list {
-            return ready(Err(BackendError("壊れた一覧".into())));
-        }
-        ready(self.check().map(|()| {
+    ) -> impl Future<Output = BackendResult<Vec<UnusedWorkspace>>> + Send {
+        ready(self.check().and_then(|()| {
+            if self.broken_list {
+                return Err(BackendError("壊れた一覧".into()));
+            }
             let pinned = self.pinned.lock().unwrap();
-            let mut ids: Vec<String> = self
+            let mut rows: Vec<UnusedWorkspace> = self
                 .workspaces
                 .lock()
                 .unwrap()
                 .iter()
                 .filter(|(id, last_used_at)| **last_used_at < before && !pinned.contains(*id))
-                .map(|(id, _)| id.clone())
+                .map(|(id, &last_used_at)| UnusedWorkspace {
+                    id: id.clone(),
+                    last_used_at,
+                })
                 .collect();
-            // テストで順番を決めるため、ID で並べる（本物の SQL は順番を決めない）。
-            ids.sort();
+            // 本物の SQL は順番を決めないので、呼び出し側が並べることを確かめるため、新しい順に返す。
+            rows.sort_by(|a, b| (b.last_used_at, &b.id).cmp(&(a.last_used_at, &a.id)));
             if let Some(used) = &self.used_after_listing {
                 let now = self.now_millis();
                 self.workspaces.lock().unwrap().insert(used.clone(), now);
             }
-            ids
+            Ok(rows)
         }))
     }
 
     fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send {
-        if self.broken_records {
-            return ready(Err(BackendError("壊れた記録".into())));
-        }
-        ready(self.check().map(|()| {
+        ready(self.check().and_then(|()| {
+            if self.broken_records {
+                return Err(BackendError("壊れた記録".into()));
+            }
             self.photo_uploads.lock().unwrap().retain(|&t| t >= before);
             self.workspace_creations
                 .lock()
                 .unwrap()
                 .retain(|&t| t >= before);
+            Ok(())
         }))
     }
 
@@ -508,29 +564,62 @@ impl Backend for FakeBackend {
         workspace: &WorkspaceId,
         id: &RecipeId,
     ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send {
-        ready(self.check().map(|()| {
-            self.recipes
-                .lock()
-                .unwrap()
-                .remove(&Self::key(workspace, id.as_str()))?;
-            // D1 の ON DELETE CASCADE と同じく、レシピの写真の行も消す。
-            let mut photos = self.photos.lock().unwrap();
-            let removed = photos
-                .iter()
-                .filter(|(w, r, _)| w == workspace.as_str() && r == id.as_str())
-                .map(|(_, _, p)| p.id.clone())
-                .collect();
-            photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
-            self.forget_pending(&removed);
-            Some(removed)
-        }))
+        ready(
+            self.check()
+                .and_then(|()| self.check_owner_delete())
+                .map(|()| {
+                    self.recipes
+                        .lock()
+                        .unwrap()
+                        .remove(&Self::key(workspace, id.as_str()))?;
+                    // D1 の ON DELETE CASCADE と同じく、レシピの写真の行も消す。
+                    let mut photos = self.photos.lock().unwrap();
+                    let removed = photos
+                        .iter()
+                        .filter(|(w, r, _)| w == workspace.as_str() && r == id.as_str())
+                        .map(|(_, _, p)| p.id.clone())
+                        .collect();
+                    photos.retain(|(w, r, _)| !(w == workspace.as_str() && r == id.as_str()));
+                    self.forget_pending(&removed);
+                    Some(removed)
+                }),
+        )
     }
 
-    fn list_workspace_photos(
+    fn hide_workspace_photos(
         &self,
         workspace: &WorkspaceId,
+        now: i64,
+        last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send {
-        ready(self.check().map(|()| self.workspace_photo_keys(workspace)))
+        ready(self.check().and_then(|()| {
+            if self.broken_photo_pending {
+                return Err(BackendError("壊れた DB（写真の印）".into()));
+            }
+            // 本物の SQL と同じく、delete_workspace で消す条件のワークスペースのときだけ、読んで隠す。
+            let Some(&last_used_at) = self.workspaces.lock().unwrap().get(workspace.as_str())
+            else {
+                return Ok(Vec::new());
+            };
+            if self.pinned.lock().unwrap().contains(workspace.as_str())
+                || last_used_before.is_some_and(|before| last_used_at >= before)
+            {
+                return Ok(Vec::new());
+            }
+            let keys = self.workspace_photo_keys(workspace);
+            let mut pending = self.pending_photos.lock().unwrap();
+            for key in &keys {
+                pending.entry(key.id.clone()).or_insert(now);
+            }
+            if self.used_after_hiding.as_deref() == Some(workspace.as_str()) {
+                let now = self.now_millis();
+                self.workspaces
+                    .lock()
+                    .unwrap()
+                    .insert(workspace.to_string(), now);
+            }
+            Ok(keys)
+        }))
     }
 
     fn delete_workspace(
@@ -538,34 +627,38 @@ impl Backend for FakeBackend {
         workspace: &WorkspaceId,
         last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Option<Vec<PhotoKey>>>> + Send {
-        ready(self.check().map(|()| {
-            // 本物の SQL と同じく、印のあるワークスペースと、last_used_before より後に使われたワークスペースは消さない。
-            let mut workspaces = self.workspaces.lock().unwrap();
-            let last_used_at = *workspaces.get(workspace.as_str())?;
-            if self.pinned.lock().unwrap().contains(workspace.as_str())
-                || last_used_before.is_some_and(|before| last_used_at >= before)
-            {
-                return None;
-            }
-            workspaces.remove(workspace.as_str());
-            drop(workspaces);
-            // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
-            let removed = self.workspace_photo_keys(workspace);
-            self.recipes
-                .lock()
-                .unwrap()
-                .retain(|(w, _), _| w != workspace.as_str());
-            self.photos
-                .lock()
-                .unwrap()
-                .retain(|(w, _, _)| w != workspace.as_str());
-            self.forget_pending(removed.iter().map(|key| &key.id));
-            // 別のリクエストが先に（同じように）消していたなら、この削除では何も消えていない。
-            if self.workspace_vanishes_on_delete {
-                return None;
-            }
-            Some(removed)
-        }))
+        ready(
+            self.check()
+                .and_then(|()| self.check_owner_delete())
+                .map(|()| {
+                    // 本物の SQL と同じく、印のあるワークスペースと、last_used_before より後に使われたワークスペースは消さない。
+                    let mut workspaces = self.workspaces.lock().unwrap();
+                    let last_used_at = *workspaces.get(workspace.as_str())?;
+                    if self.pinned.lock().unwrap().contains(workspace.as_str())
+                        || last_used_before.is_some_and(|before| last_used_at >= before)
+                    {
+                        return None;
+                    }
+                    workspaces.remove(workspace.as_str());
+                    drop(workspaces);
+                    // D1 の ON DELETE CASCADE と同じく、レシピと写真の行も消す。
+                    let removed = self.workspace_photo_keys(workspace);
+                    self.recipes
+                        .lock()
+                        .unwrap()
+                        .retain(|(w, _), _| w != workspace.as_str());
+                    self.photos
+                        .lock()
+                        .unwrap()
+                        .retain(|(w, _, _)| w != workspace.as_str());
+                    self.forget_pending(removed.iter().map(|key| &key.id));
+                    // 別のリクエストが先に（同じように）消していたなら、この削除では何も消えていない。
+                    if self.workspace_vanishes_on_delete {
+                        return None;
+                    }
+                    Some(removed)
+                }),
+        )
     }
 
     fn insert_photo(
@@ -613,19 +706,30 @@ impl Backend for FakeBackend {
         }))
     }
 
-    fn list_recipe_photo_ids(
+    fn hide_recipe_photos(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
+        now: i64,
     ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
-        ready(self.check().map(|()| {
-            self.photos
+        ready(self.check().and_then(|()| {
+            if self.broken_photo_pending {
+                return Err(BackendError("壊れた DB（写真の印）".into()));
+            }
+            let ids: Vec<String> = self
+                .photos
                 .lock()
                 .unwrap()
                 .iter()
                 .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
                 .map(|(_, _, p)| p.id.clone())
-                .collect()
+                .collect();
+            // 印の無い行にだけ、印を付ける（印の付いた行の日時は変えない）。
+            let mut pending = self.pending_photos.lock().unwrap();
+            for id in &ids {
+                pending.entry(id.clone()).or_insert(now);
+            }
+            Ok(ids)
         }))
     }
 
@@ -674,10 +778,13 @@ impl Backend for FakeBackend {
         recipe: &RecipeId,
         id: &PhotoId,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
+        if let Err(error) = self.count_d1() {
+            return ready(Err(error));
+        }
         if self.broken_photo_delete {
             return ready(Err(BackendError("壊れた DB（写真の削除）".into())));
         }
-        ready(self.check().map(|()| {
+        ready(self.check_broken().map(|()| {
             let mut photos = self.photos.lock().unwrap();
             let before = photos.len();
             photos.retain(|(w, r, p)| {
@@ -740,10 +847,13 @@ impl Backend for FakeBackend {
         photos: &[(WorkspaceId, RecipeId, PhotoId)],
         marked_before: i64,
     ) -> impl Future<Output = BackendResult<()>> + Send {
+        if let Err(error) = self.count_d1() {
+            return ready(Err(error));
+        }
         if self.broken_photo_delete {
             return ready(Err(BackendError("壊れた DB（写真の削除）".into())));
         }
-        ready(self.check().map(|()| {
+        ready(self.check_broken().map(|()| {
             // 本物の batch と同じく、まとめて消す（途中で失敗して一部だけが消えることは無い）。
             // 印を付けた日時が marked_before より前の行だけを消し、消した行の印だけを消す。
             let marked = self.pending_photos.lock().unwrap().clone();
@@ -786,6 +896,9 @@ impl Backend for FakeBackend {
         let PhotoBody::Bytes(bytes) = body else {
             panic!("テストでストリームの本文は作らない");
         };
+        if let Err(error) = self.count_r2() {
+            return ready(Err(error));
+        }
         if self.photo_rows_vanish_on_put {
             self.photos.lock().unwrap().clear();
         }
@@ -801,6 +914,9 @@ impl Backend for FakeBackend {
     }
 
     fn get_object(&self, key: &str) -> impl Future<Output = BackendResult<Option<Vec<u8>>>> + Send {
+        if let Err(error) = self.count_r2() {
+            return ready(Err(error));
+        }
         ready(Ok(self
             .objects
             .lock()
@@ -810,6 +926,9 @@ impl Backend for FakeBackend {
     }
 
     fn delete_objects(&self, keys: Vec<String>) -> impl Future<Output = BackendResult<()>> + Send {
+        if let Err(error) = self.count_r2() {
+            return ready(Err(error));
+        }
         if self.broken_r2_delete {
             return ready(Err(BackendError("壊れた R2".into())));
         }

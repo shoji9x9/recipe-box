@@ -17,7 +17,7 @@ use worker::{
 use crate::{
     backend::{
         Backend, BackendError, BackendResult, ListedRecipe, PendingPhoto, PhotoInsert, PhotoKey,
-        PhotoLimits, RecipePage, WorkspaceLimits, WorkspaceStatus,
+        PhotoLimits, RecipePage, UnusedWorkspace, WorkspaceLimits, WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -380,23 +380,24 @@ impl Backend for CloudflareBackend {
     fn list_unused_workspaces(
         &self,
         before: i64,
-    ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
+    ) -> impl Future<Output = BackendResult<Vec<UnusedWorkspace>>> + Send {
         let env = self.env.clone();
         let before = SendWrapper::new(int_to_js(before));
         SendFuture::new(async move {
             let action = "使われていないワークスペースを読めない";
             let db = database(&env)?;
             // 自動削除のクエリなので、全体を対象にする（AGENTS.md）。ワークスペースは多くても 100 個なので、索引は使わない。
-            let rows = db
-                .prepare("SELECT id FROM workspaces WHERE pinned = FALSE AND last_used_at < ?")
-                .bind(&[before.0])
-                .map_err(|e| backend_error(action, &e))?
-                .all()
-                .await
-                .map_err(|e| backend_error(action, &e))?
-                .results::<IdRow>()
-                .map_err(|e| backend_error(action, &e))?;
-            Ok(rows.into_iter().map(|row| row.id).collect())
+            // 並べ替えと 1 回に消す数での切り詰めは、呼び出し側（Rust）で行う（LIMIT を使わない。AGENTS.md の「SQL」）。
+            db.prepare(
+                "SELECT id, last_used_at FROM workspaces WHERE pinned = FALSE AND last_used_at < ?",
+            )
+            .bind(&[before.0])
+            .map_err(|e| backend_error(action, &e))?
+            .all()
+            .await
+            .map_err(|e| backend_error(action, &e))?
+            .results::<UnusedWorkspace>()
+            .map_err(|e| backend_error(action, &e))
         })
     }
 
@@ -656,21 +657,55 @@ impl Backend for CloudflareBackend {
         })
     }
 
-    fn list_workspace_photos(
+    fn hide_workspace_photos(
         &self,
         workspace: &WorkspaceId,
+        now: i64,
+        last_used_before: Option<i64>,
     ) -> impl Future<Output = BackendResult<Vec<PhotoKey>>> + Send {
         let env = self.env.clone();
         let workspace = workspace.to_string();
+        let now = SendWrapper::new(int_to_js(now));
+        let last_used_before = last_used_before.map(int_to_js).map(SendWrapper::new);
         SendFuture::new(async move {
-            let action = "ワークスペースの写真を読めない";
+            let action = "ワークスペースの写真を隠せない";
             let db = database(&env)?;
-            db.prepare(WORKSPACE_PHOTOS_SQL)
-                .bind(&[workspace.into()])
-                .map_err(|e| backend_error(action, &e))?
-                .all()
+            let w = || JsValue::from(workspace.as_str());
+            // delete_workspace と同じ条件のワークスペースのときだけ、読んで隠す。
+            let (condition, condition_binds) = match &last_used_before {
+                None => (
+                    "EXISTS (SELECT 1 FROM workspaces WHERE id = ? AND pinned = FALSE)",
+                    vec![w()],
+                ),
+                Some(before) => (
+                    "EXISTS (SELECT 1 FROM workspaces WHERE id = ? AND pinned = FALSE AND last_used_at < ?)",
+                    vec![w(), before.0.clone()],
+                ),
+            };
+            let mut select_binds = vec![w()];
+            select_binds.extend(condition_binds.iter().cloned());
+            let photos = db
+                .prepare(format!("{WORKSPACE_PHOTOS_SQL} AND {condition}"))
+                .bind(&select_binds)
+                .map_err(|e| backend_error(action, &e))?;
+            let mut update_binds = vec![now.0.clone(), w()];
+            update_binds.extend(condition_binds);
+            let hide = db
+                .prepare(format!(
+                    "UPDATE photos SET pending_since = ? \
+                     WHERE workspace_id = ? AND pending_since IS NULL AND {condition}"
+                ))
+                .bind(&update_binds)
+                .map_err(|e| backend_error(action, &e))?;
+            // batch は 1 つのトランザクションなので、読んだ写真と、隠した写真の行が一致する。
+            let results = db
+                .batch(vec![photos, hide])
                 .await
-                .map_err(|e| backend_error(action, &e))?
+                .map_err(|e| backend_error(action, &e))?;
+            let [photos, _] = results.as_slice() else {
+                return Err(BackendError(format!("{action}: batch の結果の数が違う")));
+            };
+            photos
                 .results::<PhotoKey>()
                 .map_err(|e| backend_error(action, &e))
         })
@@ -861,23 +896,40 @@ impl Backend for CloudflareBackend {
         })
     }
 
-    fn list_recipe_photo_ids(
+    fn hide_recipe_photos(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
+        now: i64,
     ) -> impl Future<Output = BackendResult<Vec<String>>> + Send {
         let env = self.env.clone();
         let values = [workspace.to_string(), recipe.to_string()];
+        let now = SendWrapper::new(int_to_js(now));
         SendFuture::new(async move {
-            let action = "レシピの写真を読めない";
+            let action = "レシピの写真を隠せない";
             let db = database(&env)?;
-            Ok(db
+            let [w, r] = values.map(JsValue::from);
+            // 書き込みか削除の途中の印の付いた行も、R2 のデータを消すために読む。
+            let photos = db
                 .prepare("SELECT id FROM photos WHERE workspace_id = ? AND recipe_id = ?")
-                .bind(&values.map(JsValue::from))
-                .map_err(|e| backend_error(action, &e))?
-                .all()
+                .bind(&[w.clone(), r.clone()])
+                .map_err(|e| backend_error(action, &e))?;
+            let hide = db
+                .prepare(
+                    "UPDATE photos SET pending_since = ? \
+                     WHERE workspace_id = ? AND recipe_id = ? AND pending_since IS NULL",
+                )
+                .bind(&[now.0.clone(), w, r])
+                .map_err(|e| backend_error(action, &e))?;
+            // batch は 1 つのトランザクションなので、読んだ写真と、隠した写真の行が一致する。
+            let results = db
+                .batch(vec![photos, hide])
                 .await
-                .map_err(|e| backend_error(action, &e))?
+                .map_err(|e| backend_error(action, &e))?;
+            let [photos, _] = results.as_slice() else {
+                return Err(BackendError(format!("{action}: batch の結果の数が違う")));
+            };
+            Ok(photos
                 .results::<IdRow>()
                 .map_err(|e| backend_error(action, &e))?
                 .into_iter()
