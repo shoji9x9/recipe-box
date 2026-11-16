@@ -87,7 +87,7 @@ main に入った変更は、GitHub Actions の `deploy.yml` が本番にデプ�
 - ダッシュボードの Metrics: リクエストの数・エラーの割合・CPU 時間の傾向を見ます。
 
 ワークスペースの ID は、知ればそのワークスペースを読み書きできる鍵なので、ログに残しません。アプリがエラーを出すときは、ID の形の文字の並びを伏せてから出します。
-理由は [docs/security.md の「ログ」](repo:docs/security.md#ログ)に、見方は [docs/development.md](repo:docs/development.md) にあります。
+理由は [docs/security.md の「ログ」](repo:docs/security.md#ログ)に、見方は [docs/development.md の「本番のログ」](repo:docs/development.md#本番のログ)にあります。
 
 ### 無料枠などの制約
 
