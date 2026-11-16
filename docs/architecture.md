@@ -21,7 +21,7 @@
 | DB | Cloudflare D1 |
 | 写真の保管先 | Cloudflare R2 |
 | デプロイと開発用のサーバー | wrangler |
-| テスト | Rust は `cargo test`。画面の JavaScript は [vitest](https://vitest.dev/) と [happy-dom](https://github.com/capricorn86/happy-dom)（ブラウザの代わりの DOM）で、テストは TypeScript で書く。Node のスクリプト（seed・modern-web-guidance）は、Node に入っている `node --test` |
+| テスト | Rust は `cargo test`。JavaScript（画面と Node のスクリプト）は [vitest](https://vitest.dev/) で、テストは TypeScript で書く。画面は [happy-dom](https://github.com/capricorn86/happy-dom)（ブラウザの代わりの DOM）で動かす。テストの仕組みを 1 つにそろえるため、Node に入っている `node --test` は使わない |
 | リンターとフォーマッター | clippy・rustfmt・taplo（TOML）・rumdl（Markdown）・TypeScript の型の確認（`tsc --noEmit`） |
 | ツールの版の管理 | [mise](https://mise.jdx.dev/) |
 | Node のパッケージマネージャー | pnpm |

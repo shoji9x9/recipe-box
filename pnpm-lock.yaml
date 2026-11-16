@@ -172,11 +172,14 @@ importers:
       '@commitlint/config-conventional':
         specifier: ^21.2.4
         version: 21.2.4
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
       chrome-devtools-mcp:
         specifier: 1.12.0
         version: 1.12.0
       happy-dom:
-        specifier: 21.0.4
+        specifier: ^21.0.4
         version: 21.0.4
       htmx.org:
         specifier: 2.0.11
@@ -185,10 +188,10 @@ importers:
         specifier: 0.0.197
         version: 0.0.197
       typescript:
-        specifier: 7.0.2
+        specifier: ^7.0.2
         version: 7.0.2
       vitest:
-        specifier: 5.1.0
+        specifier: ^5.1.0
         version: 5.1.0(@types/node@26.6.6)(happy-dom@21.0.4)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0))
       wrangler:
         specifier: ^4.158.0

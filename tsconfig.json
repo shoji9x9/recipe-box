@@ -1,20 +1,37 @@
 {
   // 画面の JavaScript（JSDoc の型）と、その単体テスト（TypeScript）の型を、`tsc --noEmit` で確かめる（mise run lint）。
-  // 出力はしない。テストは vitest がそのまま動かす。
+  // 出力はしない。テストは vitest が 1 ファイルずつ変換して動かす。
+  // Node のスクリプトのテストは、DOM の代わりに Node の型を使うので、scripts/tsconfig.json で確かめる（共通の設定はここから引き継ぐ）。
   "compilerOptions": {
+    // 実行する環境。画面はブラウザ、テストは vitest（どちらも ES モジュール）。
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "moduleDetection": "force",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": [],
+    // JavaScript のまま配るファイルも、JSDoc の型で確かめる。
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
+    // vitest（esbuild）はファイルごとに変換するので、型だけの import などを 1 ファイルで判断できる形に限る。
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    // 型の確かめ方。
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedSideEffectImports": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    // 依存のパッケージの .d.ts は確かめない（依存の型の誤りで lint が落ちないように）。
     "skipLibCheck": true
   },
-  // 画面の JavaScript・その型の宣言・テスト（vitest.config.ts の include）を確かめる。htmx.min.js はビルドで写す配布物なので除く。
+  // 画面の JavaScript・その型の宣言・テスト・vitest の設定。htmx.min.js はビルドで写す配布物なので除く。
   "include": ["apps/*/public/assets/**/*.js", "apps/*/js-types/**/*.d.ts", "apps/*/js-tests/**/*.ts", "vitest.config.ts"],
   "exclude": ["**/*.min.js"]
 }

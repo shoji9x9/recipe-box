@@ -41,8 +41,9 @@ run = [
   "ghalint run",
   "zizmor --offline .github",
   "shellcheck scripts/*.sh",
-  # 画面の JavaScript（JSDoc の型）と、そのテスト（TypeScript）の型（tsconfig.json）。
+  # 画面の JavaScript（JSDoc の型）とそのテストの型（tsconfig.json）と、スクリプトのテストの型（scripts/tsconfig.json）。
   "pnpm exec tsc -p tsconfig.json",
+  "pnpm exec tsc -p scripts/tsconfig.json",
   # modern-web-guidance のスキルとパッケージの版がそろっているか（AGENTS.md の「スキル」）。
   "scripts/check-mwg-version.sh",
 ]
@@ -52,12 +53,11 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、画面の JavaScript とスクリプト（seed・modern-web-guidance）の単体テストを実行する"
+description = "Rust のテストと、JavaScript の単体テスト（画面と、seed・modern-web-guidance のスクリプト）を実行する"
 run = [
   "cargo test --workspace --locked",
-  # 画面の JavaScript（apps/*/js-tests/。vitest.config.ts）。
+  # 画面（apps/*/js-tests/）とスクリプト（scripts/*.test.ts）。vitest.config.ts。
   "pnpm exec vitest run",
-  "node --test scripts/seed-lib.test.mjs scripts/mwg.test.mjs",
 ]
 
 [tasks.build]

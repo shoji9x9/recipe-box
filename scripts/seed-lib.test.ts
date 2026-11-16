@@ -1,10 +1,10 @@
-// scripts/seed-lib.mjs の単体テスト（mise run test で実行する）。
+// scripts/seed-lib.mjs の単体テスト（mise run test の vitest で実行する）。
 // 伏せ字は、公開の Actions のログにデモの ID などを出さないための要なので、形ごとに確かめる。
 import assert from "node:assert/strict";
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+import { afterAll, beforeAll, describe, test } from "vitest";
 import {
   MAX_INGREDIENTS,
   MAX_NAME,
@@ -86,8 +86,8 @@ describe("shortReason", () => {
 });
 
 describe("lstatWithoutLinks", () => {
-  let base;
-  before(() => {
+  let base: string;
+  beforeAll(() => {
     base = mkdtempSync(join(tmpdir(), "seed-lib-link-"));
     mkdirSync(join(base, "seed", "photos"), { recursive: true });
     writeFileSync(join(base, "seed", "photos", "a.jpg"), "x");
@@ -97,16 +97,17 @@ describe("lstatWithoutLinks", () => {
     symlinkSync(join(base, "seed"), join(base, "seed-link"));
     symlinkSync(join(base, "nowhere.jpg"), join(base, "seed", "photos", "dangling.jpg"));
   });
-  after(() => {
+  afterAll(() => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  const reason = (path) => {
+  const reason = (path: string) => {
     try {
       lstatWithoutLinks(path, base);
       return "ok";
     } catch (error) {
-      return error.reason ?? error.code;
+      const { reason, code } = error as { reason?: string; code?: string };
+      return reason ?? code;
     }
   };
 
@@ -130,8 +131,8 @@ describe("lstatWithoutLinks", () => {
   });
 
   test("ふつうのファイルだけを、理由の分かる文で受け付ける", () => {
-    const check = (path) => regularFileWithoutLinks(path, base, "x");
-    assert.equal(check(join(base, "seed", "recipes.json")).isFile(), true);
+    const check = (path: string) => regularFileWithoutLinks(path, base, "x");
+    assert.equal(check(join(base, "seed", "recipes.json"))?.isFile(), true);
     assert.throws(() => check(join(base, "seed", "photos-link", "a.jpg")), /x か、その上のディレクトリがシンボリックリンク/);
     assert.throws(() => check(tmpdir()), /x がリポジトリの下に無い/);
     assert.throws(() => check(join(base, "seed", "missing.json")), /x を読めない（ENOENT）/);
@@ -148,40 +149,40 @@ describe("lstatWithoutLinks", () => {
 
 describe("validateRecipes", () => {
   // base はリポジトリのルートにあたる一時ディレクトリ、dir はその下の seed/photos/。
-  let base;
-  let dir;
+  let base: string;
+  let dir: string;
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
   // 先頭だけを書いて、大きさは疎なファイルで決める（ディスクを使わない）。
-  function photo(name, size, head = jpeg) {
+  function photo(name: string, size: number, head = jpeg) {
     const path = join(dir, name);
     writeFileSync(path, head);
     truncateSync(path, size);
     return name;
   }
   const recipe = (overrides = {}) => ({ name: "カレー", servings: 2, ...overrides });
-  const validate = (recipes, photoDir = dir) => validateRecipes(recipes, photoDir, base);
+  const validate = (recipes: unknown, photoDir = dir) => validateRecipes(recipes, photoDir, base);
   // データの誤りは、どれも SeedDataError で、文が pattern に合う。
-  const rejects = (recipes, pattern, photoDir = dir) =>
+  const rejects = (recipes: unknown, pattern: RegExp, photoDir = dir) =>
     assert.throws(
       () => validate(recipes, photoDir),
       (error) => error instanceof SeedDataError && pattern.test(error.message),
     );
 
-  before(() => {
+  beforeAll(() => {
     // 本物と同じく、<一時ディレクトリ>/seed/photos/ の形にする。
     base = mkdtempSync(join(tmpdir(), "seed-lib-test-"));
     dir = join(base, "seed", "photos");
     mkdirSync(dir, { recursive: true });
   });
-  after(() => {
+  afterAll(() => {
     rmSync(base, { recursive: true, force: true });
   });
 
   test("決まりどおりのレシピを受け付け、写真の形式と大きさを返す", () => {
     const file = photo("ok.jpg", 10);
     const { recipes, photoBytes } = validate([recipe({ photos: [file] })]);
-    assert.deepEqual(recipes[0].body, { name: "カレー", servings: 2, ingredients: "", steps: "" });
-    assert.equal(recipes[0].files[0].contentType, "image/jpeg");
+    assert.deepEqual(recipes[0]?.body, { name: "カレー", servings: 2, ingredients: "", steps: "" });
+    assert.equal(recipes[0]?.files[0]?.contentType, "image/jpeg");
     assert.equal(photoBytes, 10);
   });
 
@@ -279,7 +280,7 @@ describe("validateRecipes", () => {
     const webp = Buffer.from("RIFF\0\0\0\0WEBP", "latin1");
     const { recipes } = validate([recipe({ photos: [photo("p.png", 20, png), photo("w.webp", 20, webp)] })]);
     assert.deepEqual(
-      recipes[0].files.map((f) => f.contentType),
+      recipes[0]?.files.map((f) => f.contentType),
       ["image/png", "image/webp"],
     );
     rejects([recipe({ photos: [photo("text.jpg", 20, Buffer.from("not an image"))] })], /JPEG・PNG・WebP/);
@@ -295,7 +296,7 @@ describe("validateRecipes", () => {
     assert.ok(Math.ceil((count + 1) / MAX_PHOTOS_PER_RECIPE) <= MAX_RECIPES);
     const sizes = [...Array(count - 1).fill(MAX_PHOTO_BYTES), last, jpeg.length];
     const files = sizes.map((size, i) => photo(`t${i}.jpg`, size));
-    const chunk = (list) =>
+    const chunk = (list: string[]) =>
       Array.from({ length: Math.ceil(list.length / perRecipe) }, (_, i) =>
         recipe({ photos: list.slice(i * perRecipe, (i + 1) * perRecipe) }),
       );

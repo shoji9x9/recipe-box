@@ -1,12 +1,16 @@
-// 画面の JavaScript の単体テストの設定（mise run test）。ブラウザの代わりに happy-dom の DOM で動かす。
+// JavaScript の単体テストの設定（mise run test）。テストは TypeScript で書く（docs/development.md の「テスト」）。
+// - dom: 画面の JavaScript（apps/*/js-tests/）。ブラウザの代わりに happy-dom の DOM で動かす。
+// - node: Node のスクリプト（scripts/）。Node のまま動かす。
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    environment: "happy-dom",
-    include: ["apps/*/js-tests/**/*.test.ts"],
     // テストの間で、fetch などの差し替えを残さない。
     restoreMocks: true,
     unstubGlobals: true,
+    projects: [
+      { extends: true, test: { name: "dom", environment: "happy-dom", include: ["apps/*/js-tests/**/*.test.ts"] } },
+      { extends: true, test: { name: "node", environment: "node", include: ["scripts/**/*.test.ts"] } },
+    ],
   },
 });

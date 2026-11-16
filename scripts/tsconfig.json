@@ -1,0 +1,14 @@
+{
+  // Node のスクリプト（seed・modern-web-guidance）の単体テストの型を確かめる（mise run lint）。
+  // 共通の設定はルートの tsconfig.json から引き継ぎ、DOM の代わりに Node の型を使う。
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    // スクリプト（seed-lib.mjs など）には JSDoc の型を付けていないので、テストの .ts だけを確かめる。
+    // テストが import するスクリプトの型は、コードから推し量ったものを使う。
+    "checkJs": false
+  },
+  "include": ["**/*.test.ts"],
+  "exclude": []
+}
