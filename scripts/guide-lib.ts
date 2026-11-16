@@ -56,12 +56,15 @@ export function extractSnippet(text: string, path: string, name: string): string
   if (end <= start + 1) {
     throw new GuideError(`${path} の印 ${name} の中身が空か、end が start より前にあります`);
   }
-  return dedent(lines.slice(start + 1, end));
+  return dedent(lines.slice(start + 1, end), path, name);
 }
 
 /** 行の共通の字下げ（空白）を外して、改行でつなぐ。空の行は数えない。 */
-function dedent(lines: string[]): string {
-  const indents = lines.filter((line) => line.trim() !== "").map((line) => /^ */.exec(line)?.[0].length ?? 0);
+function dedent(lines: string[], path: string, name: string): string {
+  const indents = lines.filter((line) => line.trim() !== "").map((line) => /^[ \t]*/.exec(line)?.[0].length ?? 0);
+  if (indents.length === 0) {
+    throw new GuideError(`${path} の印 ${name} の中身が空です`);
+  }
   const indent = Math.min(...indents);
   return lines.map((line) => line.slice(indent).trimEnd()).join("\n");
 }
@@ -88,10 +91,23 @@ export function expandDirectives(
   readFile: (path: string) => string,
 ): { markdown: string; diagrams: Diagram[] } {
   const diagrams: Diagram[] = [];
-  const lines = markdown.split(/\r?\n/).map((line) => {
+  // コードのブロック（``` か ~~~ で囲んだ所）の中は、印として読まない（印の書き方の例を書けるように）。
+  let fence: string | undefined;
+  const lines = markdown.split(/\r?\n/).flatMap((line) => {
     const trimmed = line.trim();
+    const marker = /^(`{3,}|~{3,})/.exec(trimmed)?.[1];
+    if (fence !== undefined) {
+      if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length && trimmed === marker) {
+        fence = undefined;
+      }
+      return [line];
+    }
+    if (marker !== undefined) {
+      fence = marker;
+      return [line];
+    }
     if (!trimmed.startsWith("<!--")) {
-      return line;
+      return [line];
     }
     const code = /^<!--\s*code:\s*([^#\s]+)#(\S+)\s*-->$/.exec(trimmed);
     if (code) {
@@ -100,8 +116,8 @@ export function expandDirectives(
       checkPath(path);
       const snippet = extractSnippet(readFile(path), path, name);
       const language = LANGUAGES[path.split(".").pop() ?? ""] ?? "";
-      const fence = snippet.includes("```") ? "````" : "```";
-      return [`[${path}](${REPOSITORY_BLOB}${path}) から:`, "", `${fence}${language}`, snippet, fence].join("\n");
+      const codeFence = snippet.includes("```") ? "````" : "```";
+      return [`[${path}](${REPOSITORY_BLOB}${path}) から:`, "", `${codeFence}${language}`, snippet, codeFence];
     }
     const diagram = /^<!--\s*diagram:\s*(\S+)\s*\|\s*(.+?)\s*-->$/.exec(trimmed);
     if (diagram) {
@@ -110,13 +126,21 @@ export function expandDirectives(
       diagrams.push({ name, alt });
       // 図はページの幅に合わせて縮むので、押すと元の大きさで開けるようにする。
       const src = `${DIAGRAM_PATH}${name}.svg`;
-      return `[![${alt.replace(/[[\]]/g, "")}](${src})](${src})`;
+      return [`[![${alt.replace(/[[\]]/g, "")}](${src})](${src})`];
     }
     if (/^<!--\s*(code|diagram)\b/.test(trimmed)) {
       throw new GuideError(`印の書き方が違います: ${trimmed}`);
     }
-    return line;
+    // ほかのコメント（メモなど）は、ページに出さない。生の HTML を書かせない（html: false）ので、残すと文字として出るためである。
+    // 1 行に収まるコメントだけを書ける。
+    if (!trimmed.endsWith("-->")) {
+      throw new GuideError(`コメントは 1 行に収めてください: ${trimmed}`);
+    }
+    return [];
   });
+  if (fence !== undefined) {
+    throw new GuideError("閉じていないコードのブロックがあります");
+  }
   return { markdown: lines.join("\n"), diagrams };
 }
 
@@ -144,6 +168,43 @@ export function slug(text: string): string {
     .replace(/^-|-$/g, "");
 }
 
+/**
+ * GitHub が Markdown の見出しに付ける ID（リンクの # の後ろ）。小文字にし、文字・数字・空白・-・_ 以外を外し、空白を - にする。
+ * 同じ見出しが 2 つ以上あるときの番号（-1 など）は付けない。
+ */
+export function githubSlug(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, "")
+    .replace(/\s/g, "-");
+}
+
+/** Markdown の文書の見出しの、GitHub の ID の一覧。コードのブロックの中の # の行は数えない。 */
+export function markdownAnchors(markdown: string): Set<string> {
+  const anchors = new Set<string>();
+  let inFence = false;
+  for (const line of markdown.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    const heading = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!inFence && heading) {
+      anchors.add(githubSlug(heading[1] ?? ""));
+    }
+  }
+  return anchors;
+}
+
+/** 見出しなどの inline の token から、表に出る文字だけを取り出す（`code` の記号やリンクの先を外す）。 */
+function plainText(children: { type: string; content: string }[] | null): string {
+  return (children ?? [])
+    .filter((child) => child.type === "text" || child.type === "code_inline")
+    .map((child) => child.content)
+    .join("");
+}
+
 /** 目次に出す見出し。 */
 export interface Heading {
   level: 2 | 3;
@@ -154,10 +215,12 @@ export interface Heading {
 /**
  * Markdown を HTML にする。生の HTML は書かせない（html: false）。
  * 見出しに ID を付け、`repo:<パス>` のリンクを公開リポジトリの main のファイルへのリンクにする（`exists` で、ファイルがあるかを確かめる）。
+ * `repo:<パス>#<見出し>` のリンクは、その Markdown の文書（`read` で読む）に、GitHub の ID がその見出しがあるかも確かめる。
  */
 export function renderMarkdown(
   markdown: string,
   exists: (path: string) => boolean,
+  read: (path: string) => string,
 ): { html: string; title: string; headings: Heading[] } {
   const md = new MarkdownIt({ html: false, linkify: false, typographer: false });
   // 幅の広い表とコードは、ページの全体ではなくその部分だけを横に動かす。
@@ -178,7 +241,7 @@ export function renderMarkdown(
   let title = "";
   tokens.forEach((token, i) => {
     if (token.type === "heading_open") {
-      const text = tokens[i + 1]?.content ?? "";
+      const text = plainText(tokens[i + 1]?.children ?? null);
       const level = Number(token.tag.slice(1));
       if (level === 1) {
         title = text;
@@ -204,6 +267,14 @@ export function renderMarkdown(
         checkPath(path);
         if (!exists(path)) {
           throw new GuideError(`リンクの先のファイルがありません: ${path}`);
+        }
+        if (hash !== undefined) {
+          if (!path.endsWith(".md")) {
+            throw new GuideError(`# の付いたリンクは、Markdown の文書にだけ書けます: ${path}#${hash}`);
+          }
+          if (!markdownAnchors(read(path)).has(decodeURIComponent(hash))) {
+            throw new GuideError(`リンクの先の見出しがありません: ${path}#${hash}`);
+          }
         }
         child.attrSet("href", `${REPOSITORY_BLOB}${path}${hash ? `#${hash}` : ""}`);
       } else if (href.startsWith("#")) {

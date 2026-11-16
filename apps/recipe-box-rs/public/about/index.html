@@ -363,6 +363,7 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 <p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）だけです。どちらも、動かなければふつうのフォームとして働きます。</p>
 <h3 id="テストの仕組み">テストの仕組み</h3>
 <p>アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分は、<code>Backend</code> トレイトにまとめています。</p>
+<p>次は、トレイトの先頭（乱数・時計・回数の制限）だけです。ワークスペース・レシピ・写真を読み書きするメソッドが続きます（全体は <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a>）。</p>
 <p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a> から:</p>
 <pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">pub trait Backend: Clone + Send + Sync + 'static {
     /// 暗号に使える質の 128 ビットの乱数を返す。
@@ -388,7 +389,8 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 <p>本番では Cloudflare の機能を使う実装（<code>CloudflareBackend</code>）を、テストではメモリの中で動く偽物（<code>FakeBackend</code>）を使います。
 テストは、偽物を入れた Router にリクエストを送り、応答と、偽物に残ったデータを確かめます。</p>
 <p><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/tests/workspaces.rs">apps/recipe-box-rs/src/tests/workspaces.rs</a> から:</p>
-<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">async fn create_workspace_returns_new_id() {
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[tokio::test]
+async fn create_workspace_returns_new_id() {
     let backend = FakeBackend::default();
     let first = send(router(backend.clone()), create_workspace_request()).await;
     let second = send(router(backend.clone()), create_workspace_request()).await;

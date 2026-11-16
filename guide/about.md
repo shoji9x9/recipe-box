@@ -212,6 +212,8 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 
 アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分は、`Backend` トレイトにまとめています。
 
+次は、トレイトの先頭（乱数・時計・回数の制限）だけです。ワークスペース・レシピ・写真を読み書きするメソッドが続きます（全体は [apps/recipe-box-rs/src/backend.rs](repo:apps/recipe-box-rs/src/backend.rs)）。
+
 <!-- code: apps/recipe-box-rs/src/backend.rs#backend-trait -->
 
 本番では Cloudflare の機能を使う実装（`CloudflareBackend`）を、テストではメモリの中で動く偽物（`FakeBackend`）を使います。

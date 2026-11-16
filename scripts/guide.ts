@@ -32,7 +32,7 @@ function build(): Outputs {
     }
     return readFileSync(path, "utf8");
   });
-  const page = renderMarkdown(markdown, existsSync);
+  const page = renderMarkdown(markdown, existsSync, (path) => readFileSync(path, "utf8"));
   const outputs: Outputs = new Map([[PAGE_OUT, renderPage(page)]]);
 
   const sources = readdirSync(DIAGRAM_SOURCE_DIR).filter((file) => file.endsWith(".d2"));
