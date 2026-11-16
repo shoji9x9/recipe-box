@@ -9,8 +9,7 @@
 //
 // 手順:
 //   1. seed/recipes.json と seed/photos/ を、API と同じ決まりで確かめる（入れ始めてから失敗しないように）。
-//      wrangler で、ID が印（mise run pin）の付いたワークスペースのものか、アプリ全体の写真の合計の上限を超えないか、
-//      R2 に書けて消せるかを確かめる。
+//      wrangler で、ID が印（mise run pin）の付いたワークスペースのものか、R2 に書けて消せるかを確かめる。
 //   2. 公開 API で、デモのレシピを全部消す（レシピを消すと、その写真も消える）。
 //   3. 公開 API で、サンプルのレシピを入れる。
 //   4. 写真は、デモでは API で追加できないので、wrangler で D1 の行と R2 のデータを直接入れる。
@@ -52,8 +51,6 @@ const BASE_URLS: Record<Target, string> = {
 const BUCKET = "recipe-box-photos";
 // seed が使う R2 の操作と、ログでの呼び方。
 const R2_ACTIONS = { put: "R2 への書き込み", delete: "R2 からの削除" } as const;
-// アプリ全体の写真の合計の上限（docs/security.md）。seed は写真の上限を判定する API を通らずに入れるので、seed で確かめる。
-const MAX_TOTAL_PHOTO_BYTES = 5_000_000_000;
 // 写真の行を入れる SQL を、1 回の wrangler にこの数ずつ渡す（コマンドの引数と D1 の SQL の長さの上限に収める）。
 const INSERT_BATCH = 50;
 // 書き込む API の回数の制限（60 秒に 30 回）で 429 になったら、枠が空くまで待ってやり直す。
@@ -321,14 +318,13 @@ async function removePhotos(photos: Photo[]): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const { recipes, photoBytes } = loadRecipes();
+  const { recipes } = loadRecipes();
   const photoCount = recipes.reduce((sum, recipe) => sum + recipe.files.length, 0);
   console.log(`${target === "--local" ? "ローカル" : "本番"}のデモに、レシピ ${recipes.length} 件と写真 ${photoCount} 枚を入れる`);
 
   // 消し始める前に、wrangler で次を確かめる。間違えてほかの人のワークスペースの ID を渡しても消さないためと、
   // 写真を入れるのに要る D1 と R2 の権限を先に確かめるためである（写真を入れるときに分かると、写真の無いデモが残る）。
   // - ID が、印（pinned）の付いたワークスペースのものか
-  // - 入れ直した後の写真の合計が、アプリ全体の上限を超えないか（今のデモの写真は、入れ直すときに消える）
   // - R2 に書けて、消せるか
   const statusRows = d1Rows(
     await wrangler(
@@ -337,25 +333,19 @@ async function main(): Promise<void> {
       "DB",
       "--json",
       "--command",
-      `SELECT w.pinned AS pinned, ` +
-        `(SELECT COALESCE(SUM(size), 0) FROM photos) AS total, ` +
-        `(SELECT COALESCE(SUM(size), 0) FROM photos WHERE workspace_id = '${workspaceId}') AS demo ` +
-        `FROM workspaces w WHERE w.id = '${workspaceId}'`,
+      `SELECT pinned FROM workspaces WHERE id = '${workspaceId}'`,
     ),
   );
   if (statusRows === undefined) {
     fail("wrangler の d1 execute --json の出力の形が、思ったものと違う");
   }
-  const row = statusRows[0] as { pinned: number; total: number; demo: number } | undefined;
+  const row = statusRows[0] as { pinned: number } | undefined;
   if (row === undefined) {
     fail("その ID のワークスペースが無い");
   }
   // D1（SQLite）は BOOLEAN を 0 と 1 で返す。
   if (row.pinned !== 1) {
     fail("そのワークスペースには、自動削除と削除から外す印が無い。デモなら、先に mise run pin で印を付ける");
-  }
-  if (row.total - row.demo + photoBytes > MAX_TOTAL_PHOTO_BYTES) {
-    fail(`入れ直すと、アプリ全体の写真の合計が上限（${MAX_TOTAL_PHOTO_BYTES} バイト）を超える`);
   }
   // 確かめるためだけのデータなので、すぐに消す。キーはデモのワークスペースの下に置き、seed の写真と重ならない名前にする。
   const probe: PhotoKey = { file: "（R2 の権限の確認）", recipeId: "seed-check", id: randomBytes(16).toString("hex") };

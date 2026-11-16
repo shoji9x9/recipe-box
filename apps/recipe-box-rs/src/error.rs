@@ -137,7 +137,7 @@ impl ApiError {
             Self::PhotoStorageLimitReached => (
                 StatusCode::CONFLICT,
                 "photo_storage_limit_reached",
-                "このワークスペースの写真の合計が上限（100 MB）に達します。いらない写真を消してから追加してください",
+                "このワークスペースの写真の合計が上限（50 MB）に達します。いらない写真を消してから追加してください",
             ),
             Self::UnsupportedPhotoType => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,

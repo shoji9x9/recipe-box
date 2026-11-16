@@ -21,7 +21,7 @@ use crate::{
     id,
     recipe::RecipeId,
     stream::{self, PhotoStream, RawPhotoBody},
-    workspace::{Workspace, WorkspaceId},
+    workspace::{MAX_WORKSPACES, Workspace, WorkspaceId},
 };
 
 /// 1 枚の写真の大きさの上限（バイト）。超えたら `413`。
@@ -30,13 +30,16 @@ pub const MAX_PHOTO_BYTES: usize = 4_000_000;
 pub const MAX_PHOTOS_PER_RECIPE: i64 = 5;
 /// 1 つのワークスペースの写真の大きさの合計の上限（バイト）。超えたら `409`（`photo_storage_limit_reached`）。
 ///
-/// 1 つのワークスペースが、アプリ全体の上限を使い切らないようにする。
-/// ワークスペースが 50 個ほど写真を使っても、アプリ全体の上限に収まる大きさにする。
-pub const MAX_PHOTO_BYTES_PER_WORKSPACE: i64 = 100_000_000;
-/// アプリ全体の写真の大きさの合計の上限（バイト）。超えたら `503`（`capacity_reached`）。
+/// アプリ全体の写真の合計は、この上限とワークスペースの数の上限（[`MAX_WORKSPACES`]）で守る
+/// （[`MAX_PHOTO_BYTES_TOTAL`] を超えない大きさにする）。
+/// 追加のたびにアプリ全体の合計を数えると、写真の表の全体を読むことになるため、直接は数えない。
+pub const MAX_PHOTO_BYTES_PER_WORKSPACE: i64 = 50_000_000;
+/// アプリ全体の写真の大きさの合計の上限（バイト）。費用を守るための上限で、R2 の保存量の無料枠（10 GB-月）の半分にする。
 ///
-/// 費用を守るための上限。R2 の保存量の無料枠（10 GB-月）の半分にする。
+/// 追加のときには数えない。ワークスペースの数とワークスペースごとの合計の上限から、超えないことを下で確かめる。
+/// 写真の行はレシピを通してワークスペースにつながる（外部キー）ので、アプリ全体の合計は、ワークスペースごとの合計の和である。
 pub const MAX_PHOTO_BYTES_TOTAL: i64 = 5_000_000_000;
+const _: () = assert!(MAX_WORKSPACES * MAX_PHOTO_BYTES_PER_WORKSPACE <= MAX_PHOTO_BYTES_TOTAL);
 /// アプリ全体で 1 日（UTC の日付）に写真を追加できる回数。超えたら `503`（`capacity_reached`）。
 ///
 /// 費用を守るための上限。月に 31 × 200 = 6,200 回で、R2 の書き込みの操作の無料枠（100 万回/月）より十分に小さい。
@@ -298,7 +301,6 @@ pub async fn add<B: Backend>(
     let limits = PhotoLimits {
         max_per_recipe: MAX_PHOTOS_PER_RECIPE,
         max_bytes_per_workspace: MAX_PHOTO_BYTES_PER_WORKSPACE,
-        max_bytes_total: MAX_PHOTO_BYTES_TOTAL,
         max_uploads_since: MAX_PHOTO_UPLOADS_PER_DAY,
         // UTC の今日の 0 時。
         since: crate::limits::start_of_utc_day(now),
