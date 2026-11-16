@@ -89,7 +89,8 @@ GitHub Actions（`deploy.yml`・`seed-demo.yml` など）は、公開リポジ�
     有料のプランでは、取り込みは月 50 GB まで含み（超えた分は 1 GB あたり $0.25）、保存は 10 GB-月まで含む（超えた分は 1 GB-月あたり $0.10）。
   - 公式の文書: [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)・[Observability の料金](https://developers.cloudflare.com/observability/pricing/)・[Workers の料金](https://developers.cloudflare.com/workers/platform/pricing/)
 - ワークスペースの ID は、知ればそのワークスペースを読み書きできる鍵なので、ログに残さない。
-  - アプリがエラーをログに出すときは、ID を伏せてから出す（`src/error.rs` の `log_error`）。
+  - アプリがログを出すときは、エラーもそうでない知らせも、ID を伏せてから出す（`src/error.rs` の `log_error` と `log_info`。アプリが自分で出すログは、この 2 つだけから出す）。
+    panic の文は `console_error_panic_hook` がそのまま `console.error` に出し、伏せない。panic の文に ID を入れない（`unwrap`・`expect` の文に ID を書かない）。
   - リクエストごとの記録（invocation logs）は残さない（`invocation_logs = false`）。Cloudflare は Cookie などのヘッダーを伏せるとしているが、API の `X-Workspace-Id` が伏せられるかを確かめられないためである。
     リクエストごとの CPU 時間などは、`wrangler tail` で見る（そのときだけ流れ、残らない）。
 

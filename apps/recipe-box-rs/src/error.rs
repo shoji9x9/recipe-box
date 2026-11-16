@@ -203,12 +203,27 @@ impl From<BackendError> for ApiError {
 /// エラーをログに出す。Workers では `console.error` に、テストでは標準エラー出力に出す。
 ///
 /// どの経路のエラーでも、文の中の ID（ワークスペースの ID は持ち主の証）を伏せてから出す（[`crate::id::redact`]）。
-pub(crate) fn log_error(error: &BackendError) {
+/// アプリが自分で出すログは、これと [`log_info`] だけから出し、伏せる経路を 1 つにする
+/// （panic の文は `console_error_panic_hook` が出し、ここを通らない）。
+/// 外の世界での失敗（[`BackendError`]）のほか、アプリの中の失敗の文（`format!` で作ったもの）も受け取る。
+pub(crate) fn log_error(error: &impl std::fmt::Display) {
     let message = crate::id::redact(&error.to_string());
     #[cfg(target_arch = "wasm32")]
     worker::console_error!("{message}");
     #[cfg(not(target_arch = "wasm32"))]
     eprintln!("{message}");
+}
+
+/// 失敗ではない知らせ（定期の自動削除が終わったことなど）をログに出す。Workers では `console.log` に、テストでは標準出力に出す。
+///
+/// [`log_error`] と同じく、文の中の ID を伏せてから出す。失敗ではないので、ログの段階を `error` にしない
+/// （Workers のログで、エラーだけを絞り込めるようにする）。
+pub(crate) fn log_info(message: &str) {
+    let message = crate::id::redact(message);
+    #[cfg(target_arch = "wasm32")]
+    worker::console_log!("{message}");
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("{message}");
 }
 
 /// `task` を、送り手との接続が切れても最後まで動かし（[`Backend::run_to_completion`]）、その結果を返す。

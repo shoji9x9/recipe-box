@@ -24,7 +24,7 @@ pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-
 | --- | --- |
 | `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
 | `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
-| `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 と R2（をまねたもの）を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う |
+| `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 と R2（をまねたもの）を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う。`API_ONLY=1` を付けると、API だけを確かめる（下の「テスト」） |
 | `mise run test` | Rust のテストと、JavaScript の単体テスト（vitest。画面とスクリプト。下の「テスト」）を実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
@@ -48,6 +48,12 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 - JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
 - 画面のテストを `public/` の下に置かない。`public/` の下のファイルは、Workers の静的アセットとして誰でも取れる。
 - 型は `mise run typecheck`（`mise run lint` と commit の前の lefthook から呼ぶ）の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトとそのテストは `scripts/tsconfig.json`（Node の型）。
+- スモークテスト（`scripts/smoke-test.ts`、`mise run smoke`）は、起動した Worker に HTTP で API を呼び、本物に近い D1・R2・Rate Limiting を通して確かめる。値と応答の形は `docs/spec.md` を正にする。
+  確かめるものは、次の 2 つに分かれる。リライトの後の新しいアプリには、`API_ONLY=1` を付け、`SCHEDULED_LOG` を付けずに当てる（`docs/architecture.md` の「リライトの比較の基準」）。
+  - API（`docs/spec.md` の「API」）だけで確かめるもの。いつも確かめる。回数の制限は `CHECK_RATE_LIMIT=1` のときだけ確かめる。
+  - 今の作りに頼るもの。画面と静的アセット（`/` の文字・`/assets/` のファイル・`/about` の `public/_headers`）は、`API_ONLY=1` のときは確かめない。
+    定期の自動削除（`SCHEDULED_LOG` のときだけ。wrangler でローカルの D1 の表を書き換え、ログの文を読む）も、今の作りに頼る。
+  - ワークスペースを作る数が 1 日の作成の上限（docs/security.md の「費用の対策」）に近づかないよう、確かめる項目を足すときは、作ったワークスペースを使い回す。
 
 ### 言語
 
@@ -80,7 +86,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/smoke-test.ts` | ローカルの Worker に API を呼んで確かめるスクリプト（`mise run smoke`。CI でも使う） |
 | `scripts/pin-workspace.ts` | ワークスペースに、自動削除と削除から外す印を付ける・外す管理用のスクリプト（`mise run pin`）。出力の読み方は `scripts/pin-lib.ts` にあり、単体テストは `scripts/pin-lib.test.ts` |
-| `scripts/wrangler.ts` | seed と pin が wrangler を動かす部分（失敗の文の伏せ字と、ID の読み方） |
+| `scripts/wrangler.ts` | seed と pin が wrangler を動かす部分（失敗の文の伏せ字と、ID の読み方）。失敗の文を作る部分は `scripts/wrangler-lib.ts` にあり、単体テストは `scripts/wrangler-lib.test.ts` |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
 
 ### 解説（/about）
@@ -137,8 +143,8 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
 
 ### 本番のログ
 
-- アプリが出したエラー（`src/error.rs` の `log_error`）は、Workers のログ（`wrangler.toml` の `[observability]`）に残る。無料のプランでは、2026-11-30 までは 3 日残り、1 日 200,000 件までである。2026-12-01 からは 7 日残り、1 日 0.5 GB までに変わる（docs/security.md の「ログ」）。
-  Cloudflare のダッシュボードで、Worker（`recipe-box`）の Observability を開いて見る。ワークスペースの ID は、ログに出す前に伏せている。
+- アプリが出したログ（`src/error.rs` の、エラーを出す `log_error` と、定期の自動削除が終わったことなどを出す `log_info`）は、Workers のログ（`wrangler.toml` の `[observability]`）に残る。無料のプランでは、2026-11-30 までは 3 日残り、1 日 200,000 件までである。2026-12-01 からは 7 日残り、1 日 0.5 GB までに変わる（docs/security.md の「ログ」）。
+  Cloudflare のダッシュボードで、Worker（`recipe-box`）の Observability を開いて見る。ワークスペースの ID は、ログに出す前に伏せている（アプリが自分で出すログは、この 2 つの関数だけから出す。panic の文は伏せない。docs/security.md の「ログ」）。
 - リクエストごとの記録（invocation logs）は残さない（docs/security.md の「ログ」）。リクエストごとの状態コードや CPU 時間は、その場で `wrangler tail` で見る。
   `apps/recipe-box-rs` で `pnpm exec wrangler tail recipe-box --format pretty` を実行する（`wrangler login` が要る）。流れている間だけ見え、残らない。
   `--format json` は、リクエストのヘッダー（API の `X-Workspace-Id` を含みうる）も出すので、その出力を人に見せたり、ファイルに残したりしない。
@@ -279,6 +285,7 @@ mise run dev                     # ビルドし、ローカルの D1 にマイ�
 
 - 動いていることは、別の端末で `mise run smoke` を実行して確かめる。smoke はワークスペース・レシピ・写真を作り、回数の制限と 1 日の作成の上限の数も使う。
   そのため、確かめた後は、比べ始める前に Worker を止め、`.wrangler/state` を消してから起動し直す。
+  新しい側のアプリには、同じ smoke を `API_ONLY=1` を付けて当てる（上の「テスト」）。
 - 定期実行（使われていないワークスペースの自動削除）を比べるときは、`mise run dev` の代わりに、`mise run migrate` の後で `apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動する。
   `curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"` で 1 回動き、結果を起動した端末のログ（「使われていないワークスペースの自動削除」）に出す。
 - 共有のデモのデータを入れるときは、上の「CI と CD」の、共有のデモをローカルで試す手順に従う。

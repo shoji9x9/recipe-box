@@ -20,7 +20,10 @@ use worker::{
     web_sys,
 };
 
-use crate::{error::ApiError, photo};
+use crate::{
+    error::{ApiError, log_error},
+    photo,
+};
 
 /// 形式を決めるのに読む、本文の先頭のバイト数（WebP の判定に 12 バイト要る）。
 const HEAD_BYTES: u32 = 16;
@@ -99,7 +102,7 @@ pub fn split_photo_body(req: worker::Request) -> worker::Result<HttpRequest> {
         Ok(http) => http,
         Err(error) => {
             // 写真の追加が、本文を読みためる（CPU 時間の多い）経路に戻ったことを分かるようにする。
-            worker::console_error!("本文の無いリクエストを作れない: {error}");
+            log_error(&format!("本文の無いリクエストを作れない: {error}"));
             return HttpRequest::try_from(req);
         }
     };
