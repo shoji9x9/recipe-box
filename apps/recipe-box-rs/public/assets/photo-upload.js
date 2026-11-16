@@ -180,7 +180,7 @@ async function finish(form, detailPath, added, failures, redirected) {
     window.location.assign(detailPath);
     return;
   }
-  // window.htmx の型は js-tests/window.d.ts で宣言している。
+  // window.htmx の型は apps/recipe-box-rs/js-types/window.d.ts で宣言している。
   const htmx = window.htmx;
   try {
     if (htmx) {
@@ -252,7 +252,11 @@ export async function upload(form, files) {
   const failures = [];
   /** @type {File[]} */
   const sending = [];
-  const limits = { maxBytes: Number(form.dataset.maxBytes), tooLarge: form.dataset.tooLarge || "大きすぎます" };
+  // 大きすぎるときの文（data-too-large）が無ければ、大きさは確かめずにサーバーに任せる（理由をサーバーの知らせとそろえるため）。
+  const tooLarge = form.dataset.tooLarge;
+  const limits = tooLarge
+    ? { maxBytes: Number(form.dataset.maxBytes), tooLarge }
+    : { maxBytes: Number.POSITIVE_INFINITY, tooLarge: "" };
   for (const file of files) {
     const reason = localReason(limits, file);
     if (reason === null) {
@@ -271,9 +275,13 @@ export async function upload(form, files) {
     );
     return;
   }
-  // 1 枚も送らなければ、詳細の画面は変わらないので、読み直さずに理由だけを出す。
+  // 1 枚も送らなければ、詳細の画面は変わらないので、読み直さずに理由だけを出し、選び直せるよう欄を空にする。
   if (sending.length === 0) {
-    setStatus(form, "送り終えました");
+    const input = form.querySelector('input[type="file"]');
+    if (input instanceof HTMLInputElement) {
+      input.value = "";
+    }
+    setStatus(form, "追加できる写真がなかったので、送りませんでした");
     showResults(0, failures);
     return;
   }

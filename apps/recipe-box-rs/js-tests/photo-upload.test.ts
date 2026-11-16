@@ -24,6 +24,19 @@ function page(status: number, alert: string | null, redirected = false): Respons
   return response;
 }
 
+/**
+ * window.htmx を置いて fn を動かし、終わったら外す。
+ * happy-dom では window と globalThis が別なので、vi.stubGlobal では置けない。
+ */
+async function withHtmx(ajax: Htmx["ajax"], fn: () => Promise<unknown>): Promise<void> {
+  window.htmx = { ajax };
+  try {
+    await fn();
+  } finally {
+    delete window.htmx;
+  }
+}
+
 function file(name: string, size: number, type = "image/jpeg"): File {
   return new File([new Uint8Array(size)], name, { type });
 }
@@ -218,24 +231,22 @@ describe("送る流れ", () => {
 
   test("1 枚も送らなければ、詳細の画面を読み直さずに理由だけを出す", async () => {
     const ajax = vi.fn();
-    Object.assign(window, { htmx: { ajax } });
-    try {
-      await upload(form(), [file("big.jpg", 101)]);
-    } finally {
-      Reflect.deleteProperty(window, "htmx");
-    }
+    await withHtmx(ajax, () => upload(form(), [file("big.jpg", 101)]));
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(ajax).not.toHaveBeenCalled();
-    expect(status()).toBe("送り終えました");
+    expect(status()).toBe("追加できる写真がなかったので、送りませんでした");
     expect(messages()[0]?.items).toEqual([`big.jpg: ${TOO_LARGE}`]);
     expect(input().disabled).toBe(false);
+    expect(input().value).toBe("");
   });
 
-  test("data-too-large が無くても、理由の無い行にしない", async () => {
+  test("data-too-large が無ければ、大きさを確かめずに送り、サーバーの知らせを理由にする", async () => {
     delete form().dataset.tooLarge;
+    fetchMock.mockResolvedValue(page(413, "写真は 4 MB までです"));
     await upload(form(), [file("big.jpg", 101)]);
-    expect(messages()[0]?.items).toEqual(["big.jpg: 大きすぎます"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(messages()[0]?.items).toEqual(["big.jpg: 写真は 4 MB までです"]);
   });
 
   test("残りの枚数より多く選んだら、送らずに減らすよう伝え、送れない写真も挙げる", () => {
@@ -253,19 +264,15 @@ describe("送る流れ", () => {
     const ajax = vi.fn(async () => {
       document.body.innerHTML = `<main><div class="page-head"><h1>カレー</h1></div></main>`;
     });
-    // happy-dom では window と globalThis が別なので、vi.stubGlobal ではなく window に置く。
-    Object.assign(window, { htmx: { ajax } });
-    try {
+    await withHtmx(ajax, async () => {
       submit([file("a.jpg", 5)]);
       await vi.waitFor(() => expect(messages()[0]?.text).toBe("1 枚の写真を追加しました"));
+    });
 
-      expect(ajax).toHaveBeenCalledWith("GET", DETAIL, { target: "body", swap: "innerHTML" });
-      // 読み直した画面には、前のメッセージもフォームも無い。
-      expect(messages()).toHaveLength(1);
-      expect(document.querySelector("form")).toBeNull();
-    } finally {
-      Reflect.deleteProperty(window, "htmx");
-    }
+    expect(ajax).toHaveBeenCalledWith("GET", DETAIL, { target: "body", swap: "innerHTML" });
+    // 読み直した画面には、前のメッセージもフォームも無い。
+    expect(messages()).toHaveLength(1);
+    expect(document.querySelector("form")).toBeNull();
   });
 
   test("サーバーがほかの画面に移らせたら、残りを送らず、ページごと読み直す", async () => {
@@ -279,17 +286,12 @@ describe("送る流れ", () => {
 
   test("送っている間にほかの画面に移っていたら、その画面を書き換えない", async () => {
     const ajax = vi.fn();
-    Object.assign(window, { htmx: { ajax } });
     // 送っている間に画面を移る。待つ時間に頼らないよう、upload を直接呼んで終わりを待つ。
     fetchMock.mockImplementation(async () => {
       window.history.replaceState(null, "", "/recipes");
       return page(204, null);
     });
-    try {
-      await upload(form(), [file("a.jpg", 5)]);
-    } finally {
-      Reflect.deleteProperty(window, "htmx");
-    }
+    await withHtmx(ajax, () => upload(form(), [file("a.jpg", 5)]));
 
     expect(ajax).not.toHaveBeenCalled();
     expect(status()).toBe("写真を送っています（1 / 1 枚目）");

@@ -44,6 +44,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `apps/recipe-box-rs/migrations/` | D1 のマイグレーション（テーブルを作る・変える SQL） |
 | `apps/recipe-box-rs/public/` | Workers の静的アセット（CSS・画面の JavaScript・アイコン）。ここに置いたファイルは誰でも取れるので、テストなどを置かない |
 | `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（vitest。設定は `vitest.config.ts`、型の確認は `tsconfig.json`） |
+| `apps/recipe-box-rs/js-types/` | 画面の JavaScript が使う、ほかのライブラリ（htmx）の型の宣言 |
 | `scripts/seed.mjs` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
 | `scripts/seed-lib.mjs` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.mjs` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |

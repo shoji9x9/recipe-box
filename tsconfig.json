@@ -14,7 +14,7 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true
   },
-  // vitest.config.ts の include と同じ範囲を確かめる。htmx.min.js はビルドで写す配布物なので除く。
-  "include": ["apps/*/public/assets/**/*.js", "apps/*/js-tests/**/*.ts", "vitest.config.ts"],
+  // 画面の JavaScript・その型の宣言・テスト（vitest.config.ts の include）を確かめる。htmx.min.js はビルドで写す配布物なので除く。
+  "include": ["apps/*/public/assets/**/*.js", "apps/*/js-types/**/*.d.ts", "apps/*/js-tests/**/*.ts", "vitest.config.ts"],
   "exclude": ["**/*.min.js"]
 }
