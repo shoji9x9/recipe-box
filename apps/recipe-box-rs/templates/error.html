@@ -3,8 +3,8 @@
 {% block heading %}エラー{% endblock %}
 {% block content %}
 <div class="actions">
-  {%- if let Some(href) = recipe_href %}
-  <a class="button-link secondary" href="{{ href }}">レシピに戻る</a>
+  {%- if let Some(href) = edit_href %}
+  <a class="button-link secondary" href="{{ href }}">編集の画面に戻る</a>
   {%- else %}
   <a class="button-link secondary" href="/">一覧に戻る</a>
   {%- endif %}

@@ -24,7 +24,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::{
-    backend::Backend,
+    backend::{Backend, ListedRecipe},
     error::ApiError,
     limits::{check_body_size, check_write},
     photo::{self, Photo, PhotoBody, PhotoId},
@@ -235,8 +235,8 @@ impl IntoResponse for ScreenError {
 #[template(path = "error.html")]
 struct ErrorPage {
     layout: Layout,
-    /// 「レシピに戻る」の戻り先。`None` なら「一覧に戻る」にする。
-    recipe_href: Option<String>,
+    /// 「編集の画面に戻る」の戻り先（写真の追加の失敗）。`None` なら「一覧に戻る」にする。
+    edit_href: Option<String>,
 }
 
 /// エラーの画面。説明は見出しの下の知らせに出す。
@@ -246,7 +246,7 @@ fn error_page(error: &ApiError) -> Response {
         status,
         &ErrorPage {
             layout: Layout::default().with_alert(message),
-            recipe_href: None,
+            edit_href: None,
         },
     )
 }
@@ -273,7 +273,8 @@ struct ListPage {
     q: String,
     total: i64,
     page: i64,
-    recipes: Vec<Recipe>,
+    /// レシピと、その先頭の写真（あれば一覧に小さく出す）。
+    recipes: Vec<ListedRecipe>,
     pages: Vec<PageLink>,
     first_page_href: String,
 }
@@ -283,15 +284,36 @@ struct ListPage {
 struct DetailPage {
     layout: Layout,
     recipe: Recipe,
+    /// 写真は見せるだけで、追加・削除は編集の画面で行う。
+    photos: Vec<Photo>,
+    /// 写真を追加・削除できるか（共有のデモではできない）。できれば、編集の画面でできることを書く。
+    photos_editable: bool,
+}
+
+/// 編集の画面の、写真の欄（`photo_section.html`）。写真は、追加・削除したときにすぐ保存する（料理名などの「保存する」とは別）。
+struct PhotoSection {
+    recipe_id: String,
+    /// 写真の代替テキスト（「〇〇の写真 1」）に使う、保存してある料理名。
+    recipe_name: String,
     photos: Vec<Photo>,
     /// 写真を追加・削除できるか（共有のデモではできない）。
-    photos_editable: bool,
+    editable: bool,
     max_photos: i64,
     /// あと何枚追加できるか。0 なら追加のフォームを出さない。画面の JavaScript は、選んだ枚数が多すぎないかを送る前に確かめる。
-    remaining_photos: i64,
+    remaining: i64,
     /// 1 枚の写真の大きさの上限と、超えたときの説明。画面の JavaScript が、送る前に確かめる。
     max_photo_bytes: usize,
     photo_too_large: &'static str,
+}
+
+/// フォームの画面の、写真にかかわる部分。
+enum PhotoArea {
+    /// 何も出さない（共有のデモの登録の画面と、欄から離れたときの確かめ直し）。
+    None,
+    /// 登録の画面。レシピの ID がまだ無いので写真を付けられず、保存した後に編集の画面で追加できることを書く。
+    AfterSave,
+    /// 編集の画面の、写真の欄。
+    Section(PhotoSection),
 }
 
 #[derive(Template)]
@@ -315,6 +337,7 @@ struct FormPage {
     revalidate: bool,
     /// 誤りの一覧にフォーカスを移すか（送信したときだけ。欄から離れたときに移すと、入力の邪魔になる）。
     focus_summary: bool,
+    photo_area: PhotoArea,
 }
 
 /// フォームを確かめた段階。
@@ -572,7 +595,7 @@ pub async fn index<B: Backend>(
             ));
         }
     };
-    let result = recipe::list_page(&backend, viewer.id(), pattern.as_deref(), page).await?;
+    let result = recipe::list_page(&backend, viewer.id(), pattern.as_deref(), page, true).await?;
     let q = pattern.unwrap_or_default();
     // レシピが無くても 1 ページ目は出す。レシピの数の上限があるので、ページの数は MAX_PAGE を超えない。
     let page_count = ((result.total + PAGE_SIZE - 1) / PAGE_SIZE).clamp(1, MAX_PAGE);
@@ -644,6 +667,7 @@ fn form_page(
     form: &RecipeForm,
     errors: Vec<FieldError>,
     validation: Validation,
+    photo_area: PhotoArea,
 ) -> FormPage {
     let error_of = |field: &str| {
         errors
@@ -679,6 +703,77 @@ fn form_page(
         layout,
         revalidate: validation != Validation::NotSubmitted,
         focus_summary: validation == Validation::Submitted,
+        photo_area,
+    }
+}
+
+/// 写真を追加・削除できるか。共有のデモではできない（デモの ID の Cookie は、identify が自分のワークスペースから外す）。
+/// 詳細・登録・編集の画面で同じ決まりにする。
+fn photos_editable(viewer: &Viewer) -> bool {
+    matches!(viewer, Viewer::Own(_))
+}
+
+/// 登録の画面の、写真にかかわる部分。共有のデモでは写真を付けられないので、何も書かない。
+fn new_photo_area(viewer: &Viewer) -> PhotoArea {
+    if photos_editable(viewer) {
+        PhotoArea::AfterSave
+    } else {
+        PhotoArea::None
+    }
+}
+
+/// 編集の画面の、写真の欄。
+async fn photo_section<B: Backend>(
+    backend: &B,
+    viewer: &Viewer,
+    recipe: &Recipe,
+    id: &RecipeId,
+) -> Result<PhotoSection, ScreenError> {
+    let photos = backend
+        .list_photos(viewer.id(), id)
+        .await
+        .map_err(ApiError::from)?;
+    let count = i64::try_from(photos.len()).unwrap_or(i64::MAX);
+    Ok(PhotoSection {
+        recipe_id: recipe.id.clone(),
+        recipe_name: recipe.name.clone(),
+        photos,
+        editable: photos_editable(viewer),
+        max_photos: photo::MAX_PHOTOS_PER_RECIPE,
+        remaining: (photo::MAX_PHOTOS_PER_RECIPE - count).max(0),
+        max_photo_bytes: photo::MAX_PHOTO_BYTES,
+        photo_too_large: PHOTO_TOO_LARGE,
+    })
+}
+
+/// 入力の誤りでフォームを出し直すときの、写真にかかわる部分。
+/// 写真の欄を読めなくても（別のタブでレシピを消した・D1 の一時的な失敗）、写真の欄を出さずに入力の誤りを出す。
+/// エラーの画面にすると、書きかけの入力が消えるためである。
+async fn photo_area_or_none<B: Backend>(
+    backend: &B,
+    viewer: &Viewer,
+    kind: &FormKind,
+) -> PhotoArea {
+    photo_area(backend, viewer, kind)
+        .await
+        .unwrap_or(PhotoArea::None)
+}
+
+/// フォームの画面の、写真にかかわる部分。編集なら、保存してあるレシピと写真を読む。
+async fn photo_area<B: Backend>(
+    backend: &B,
+    viewer: &Viewer,
+    kind: &FormKind,
+) -> Result<PhotoArea, ScreenError> {
+    match kind {
+        FormKind::New => Ok(new_photo_area(viewer)),
+        FormKind::Edit(id) => {
+            let id = parse_id(id)?;
+            let recipe = load(backend, viewer, &id).await?;
+            Ok(PhotoArea::Section(
+                photo_section(backend, viewer, &recipe, &id).await?,
+            ))
+        }
     }
 }
 
@@ -699,9 +794,10 @@ async fn save<B: Backend>(
     let fields = match recipe::check(form.to_input()) {
         Ok(fields) => fields,
         Err(errors) => {
+            let area = photo_area_or_none(backend, viewer, &kind).await;
             return Ok(render(
                 StatusCode::BAD_REQUEST,
-                &form_page(layout(), &kind, form, errors, Validation::Submitted),
+                &form_page(layout(), &kind, form, errors, Validation::Submitted, area),
             ));
         }
     };
@@ -720,12 +816,14 @@ async fn save<B: Backend>(
         Ok((id, flash)) => Ok(see_other_with(&format!("/recipes/{id}"), flash)),
         Err(error @ ApiError::RecipeLimitReached) => {
             let (status, _, message) = error.parts();
+            let area = photo_area_or_none(backend, viewer, &kind).await;
             let page = form_page(
                 layout().with_alert(message),
                 &kind,
                 form,
                 Vec::new(),
                 Validation::NotSubmitted,
+                area,
             );
             Ok(render(status, &page))
         }
@@ -745,6 +843,7 @@ pub async fn new_form<B: Backend>(
         &RecipeForm::default(),
         Vec::new(),
         Validation::NotSubmitted,
+        new_photo_area(&viewer),
     );
     Ok(render(StatusCode::OK, &page))
 }
@@ -776,6 +875,7 @@ pub async fn check_form(
         &form,
         errors,
         Validation::Revalidated,
+        PhotoArea::None,
     );
     Ok(render(StatusCode::OK, &page))
 }
@@ -806,11 +906,35 @@ pub async fn detail<B: Backend>(
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
     let id = parse_id(&id)?;
-    detail_page(&backend, &viewer, &session, &id, StatusCode::OK, None).await
+    detail_page(&backend, &viewer, &session, &id).await
 }
 
-/// レシピの詳細の画面。`alert` があれば、見出しの下に誤りの知らせとして出す（写真の追加の失敗など）。
+/// レシピの詳細の画面。写真は見せるだけにする（追加・削除は編集の画面）。
 async fn detail_page<B: Backend>(
+    backend: &B,
+    viewer: &Viewer,
+    session: &Session,
+    id: &RecipeId,
+) -> Result<Response, ScreenError> {
+    let recipe = load(backend, viewer, id).await?;
+    let photos = backend
+        .list_photos(viewer.id(), id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(render(
+        StatusCode::OK,
+        &DetailPage {
+            layout: Layout::new(Some(viewer), session),
+            recipe,
+            photos,
+            photos_editable: photos_editable(viewer),
+        },
+    ))
+}
+
+/// 編集の画面。保存してある値をフォームに入れ、写真の欄を付ける。
+/// `alert` があれば、見出しの下に誤りの知らせとして出す（写真の追加の失敗など）。
+async fn edit_page<B: Backend>(
     backend: &B,
     viewer: &Viewer,
     session: &Session,
@@ -819,35 +943,43 @@ async fn detail_page<B: Backend>(
     alert: Option<&'static str>,
 ) -> Result<Response, ScreenError> {
     let recipe = load(backend, viewer, id).await?;
-    let photos = backend
-        .list_photos(viewer.id(), id)
-        .await
-        .map_err(ApiError::from)?;
+    let section = photo_section(backend, viewer, &recipe, id).await?;
     let mut layout = Layout::new(Some(viewer), session);
     if let Some(alert) = alert {
         layout = layout.with_alert(alert);
     }
-    let count = i64::try_from(photos.len()).unwrap_or(i64::MAX);
-    Ok(render(
-        status,
-        &DetailPage {
-            layout,
-            recipe,
-            photos,
-            // 共有のデモでは追加・削除できない（デモの ID の Cookie は、identify が自分のワークスペースから外す）。
-            photos_editable: matches!(viewer, Viewer::Own(_)),
-            max_photos: photo::MAX_PHOTOS_PER_RECIPE,
-            remaining_photos: (photo::MAX_PHOTOS_PER_RECIPE - count).max(0),
-            max_photo_bytes: photo::MAX_PHOTO_BYTES,
-            photo_too_large: PHOTO_TOO_LARGE,
-        },
-    ))
+    let kind = FormKind::Edit(recipe.id.clone());
+    let form = RecipeForm {
+        servings: recipe.servings.to_string(),
+        name: recipe.name,
+        ingredients: recipe.ingredients,
+        steps: recipe.steps,
+    };
+    let page = form_page(
+        layout,
+        &kind,
+        &form,
+        Vec::new(),
+        Validation::NotSubmitted,
+        PhotoArea::Section(section),
+    );
+    Ok(render(status, &page))
+}
+
+/// 編集の画面のパス。写真を追加・削除した後に戻る。
+fn edit_path(id: &RecipeId) -> String {
+    edit_path_of(&format!("/recipes/{id}"))
+}
+
+/// レシピのパス（`/recipes/<id>`）から、編集の画面のパスを作る。
+fn edit_path_of(recipe_path: &str) -> String {
+    format!("{recipe_path}/edit")
 }
 
 /// 写真が大きすぎるときの説明。[`photo::MAX_PHOTO_BYTES`] を変えたら、文も直す（テストで確かめる）。
 pub(crate) const PHOTO_TOO_LARGE: &str = "写真は 1 枚 4,000,000 バイト（約 4 MB）までです";
 
-/// 写真の操作の失敗のうち、詳細の画面に知らせとして出すものの説明。ほかの失敗はエラーの画面にする。
+/// 写真の操作の失敗のうち、編集の画面に知らせとして出すものの説明。ほかの失敗はエラーの画面にする。
 fn photo_alert(error: &ApiError) -> Option<&'static str> {
     match error {
         ApiError::PayloadTooLarge => Some(PHOTO_TOO_LARGE),
@@ -862,7 +994,7 @@ fn photo_alert(error: &ApiError) -> Option<&'static str> {
     }
 }
 
-/// 写真の操作が失敗したときの応答。知らせにできる失敗は詳細の画面に出し、ほかはエラーの画面にする。
+/// 写真の操作が失敗したときの応答。知らせにできる失敗は編集の画面に出し、ほかはエラーの画面にする。
 async fn photo_failure<B: Backend>(
     backend: &B,
     viewer: &Viewer,
@@ -873,7 +1005,7 @@ async fn photo_failure<B: Backend>(
     match photo_alert(&error) {
         Some(alert) => {
             let status = error.parts().0;
-            detail_page(backend, viewer, session, id, status, Some(alert)).await
+            edit_page(backend, viewer, session, id, status, Some(alert)).await
         }
         None => Err(error.into()),
     }
@@ -894,9 +1026,9 @@ pub async fn photo_file<B: Backend>(
 /// `POST /recipes/{id}/photos`: 写真を追加する。
 ///
 /// 本文は 2 つの形を受け付ける。
-/// - フォーム（multipart）の `photo` の欄。JavaScript が動かなくても使える。追加したら、詳細へ戻る（`303`）。
+/// - フォーム（multipart）の `photo` の欄。JavaScript が動かなくても使える。追加したら、編集の画面へ戻る（`303`）。
 /// - 写真のバイト列そのもの（JavaScript が 1 枚ずつ送る）。本番では本文を読みためずに R2 へ流す（[`stream`]）。
-///   追加したら `204` を返す。JavaScript は、すべて送り終えてから詳細の画面を読み直すので、1 枚ごとに移らせない。
+///   追加したら `204` を返す。JavaScript は、すべて送り終えてから写真の欄だけを読み直すので、1 枚ごとに移らせない。
 pub async fn add_photo<B: Backend>(
     State(backend): State<B>,
     Extension(session): Extension<Session>,
@@ -910,7 +1042,7 @@ pub async fn add_photo<B: Backend>(
     let body = match read_photo_body(raw, request).await {
         Ok(Some(body)) => body,
         Ok(None) => {
-            return detail_page(
+            return edit_page(
                 &backend,
                 &viewer,
                 &session,
@@ -924,7 +1056,7 @@ pub async fn add_photo<B: Backend>(
     };
     match photo::add(&backend, viewer.id(), &id, body).await {
         Ok(_) if from_script => Ok(StatusCode::NO_CONTENT.into_response()),
-        Ok(_) => Ok(see_other_with(&format!("/recipes/{id}"), Flash::PhotoAdded)),
+        Ok(_) => Ok(see_other_with(&edit_path(&id), Flash::PhotoAdded)),
         Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
     }
 }
@@ -966,7 +1098,7 @@ async fn read_photo_field(
     }
 }
 
-/// `POST /recipes/{id}/photos/{photo_id}/delete`: 写真を消し、詳細へ戻る。
+/// `POST /recipes/{id}/photos/{photo_id}/delete`: 写真を消し、編集の画面へ戻る。
 pub async fn delete_photo<B: Backend>(
     State(backend): State<B>,
     Extension(session): Extension<Session>,
@@ -976,10 +1108,7 @@ pub async fn delete_photo<B: Backend>(
     let id = parse_id(&id)?;
     let photo_id = PhotoId::parse(&photo_id).ok_or(ApiError::PhotoNotFound)?;
     match photo::remove(&backend, viewer.id(), &id, &photo_id).await {
-        Ok(()) => Ok(see_other_with(
-            &format!("/recipes/{id}"),
-            Flash::PhotoDeleted,
-        )),
+        Ok(()) => Ok(see_other_with(&edit_path(&id), Flash::PhotoDeleted)),
         Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
     }
 }
@@ -991,22 +1120,8 @@ pub async fn edit_form<B: Backend>(
     Path(id): Path<String>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let recipe = load(&backend, &viewer, &parse_id(&id)?).await?;
-    let kind = FormKind::Edit(recipe.id.clone());
-    let form = RecipeForm {
-        servings: recipe.servings.to_string(),
-        name: recipe.name,
-        ingredients: recipe.ingredients,
-        steps: recipe.steps,
-    };
-    let page = form_page(
-        Layout::new(Some(&viewer), &session),
-        &kind,
-        &form,
-        Vec::new(),
-        Validation::NotSubmitted,
-    );
-    Ok(render(StatusCode::OK, &page))
+    let id = parse_id(&id)?;
+    edit_page(&backend, &viewer, &session, &id, StatusCode::OK, None).await
 }
 
 /// `POST /recipes/{id}`: レシピの中身を置き換え、詳細の画面へ移す。
@@ -1268,7 +1383,7 @@ async fn guard<B: Backend>(
             &ErrorPage {
                 layout: Layout::default()
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
-                recipe_href: None,
+                edit_href: None,
             },
         )
     } else if let Err(error) =
@@ -1276,12 +1391,12 @@ async fn guard<B: Backend>(
     {
         match (&error, photo::photo_recipe_path(request.uri().path())) {
             // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
-            // よく起きるので、一般の説明ではなく写真の上限を出し、レシピに戻れるようにする。
+            // よく起きるので、一般の説明ではなく写真の上限を出し、編集の画面に戻れるようにする。
             (ApiError::PayloadTooLarge, Some(recipe_path)) => render(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 &ErrorPage {
                     layout: Layout::default().with_alert(PHOTO_TOO_LARGE),
-                    recipe_href: Some(recipe_path.to_owned()),
+                    edit_href: Some(edit_path_of(recipe_path)),
                 },
             ),
             _ => error_page(&error),
@@ -1310,7 +1425,7 @@ pub async fn guard_check(request: Request, next: Next) -> Response {
             &ErrorPage {
                 layout: Layout::default()
                     .with_alert("ほかのサイトから送られたフォームは受け付けません"),
-                recipe_href: None,
+                edit_href: None,
             },
         )
     } else if let Err(error) = check_body_size(request.headers(), recipe::MAX_BODY_BYTES) {

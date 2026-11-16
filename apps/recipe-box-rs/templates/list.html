@@ -34,7 +34,15 @@
   {%- else %}
   <ul class="recipes">
     {%- for recipe in recipes %}
+    {%- let listed = recipe %}
+    {%- let recipe = listed.recipe %}
     <li>
+      {#- 先頭の写真。写真は縮小していない原寸（1 枚 4 MB まで）なので、見える所に来てから読む（loading="lazy"）。
+          大きさは width・height と CSS で決めておき、読み込んだときに並びがずれないようにする。
+          料理名はすぐ下のリンクにあるので、代替テキストは空にする（読み上げで料理名を繰り返さない）。 #}
+      {%- if let Some(photo_id) = listed.first_photo_id %}
+      <img class="thumb" src="/recipes/{{ recipe.id }}/photos/{{ photo_id }}" alt="" loading="lazy" width="240" height="160">
+      {%- endif %}
       <a href="/recipes/{{ recipe.id }}">{{ recipe.name }}</a>
       <span class="servings">{{ recipe.servings }} 人分</span>
       <div class="card-actions">

@@ -1095,7 +1095,11 @@ async fn photo_bytes_can_be_sent_without_multipart() {
         .unwrap();
     let response = send(router(backend.clone()), request).await;
     assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert!(response.body.contains("レシピに戻る"), "{}", response.body);
+    assert!(
+        response.body.contains("編集の画面に戻る"),
+        "{}",
+        response.body
+    );
     assert_eq!(backend.objects.lock().unwrap().len(), 1);
 }
 
@@ -1115,26 +1119,46 @@ fn photo_srcs(body: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn photo_can_be_added_shown_and_deleted_on_the_detail_page() {
+async fn photo_can_be_added_shown_and_deleted_on_the_edit_page() {
     let backend = backend_with_workspaces();
     let a = cookie(WORKSPACE_A);
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
-    let response = screen_get(&backend, &path, Some(&a)).await;
+    let edit = format!("{path}/edit");
+    let response = screen_get(&backend, &edit, Some(&a)).await;
     assert!(response.body.contains("写真はありません"));
     assert!(response.body.contains(r#"enctype="multipart/form-data""#));
+    // 写真の欄は、料理名などのフォームの外に置く（写真の操作は、料理名などの「保存する」とは別）。
+    let (recipe_form, rest) = response.body.split_once("</form>").unwrap();
+    assert!(recipe_form.contains(r#"name="name""#));
+    assert!(!recipe_form.contains(r#"id="photos""#));
+    assert!(rest.contains(r#"<section class="section" id="photos" data-photo-section"#));
+    assert!(rest.contains("すぐ保存されます"));
 
+    // JavaScript が動かないときは、普通のフォームとして送り、編集の画面に戻る。
     let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    assert_eq!(response.location, path);
+    assert_eq!(response.location, edit);
     assert!(
         set_cookie_named(&response, "__Host-flash")
             .unwrap()
             .starts_with("__Host-flash=photo-added;")
     );
-    let response = screen_get(&backend, &path, Some(&a)).await;
+    let response = screen_get(&backend, &edit, Some(&a)).await;
     let srcs = photo_srcs(&response.body);
     assert_eq!(srcs.len(), 1);
     assert!(response.body.contains(r#"alt="カレーの写真 1""#));
+    assert!(response.body.contains("写真を削除"));
+
+    // 詳細の画面は、写真を見せるだけにする。
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert_eq!(photo_srcs(&response.body), srcs);
+    assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+    assert!(!response.body.contains("写真を削除"));
+    assert!(
+        response
+            .body
+            .contains("写真は、編集の画面で追加・削除できます")
+    );
 
     // 写真のデータは、画面の Cookie で読める。ブラウザに残させ、画面の no-store で上書きしない。
     let response = screen_get(&backend, &srcs[0], Some(&a)).await;
@@ -1157,18 +1181,19 @@ async fn photo_can_be_added_shown_and_deleted_on_the_detail_page() {
 
     let response = screen_post(&backend, &format!("{}/delete", srcs[0]), Some(&a), "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location, edit);
     assert!(
         set_cookie_named(&response, "__Host-flash")
             .unwrap()
             .starts_with("__Host-flash=photo-deleted;")
     );
-    let response = screen_get(&backend, &path, Some(&a)).await;
+    let response = screen_get(&backend, &edit, Some(&a)).await;
     assert_eq!(photo_srcs(&response.body), Vec::<String>::new());
     assert!(backend.objects.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn photo_errors_are_shown_on_the_detail_page() {
+async fn photo_errors_are_shown_on_the_edit_page() {
     let backend = backend_with_workspaces();
     let a = cookie(WORKSPACE_A);
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
@@ -1192,8 +1217,14 @@ async fn photo_errors_are_shown_on_the_detail_page() {
         let response = post_photo(&backend, &path, Some(&a), photo.as_deref()).await;
         assert_eq!(response.status, status, "{message}");
         assert!(response.body.contains(message), "{}", response.body);
-        // 詳細の画面のまま出し、レシピの内容も見える。
-        assert!(response.body.contains("<h2>材料</h2>"), "{message}");
+        // 編集の画面に出す。画面の JavaScript が入れ替える、知らせと写真の欄がある。
+        assert!(response.body.contains(r#"value="カレー""#), "{message}");
+        assert!(
+            response
+                .body
+                .contains(r#"<div id="messages" class="messages">"#)
+        );
+        assert!(response.body.contains(r#"id="photos""#), "{message}");
     }
     assert!(backend.photos.lock().unwrap().is_empty());
 }
@@ -1251,7 +1282,8 @@ async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
     let backend = backend_with_workspaces();
     let a = cookie(WORKSPACE_A);
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
-    let response = screen_get(&backend, &path, Some(&a)).await;
+    let edit = format!("{path}/edit");
+    let response = screen_get(&backend, &edit, Some(&a)).await;
     assert!(
         response
             .body
@@ -1267,7 +1299,7 @@ async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
 
     let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
-    let response = screen_get(&backend, &path, Some(&a)).await;
+    let response = screen_get(&backend, &edit, Some(&a)).await;
     assert!(response.body.contains(r#"data-remaining="4""#));
 }
 
@@ -1280,7 +1312,7 @@ async fn add_form_is_hidden_when_the_recipe_has_the_maximum_photos() {
         let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
         assert_eq!(response.status, StatusCode::SEE_OTHER);
     }
-    let response = screen_get(&backend, &path, Some(&a)).await;
+    let response = screen_get(&backend, &format!("{path}/edit"), Some(&a)).await;
     assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
     assert!(!response.body.contains("data-photo-upload"));
     assert!(response.body.contains("写真は 5 枚まで付けられます"));
@@ -1306,15 +1338,20 @@ async fn demo_shows_photos_but_cannot_add_or_delete_them() {
         (jpeg(3), "image/jpeg".to_owned()),
     );
 
-    let response = screen_get(&backend, &path, None).await;
-    assert_eq!(photo_srcs(&response.body).len(), 1);
-    assert!(
-        response
-            .body
-            .contains("共有のデモでは、写真を追加・削除できません")
-    );
-    assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
-    assert!(!response.body.contains("写真を削除"));
+    // 詳細の画面と編集の画面の両方で、写真を見せるが、追加・削除のフォームは出さない。
+    for page in [path.clone(), format!("{path}/edit")] {
+        let response = screen_get(&backend, &page, None).await;
+        assert_eq!(photo_srcs(&response.body).len(), 1, "{page}");
+        assert!(
+            response
+                .body
+                .contains("共有のデモでは、写真を追加・削除できません"),
+            "{page}"
+        );
+        assert!(!response.body.contains(r#"enctype="multipart/form-data""#));
+        assert!(!response.body.contains("写真を削除"));
+        assert!(!response.body.contains("すぐ保存されます"));
+    }
     let response = screen_get(&backend, &format!("{path}/photos/{photo}"), None).await;
     assert_eq!(response.status, StatusCode::OK);
 
@@ -1371,13 +1408,13 @@ async fn too_large_photo_form_shows_the_photo_limit_without_reading_the_body() {
     assert!(
         response
             .body
-            .contains(&format!(r#"href="{path}">レシピに戻る"#))
+            .contains(&format!(r#"href="{path}/edit">編集の画面に戻る"#))
     );
     assert!(backend.photos.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn unreadable_photo_form_is_shown_on_the_detail_page() {
+async fn unreadable_photo_form_is_shown_on_the_edit_page() {
     let backend = backend_with_workspaces();
     let a = cookie(WORKSPACE_A);
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
@@ -1482,8 +1519,8 @@ fn photo_limit_message_matches_max_photo_bytes() {
     );
     let megabytes = crate::photo::MAX_PHOTO_BYTES / 1_000_000;
     assert!(crate::screen::PHOTO_TOO_LARGE.contains(&format!("約 {megabytes} MB")));
-    let detail = include_str!("../../templates/detail.html");
-    assert!(detail.contains(&format!("1 枚 {megabytes} MB まで")));
+    let section = include_str!("../../templates/photo_section.html");
+    assert!(section.contains(&format!("1 枚 {megabytes} MB まで")));
 }
 
 #[tokio::test]
@@ -1518,7 +1555,7 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
 }
 
 #[tokio::test]
-async fn too_large_photo_form_without_content_length_is_shown_on_the_detail_page() {
+async fn too_large_photo_form_without_content_length_is_shown_on_the_edit_page() {
     let backend = backend_with_workspaces();
     let a = cookie(WORKSPACE_A);
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
@@ -1538,8 +1575,9 @@ async fn too_large_photo_form_without_content_length_is_shown_on_the_detail_page
         "{}",
         response.body
     );
-    // エラーの画面ではなく、詳細の画面に出す。
-    assert!(response.body.contains("<h2>材料</h2>"));
+    // エラーの画面ではなく、編集の画面に出す。
+    assert!(response.body.contains(r#"value="カレー""#));
+    assert!(response.body.contains(r#"id="photos""#));
     assert!(backend.photos.lock().unwrap().is_empty());
 }
 
@@ -1639,4 +1677,136 @@ async fn workspace_deleted_by_another_request_is_treated_as_deleted() {
     assert!(backend.recipes.lock().unwrap().is_empty());
     assert!(backend.photos.lock().unwrap().is_empty());
     assert!(backend.objects.lock().unwrap().is_empty());
+}
+
+/// 一覧は、写真のあるレシピに先頭の写真（追加した順の最初）を小さく出す。
+#[tokio::test]
+async fn list_shows_the_first_photo_of_each_recipe() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let with_photos = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let without_photos = create_recipe(&backend, WORKSPACE_A, "シチュー").await;
+    let recipe = with_photos.rsplit('/').next().unwrap().to_owned();
+    // 追加した日時が同じなら、ID の小さいものを先頭にする。日時が古いものは、ID が大きくても先にする。
+    backend.add_photo_row_at(
+        WORKSPACE_A,
+        &recipe,
+        "cccccccccccccccccccccccccccccccc",
+        3,
+        NOW + 2,
+    );
+    backend.add_photo_row_at(
+        WORKSPACE_A,
+        &recipe,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        3,
+        NOW + 1,
+    );
+    backend.add_photo_row_at(
+        WORKSPACE_A,
+        &recipe,
+        "dddddddddddddddddddddddddddddddd",
+        3,
+        NOW + 1,
+    );
+
+    let response = screen_get(&backend, "/", Some(&a)).await;
+    assert_eq!(response.status, StatusCode::OK);
+    let thumb = format!(
+        r#"<img class="thumb" src="{with_photos}/photos/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" alt="" loading="lazy" width="240" height="160">"#
+    );
+    assert!(response.body.contains(&thumb), "{}", response.body);
+    assert_eq!(response.body.matches(r#"class="thumb""#).count(), 1);
+    assert!(
+        response
+            .body
+            .contains(&format!(r#"href="{without_photos}""#))
+    );
+
+    // 詳細の画面の写真の並びの最初と同じ写真である。
+    let response = screen_get(&backend, &with_photos, Some(&a)).await;
+    assert_eq!(
+        photo_srcs(&response.body)[0],
+        format!("{with_photos}/photos/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+
+    // API の一覧は、今までどおりレシピの中身だけを返す。
+    let request = Request::get("/api/recipes")
+        .header("x-workspace-id", WORKSPACE_A)
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    assert!(!response.body.contains("first_photo"), "{}", response.body);
+    assert!(!response.body.contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+}
+
+/// 登録の画面では、まだ写真を付けられないので、保存した後に編集の画面で追加できることを書く。
+#[tokio::test]
+async fn new_form_says_photos_can_be_added_after_saving() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..backend_with_workspaces()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let response = screen_get(&backend, "/recipes/new", Some(&cookie(WORKSPACE_A))).await;
+    assert!(
+        response
+            .body
+            .contains("写真は、保存した後に、編集の画面で追加できます")
+    );
+    assert!(!response.body.contains(r#"id="photos""#));
+    // 共有のデモでは写真を付けられないので書かない。
+    let response = screen_get(&backend, "/recipes/new", None).await;
+    assert!(
+        response.body.contains("共有のデモです"),
+        "{}",
+        response.body
+    );
+    assert!(!response.body.contains("写真は、保存した後に"));
+}
+
+/// 編集の画面で入力に誤りがあって出し直すときも、写真の欄を残す。
+#[tokio::test]
+async fn edit_form_errors_keep_the_photo_section() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let response = post_photo(&backend, &path, Some(&a), Some(&jpeg(10))).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let response = screen_post(&backend, &path, Some(&a), "name=&servings=2").await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains(r#"id="photos""#));
+    // 写真の代替テキストは、入力した（空の）料理名ではなく、保存してある料理名で作る。
+    assert!(
+        response.body.contains(r#"alt="カレーの写真 1""#),
+        "{}",
+        response.body
+    );
+}
+
+/// 写真の欄を読めなくても（別のタブでレシピを消したなど）、入力の誤りの画面を出し、書きかけの入力を残す。
+#[tokio::test]
+async fn edit_form_errors_are_shown_even_if_the_photo_section_cannot_be_read() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let response = screen_post(&backend, &format!("{path}/delete"), Some(&a), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let response = screen_post(
+        &backend,
+        &path,
+        Some(&a),
+        "name=&servings=2&steps=%E7%85%AE%E3%82%8B",
+    )
+    .await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains("入力に誤りがあります"));
+    assert!(response.body.contains("煮る"));
+    assert!(!response.body.contains(r#"id="photos""#));
 }

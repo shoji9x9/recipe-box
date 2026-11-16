@@ -11,7 +11,8 @@
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/assets/style.css">
     <script src="/assets/htmx.min.js" defer></script>
-    {#- 写真の追加のフォームで、複数の写真を 1 枚ずつ送る。hx-boost は head を入れ替えないので、どの画面でも読む。
+    {#- 編集の画面の写真の欄で、複数の写真を 1 枚ずつ送り、追加・削除の後に写真の欄だけを入れ替える。
+        hx-boost は head を入れ替えないので、どの画面でも読む。
         ES モジュールなので、defer と同じく、HTML を読み終えてから動く。 #}
     <script src="/assets/photo-upload.js" type="module"></script>
     {#- 一覧の検索で、日本語の入力の変換中は検索しない。入力を消すボタンも扱う。ES モジュール。 #}
@@ -44,13 +45,16 @@
         <h1>{% block heading %}{% endblock %}</h1>
         {%- block head_actions %}{% endblock %}
       </div>
-      {#- ページ全体へのメッセージ。自動では消さない。 #}
-      {%- if let Some(message) = layout.flash %}
-      <p class="message success" role="status">{{ message }}</p>
-      {%- endif %}
-      {%- if let Some(message) = layout.alert %}
-      <p class="message error" role="alert">{{ message }}</p>
-      {%- endif %}
+      {#- ページ全体へのメッセージ。自動では消さない。
+          編集の画面で写真を追加・削除したとき、画面の JavaScript（photo-upload.js）は、ここと写真の欄だけを入れ替える。 #}
+      <div id="messages" class="messages">
+        {%- if let Some(message) = layout.flash %}
+        <p class="message success" role="status">{{ message }}</p>
+        {%- endif %}
+        {%- if let Some(message) = layout.alert %}
+        <p class="message error" role="alert">{{ message }}</p>
+        {%- endif %}
+      </div>
       {%- block content %}{% endblock %}
     </main>
   </body>
