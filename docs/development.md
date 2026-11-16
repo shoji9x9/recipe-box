@@ -144,7 +144,7 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
 ### 本番のログ
 
 - アプリが出したログ（`src/error.rs` の、エラーを出す `log_error` と、定期の自動削除が終わったことなどを出す `log_info`）は、Workers のログ（`wrangler.toml` の `[observability]`）に残る。無料のプランでは、2026-11-30 までは 3 日残り、1 日 200,000 件までである。2026-12-01 からは 7 日残り、1 日 0.5 GB までに変わる（docs/security.md の「ログ」）。
-  Cloudflare のダッシュボードで、Worker（`recipe-box`）の Observability を開いて見る。ワークスペースの ID は、ログに出す前に伏せている（アプリのログは、この 2 つの関数だけから出す）。
+  Cloudflare のダッシュボードで、Worker（`recipe-box`）の Observability を開いて見る。ワークスペースの ID は、ログに出す前に伏せている（アプリが自分で出すログは、この 2 つの関数だけから出す。panic の文は伏せない。docs/security.md の「ログ」）。
 - リクエストごとの記録（invocation logs）は残さない（docs/security.md の「ログ」）。リクエストごとの状態コードや CPU 時間は、その場で `wrangler tail` で見る。
   `apps/recipe-box-rs` で `pnpm exec wrangler tail recipe-box --format pretty` を実行する（`wrangler login` が要る）。流れている間だけ見え、残らない。
   `--format json` は、リクエストのヘッダー（API の `X-Workspace-Id` を含みうる）も出すので、その出力を人に見せたり、ファイルに残したりしない。
@@ -284,8 +284,8 @@ mise run dev                     # ビルドし、ローカルの D1 にマイ�
 ```
 
 - 動いていることは、別の端末で `mise run smoke` を実行して確かめる。smoke はワークスペース・レシピ・写真を作り、回数の制限と 1 日の作成の上限の数も使う。
-  新しい側のアプリには、同じ smoke を `API_ONLY=1` を付けて当てる（上の「テスト」）。
   そのため、確かめた後は、比べ始める前に Worker を止め、`.wrangler/state` を消してから起動し直す。
+  新しい側のアプリには、同じ smoke を `API_ONLY=1` を付けて当てる（上の「テスト」）。
 - 定期実行（使われていないワークスペースの自動削除）を比べるときは、`mise run dev` の代わりに、`mise run migrate` の後で `apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動する。
   `curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"` で 1 回動き、結果を起動した端末のログ（「使われていないワークスペースの自動削除」）に出す。
 - 共有のデモのデータを入れるときは、上の「CI と CD」の、共有のデモをローカルで試す手順に従う。

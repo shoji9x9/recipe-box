@@ -25,11 +25,7 @@ use serde::Serialize;
 use tower_service::Service;
 use worker::{Context, Env, ScheduleContext, ScheduledEvent, event};
 
-use crate::{
-    backend::{Backend, BackendError},
-    cloudflare::CloudflareBackend,
-    error::ApiError,
-};
+use crate::{backend::Backend, cloudflare::CloudflareBackend, error::ApiError};
 
 /// `GET /api/health` の応答の本文。
 #[derive(Serialize)]
@@ -229,9 +225,9 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     // CI のスモークテスト（scripts/smoke-test.ts）は、この 2 つの文でログを見分ける。
     // 要約に ID は入らないが、ほかのログと同じく、伏せる関数を通して出す。
     if summary.has_failure() {
-        error::log_error(&BackendError(format!(
+        error::log_error(&format!(
             "使われていないワークスペースの自動削除で失敗があった: {summary:?}"
-        )));
+        ));
     } else {
         error::log_info(&format!(
             "使われていないワークスペースの自動削除が終わった: {summary:?}"

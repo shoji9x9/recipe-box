@@ -203,8 +203,10 @@ impl From<BackendError> for ApiError {
 /// エラーをログに出す。Workers では `console.error` に、テストでは標準エラー出力に出す。
 ///
 /// どの経路のエラーでも、文の中の ID（ワークスペースの ID は持ち主の証）を伏せてから出す（[`crate::id::redact`]）。
-/// アプリのログは、これと [`log_info`] だけから出し、伏せる経路を 1 つにする。
-pub(crate) fn log_error(error: &BackendError) {
+/// アプリが自分で出すログは、これと [`log_info`] だけから出し、伏せる経路を 1 つにする
+/// （panic の文は `console_error_panic_hook` が出し、ここを通らない）。
+/// 外の世界での失敗（[`BackendError`]）のほか、アプリの中の失敗の文（`format!` で作ったもの）も受け取る。
+pub(crate) fn log_error(error: &impl std::fmt::Display) {
     let message = crate::id::redact(&error.to_string());
     #[cfg(target_arch = "wasm32")]
     worker::console_error!("{message}");

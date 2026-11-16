@@ -37,6 +37,12 @@ if (args.length > 1) {
 }
 const baseUrl = args[0] ?? "http://localhost:8787";
 const apiOnly = process.env["API_ONLY"] === "1";
+const scheduledLog = process.env["SCHEDULED_LOG"] ?? "";
+if (apiOnly && scheduledLog !== "") {
+  // 定期の自動削除の確かめは、今の作りのローカルの D1 を書き換えるので、新しいアプリに当てる API_ONLY=1 とは一緒に使わない。
+  console.error("API_ONLY=1 と SCHEDULED_LOG は一緒に使えない（SCHEDULED_LOG は今の作りのローカルの D1 を書き換える）");
+  process.exit(2);
+}
 
 // 書き込む API が回数の制限（60 秒に 30 回）で 429 になったら、待ってからやり直すか。
 // 制限そのものを確かめるときだけ false にする。
@@ -315,7 +321,9 @@ async function main(): Promise<void> {
   }
   if (status === 503) {
     fail(
-      "アプリ全体のワークスペースの上限（1 日 20 個）に当たった。ローカルの D1 を作り直す（apps/recipe-box-rs/.wrangler/state/v3/d1 を消す）か、UTC の翌日に実行する",
+      apiOnly
+        ? "アプリ全体のワークスペースの上限（1 日 20 個）に当たった。アプリのデータを作り直すか、UTC の翌日に実行する"
+        : "アプリ全体のワークスペースの上限（1 日 20 個）に当たった。ローカルの D1 を作り直す（apps/recipe-box-rs/.wrangler/state/v3/d1 を消す）か、UTC の翌日に実行する",
     );
   }
   expect(201, "POST /api/workspaces");
@@ -517,6 +525,7 @@ async function main(): Promise<void> {
   if (json<ErrorBody>().error !== "photo_not_found") fail("消した写真のエラーが photo_not_found でない");
   await request("DELETE", `/api/recipes/${recipeId}/photos/${photoId}`, a);
   expect(404, "消した写真をもう一度消す");
+  if (json<ErrorBody>().error !== "photo_not_found") fail("消した写真をもう一度消したエラーが photo_not_found でない");
   await request("GET", `/api/recipes/${recipeId}/photos`, a);
   expect(200, "GET /api/recipes/{id}/photos（削除の後）");
   const remaining = json<PhotoList>().photos;
@@ -533,9 +542,11 @@ async function main(): Promise<void> {
   expect(204, "DELETE /api/recipes/{id}");
   await request("GET", `/api/recipes/${recipeId}`, a);
   expect(404, "消したレシピ");
-  // レシピを消すと、写真の行も（D1 の ON DELETE CASCADE で）消える。
+  // 消したレシピの写真は読めない（写真の行を、ワークスペースとレシピと写真の ID で探すので photo_not_found になる）。
+  // 写真の行が D1 から消えたかは、API からは見分けられない（消す前に印を付けて隠すので、行が残っても同じ 404 になる）。
   await request("GET", `/api/recipes/${recipeId}/photos/${keptPhotoId}`, a);
   expect(404, "消したレシピの写真");
+  if (json<ErrorBody>().error !== "photo_not_found") fail("消したレシピの写真のエラーが photo_not_found でない");
 
   console.log("ワークスペースの削除");
   // 写真の付いたレシピのあるワークスペースを、レシピ 80 件と写真ごと消す（D1 の ON DELETE CASCADE と R2 の削除）。
@@ -553,8 +564,7 @@ async function main(): Promise<void> {
   expect(404, "B を消した後も、A は使える（消したレシピは 404）");
   if (json<ErrorBody>().error !== "recipe_not_found") fail("B を消したら A まで消えた");
 
-  const scheduledLog = process.env["SCHEDULED_LOG"];
-  if (scheduledLog !== undefined && scheduledLog !== "") {
+  if (scheduledLog !== "") {
     await checkScheduled(scheduledLog, photo, workspaceA);
   }
 

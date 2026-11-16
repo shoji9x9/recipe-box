@@ -144,9 +144,9 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     // CI のスモークテスト（scripts/smoke-test.ts）は、この 2 つの文でログを見分ける。
     // 要約に ID は入らないが、ほかのログと同じく、伏せる関数を通して出す。
     if summary.has_failure() {
-        error::log_error(&amp;BackendError(format!(
+        error::log_error(&amp;format!(
             &quot;使われていないワークスペースの自動削除で失敗があった: {summary:?}&quot;
-        )));
+        ));
     } else {
         error::log_info(&amp;format!(
             &quot;使われていないワークスペースの自動削除が終わった: {summary:?}&quot;

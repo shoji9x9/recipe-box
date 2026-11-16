@@ -21,7 +21,6 @@ use worker::{
 };
 
 use crate::{
-    backend::BackendError,
     error::{ApiError, log_error},
     photo,
 };
@@ -103,9 +102,7 @@ pub fn split_photo_body(req: worker::Request) -> worker::Result<HttpRequest> {
         Ok(http) => http,
         Err(error) => {
             // 写真の追加が、本文を読みためる（CPU 時間の多い）経路に戻ったことを分かるようにする。
-            log_error(&BackendError(format!(
-                "本文の無いリクエストを作れない: {error}"
-            )));
+            log_error(&format!("本文の無いリクエストを作れない: {error}"));
             return HttpRequest::try_from(req);
         }
     };
