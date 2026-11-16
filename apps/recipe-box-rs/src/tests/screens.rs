@@ -2348,3 +2348,49 @@ async fn write_limit_is_answered_before_unreadable_forms_and_bad_ids() {
         assert!(response.body.contains("<title>エラー"), "{}", response.body);
     }
 }
+
+/// 回数の制限に当たっていても、送り元（Origin）を先に確かめる。別のサイトからの POST は、印を付けてハンドラーへ渡さずに 403 で断る。
+#[tokio::test]
+async fn posts_from_other_sites_are_rejected_before_the_write_limit() {
+    let backend = FakeBackend {
+        write_limited: true,
+        ..backend_with_workspaces()
+    };
+    let id = "0123456789abcdef0123456789abcdef";
+    for path in [
+        "/workspace".to_owned(),
+        "/workspace/switch".to_owned(),
+        "/recipes".to_owned(),
+        format!("/recipes/{id}"),
+    ] {
+        for origin in [None, Some("https://evil.example"), Some("null")] {
+            let mut builder = Request::post(path.as_str())
+                .header(header::HOST, HOST)
+                .header(header::COOKIE, cookie(WORKSPACE_A))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            if let Some(origin) = origin {
+                builder = builder.header(header::ORIGIN, origin);
+            }
+            let request = builder
+                .body(Body::from(format!("id={WORKSPACE_B}&name=x&servings=1")))
+                .unwrap();
+            let response = send(router(backend.clone()), request).await;
+            assert_eq!(response.status, StatusCode::FORBIDDEN, "{path} {origin:?}");
+            assert!(
+                response.body.contains("ほかのサイトから送られたフォーム"),
+                "{}",
+                response.body
+            );
+            assert_eq!(set_cookies(&response), Vec::<String>::new(), "{path}");
+        }
+    }
+    // 回数の制限を数えず、D1 の最終利用日時も書き換えない（ハンドラーにも identify にも届かない）。
+    assert!(backend.write_limit_keys.lock().unwrap().is_empty());
+    assert_eq!(
+        backend
+            .last_used_writes
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert!(backend.recipes.lock().unwrap().is_empty());
+}
