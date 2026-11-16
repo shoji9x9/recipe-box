@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::{
     backend::{Backend, BackendError, PhotoKey, WorkspaceLimits},
-    error::{ApiError, log_error},
+    error::{ApiError, log_error, run_to_completion_or_internal},
     id,
     limits::{DAY_MILLIS, client_key, start_of_utc_day},
     photo::{self, PendingCleanup, object_key},
@@ -190,13 +190,7 @@ pub async fn remove<B: Backend>(backend: &B, workspace: &WorkspaceId) -> Result<
         return Err(ApiError::DemoWorkspaceProtected);
     }
     let task = remove_with_photos(backend.clone(), workspace.clone(), None);
-    let Some(result) = backend.run_to_completion(task).await else {
-        log_error(&BackendError(
-            "ワークスペースを消す処理が、結果を返さずに終わった".into(),
-        ));
-        return Err(ApiError::Internal);
-    };
-    if result? {
+    if run_to_completion_or_internal(backend, task, "ワークスペースを消す").await? {
         Ok(())
     } else {
         Err(ApiError::WorkspaceNotFound)
@@ -234,13 +228,34 @@ async fn remove_with_photos<B: Backend>(
 /// 最後に使われてから、自動で消すまでの期間（14 日）。
 pub const UNUSED_DELETE_AFTER_MILLIS: i64 = 14 * DAY_MILLIS;
 
-/// 定期実行が 1 日に動く回数。wrangler.toml の `[triggers]` の `0 */6 * * *`（6 時間ごと）に合わせる
+/// 定期実行の間隔（1 時間）。wrangler.toml の `[triggers]` の `0 * * * *` に合わせる
 /// （テストの `cron_runs_as_often_as_the_cleanup_budget_assumes` で確かめる）。
-pub const CLEANUP_RUNS_PER_DAY: i64 = 4;
-/// 定期実行の 1 回で消すワークスペースの数の上限。最終利用日時の古い順に選び、残りは次の実行に回す。
+pub const CLEANUP_INTERVAL_MILLIS: i64 = 60 * 60 * 1000;
+/// 定期実行が 1 日に動く回数。
+pub const CLEANUP_RUNS_PER_DAY: i64 = DAY_MILLIS / CLEANUP_INTERVAL_MILLIS;
+/// 定期実行の 1 回で消すワークスペースの数の上限。残りは次の実行に回す（選び方は [`pick_for_run`]）。
 pub const MAX_WORKSPACES_PER_RUN: i64 = 8;
-// 1 日に作れる数のワークスペースが同じ日に対象になっても、その日のうちに消し終える（残りがたまり続けない）。
-const _: () = assert!(MAX_WORKSPACES_PER_RUN * CLEANUP_RUNS_PER_DAY >= MAX_WORKSPACES_PER_DAY);
+// アプリ全体のワークスペースが、すべて同じ日に対象になっても、その日のうちに消し終える（残りがたまり続けない）。
+// 対象になるのは最終利用日時で決まるので、1 日に作れる数ではなく、全体の数で確かめる。
+const _: () = assert!(MAX_WORKSPACES_PER_RUN * CLEANUP_RUNS_PER_DAY >= MAX_WORKSPACES);
+
+/// 定期実行の 1 回で処理するものを、並べた `items` から `count` 個まで選び、選んだものと、次の実行に回した数を返す。
+///
+/// 選び始める位置を、実行ごと（[`CLEANUP_INTERVAL_MILLIS`] ごと）に `count` 個ずつずらし、先頭に戻って続ける。
+/// 失敗し続けるもの（次の実行でも残る）が先頭にあっても、ほかのものが毎回後に回されないようにするためである。
+pub(crate) fn pick_for_run<T>(mut items: Vec<T>, now: i64, count: usize) -> (Vec<T>, usize) {
+    let total = items.len();
+    if total <= count {
+        return (items, 0);
+    }
+    let run = u64::try_from(now.div_euclid(CLEANUP_INTERVAL_MILLIS)).unwrap_or(0);
+    let step = u64::try_from(count).unwrap_or(0);
+    let len = u64::try_from(total).unwrap_or(1);
+    let start = usize::try_from(run.wrapping_mul(step) % len).unwrap_or(0);
+    items.rotate_left(start);
+    items.truncate(count);
+    (items, total - count)
+}
 
 /// 定期実行の 1 回の実行で呼べる、D1 のクエリと R2 の呼び出しの数の上限（無料のプラン）。
 ///
@@ -294,7 +309,8 @@ impl CleanupSummary {
 /// 数の決まった片付けを先に動かす。
 /// 1. 1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、前の日までのものを消す。
 /// 2. 書き込みか削除の途中で失敗して残った写真の行を、R2 のデータと一緒に片付ける（[`photo::clean_pending`]）。
-/// 3. 使われていないワークスペースを、最終利用日時の古い順に [`MAX_WORKSPACES_PER_RUN`] 個まで消す。残りは次の実行に回す。
+/// 3. 使われていないワークスペースを、最終利用日時の古い順に並べ、[`MAX_WORKSPACES_PER_RUN`] 個まで消す（[`pick_for_run`]）。
+///    残りは次の実行に回す。
 ///
 /// 1 つのワークスペースで失敗しても、ほかのワークスペースは消す。
 /// 失敗の理由はログに出す。ワークスペースの ID は持ち主の証なので、ログに出す前に伏せる（[`crate::id::redact`]）。
@@ -336,12 +352,13 @@ pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
         }
         targets.push((row.last_used_at, id));
     }
-    // 長く使われていないものから消す。同じ日時なら ID の順にして、毎回同じ順にする。
+    // 長く使われていないものから並べる。同じ日時なら ID の順にして、毎回同じ順にする。
     targets.sort_by(|a, b| (a.0, a.1.as_str()).cmp(&(b.0, b.1.as_str())));
     // 8 は usize に収まる。
     let per_run = usize::try_from(MAX_WORKSPACES_PER_RUN).unwrap_or(1);
-    summary.deferred = targets.len().saturating_sub(per_run);
-    for (_, id) in targets.into_iter().take(per_run) {
+    let (targets, deferred) = pick_for_run(targets, now, per_run);
+    summary.deferred = deferred;
+    for (_, id) in targets {
         // 選んだ後に使われたワークスペースは、写真を隠すときと D1 で消すときに、同じ条件で確かめ直して消さない。
         match remove_with_photos(backend.clone(), id, Some(before)).await {
             Ok(true) => summary.deleted += 1,

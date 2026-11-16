@@ -17,8 +17,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backend::{Backend, BackendError, RecipePage},
-    error::{ApiError, log_error},
+    backend::{Backend, RecipePage},
+    error::{ApiError, run_to_completion_or_internal},
     id, photo,
     workspace::{Workspace, WorkspaceId},
 };
@@ -472,13 +472,7 @@ pub async fn remove<B: Backend>(
     id: &RecipeId,
 ) -> Result<(), ApiError> {
     let task = remove_with_photos(backend.clone(), workspace.clone(), id.clone());
-    let Some(result) = backend.run_to_completion(task).await else {
-        log_error(&BackendError(
-            "レシピを消す処理が、結果を返さずに終わった".into(),
-        ));
-        return Err(ApiError::Internal);
-    };
-    result
+    run_to_completion_or_internal(backend, task, "レシピを消す").await
 }
 
 /// [`remove`] の 1 から 4。

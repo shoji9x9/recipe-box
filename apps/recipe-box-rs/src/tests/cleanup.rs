@@ -12,8 +12,9 @@ use crate::{
     limits::{DAY_MILLIS, start_of_utc_day},
     photo::{MAX_KEYS_PER_DELETE, MAX_PENDING_BATCHES_PER_RUN, PENDING_CLEANUP_AFTER_MILLIS},
     workspace::{
-        CLEANUP_RUNS_PER_DAY, CLEANUP_SUBREQUESTS, CleanupSummary, MAX_SUBREQUESTS_PER_RUN,
-        MAX_WORKSPACES_PER_DAY, MAX_WORKSPACES_PER_RUN, UNUSED_DELETE_AFTER_MILLIS, delete_unused,
+        CLEANUP_INTERVAL_MILLIS, CLEANUP_RUNS_PER_DAY, CLEANUP_SUBREQUESTS, CleanupSummary,
+        MAX_SUBREQUESTS_PER_RUN, MAX_WORKSPACES_PER_DAY, MAX_WORKSPACES_PER_RUN,
+        UNUSED_DELETE_AFTER_MILLIS, delete_unused,
     },
 };
 
@@ -274,21 +275,20 @@ async fn many_due_workspaces_and_pending_photos_stay_within_the_call_limit() {
     assert_eq!(summary.pending_photos.cleaned, per_run);
     assert_eq!(summary.pending_photos.deferred, pending - per_run);
     assert_eq!(*backend.photo_uploads.lock().unwrap(), [today]);
-    // 長く使われていないものから消す（最終利用日時は、後ろほど古い）。
-    let remaining = backend.workspaces.lock().unwrap().clone();
-    for (i, workspace) in workspaces.iter().enumerate() {
-        assert_eq!(
-            remaining.contains_key(workspace),
-            i < due - per_run_workspaces,
-            "{i}"
-        );
-    }
+    assert_eq!(
+        workspaces
+            .iter()
+            .filter(|w| backend.workspaces.lock().unwrap().contains_key(*w))
+            .count(),
+        due - per_run_workspaces
+    );
 
-    // 残りは次の実行に回り、1 日の実行の回数のうちに消し終える。
+    // 残りは次の実行（1 時間後）に回り、1 日の実行の回数のうちに消し終える。
     let mut runs = 1;
     while backend.workspaces.lock().unwrap().len() > 1 {
         backend.d1_calls.store(0, Ordering::Relaxed);
         backend.r2_calls.store(0, Ordering::Relaxed);
+        backend.advance(CLEANUP_INTERVAL_MILLIS);
         let summary = delete_unused(&backend).await;
         assert!(!summary.has_failure(), "{summary:?}");
         runs += 1;
@@ -303,12 +303,13 @@ async fn many_due_workspaces_and_pending_photos_stay_within_the_call_limit() {
 fn cron_runs_as_often_as_the_cleanup_budget_assumes() {
     // 1 回に消す数の上限（MAX_WORKSPACES_PER_RUN）は、1 日の実行の回数（CLEANUP_RUNS_PER_DAY）と合わせて決めている。
     let wrangler = include_str!("../../wrangler.toml");
-    // 6 時間ごと（0 */6 * * *）は 1 日 4 回。
+    // 1 時間ごと（0 * * * *）は 1 日 24 回。
     assert!(
-        wrangler.contains(r#"crons = ["0 */6 * * *"]"#),
-        "wrangler.toml の [triggers] を変えたら、CLEANUP_RUNS_PER_DAY も直す"
+        wrangler.contains(r#"crons = ["0 * * * *"]"#),
+        "wrangler.toml の [triggers] を変えたら、CLEANUP_INTERVAL_MILLIS も直す"
     );
-    assert_eq!(CLEANUP_RUNS_PER_DAY, 4);
+    assert_eq!(CLEANUP_INTERVAL_MILLIS, 60 * 60 * 1000);
+    assert_eq!(CLEANUP_RUNS_PER_DAY, 24);
 }
 
 #[tokio::test]
@@ -343,4 +344,29 @@ async fn workspace_used_after_its_photos_were_hidden_is_kept_and_photos_are_clea
             .iter()
             .all(|(workspace, _, _)| workspace != WORKSPACE_A)
     );
+}
+
+#[tokio::test]
+async fn workspaces_that_keep_failing_do_not_block_the_others() {
+    let backend = FakeBackend::default();
+    // 最も古い 8 個（1 回に消す数）は、消すたびに失敗する（写真の行のレシピの ID の形が正しくない）。
+    let per_run = to_usize(MAX_WORKSPACES_PER_RUN);
+    let mut good = Vec::new();
+    for i in 0..per_run * 2 {
+        let workspace = format!("{:032x}", 0x1000 + i);
+        backend.add_workspace(&workspace, BEFORE - 1000 + i64::try_from(i).unwrap());
+        if i < per_run {
+            backend.add_photo_row(&workspace, "not-a-recipe-id", &format!("{i:032x}"), 1);
+        } else {
+            good.push(workspace);
+        }
+    }
+    // 実行ごとに選び始める位置をずらすので、失敗し続けるものがあっても、ほかは消える。
+    for _ in 0..4 {
+        delete_unused(&backend).await;
+        backend.advance(CLEANUP_INTERVAL_MILLIS);
+    }
+    let workspaces = backend.workspaces.lock().unwrap();
+    assert!(good.iter().all(|w| !workspaces.contains_key(w)));
+    assert_eq!(workspaces.len(), per_run);
 }

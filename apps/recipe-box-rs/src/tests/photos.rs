@@ -1007,3 +1007,20 @@ async fn delete_task_dropped_by_the_runtime_is_an_internal_error() {
     assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(error_code(&response), "internal_error");
 }
+
+#[tokio::test]
+async fn photo_remarked_by_a_deletion_while_writing_stays_hidden() {
+    let (backend, recipe) = setup().await;
+    // R2 に書いている間に、レシピの削除が始まり、写真の行に印を付け直した（その削除は、まだ終わっていない）。
+    let racing = FakeBackend {
+        photo_rows_remarked_on_put: true,
+        ..backend.clone()
+    };
+    let response = upload(&racing, WORKSPACE_A, &recipe, jpeg(10)).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert_eq!(error_code(&response), "photo_not_found");
+    // 追加の側は、付け直された印を外さず、R2 のデータを消す。削除が途中で失敗しても、データの無い写真は見えない。
+    assert!(backend.objects.lock().unwrap().is_empty());
+    assert_eq!(listed_photos(&backend, &recipe).await, 0);
+    assert_eq!(backend.pending_photos.lock().unwrap().len(), 1);
+}

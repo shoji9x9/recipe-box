@@ -11,7 +11,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::backend::BackendError;
+use crate::backend::{Backend, BackendError};
 
 /// API の失敗。
 #[derive(Debug, PartialEq, Eq)]
@@ -209,4 +209,20 @@ pub(crate) fn log_error(error: &BackendError) {
     worker::console_error!("{message}");
     #[cfg(not(target_arch = "wasm32"))]
     eprintln!("{message}");
+}
+
+/// `task` を、送り手との接続が切れても最後まで動かし（[`Backend::run_to_completion`]）、その結果を返す。
+/// ランタイムが `task` を最後まで動かさずに捨てたときは、`what`（処理の名前）をログに出し、`Internal` にする。
+pub(crate) async fn run_to_completion_or_internal<B: Backend, T: Send + 'static>(
+    backend: &B,
+    task: impl std::future::Future<Output = Result<T, ApiError>> + Send + 'static,
+    what: &str,
+) -> Result<T, ApiError> {
+    let Some(result) = backend.run_to_completion(task).await else {
+        log_error(&BackendError(format!(
+            "{what}処理が、結果を返さずに終わった"
+        )));
+        return Err(ApiError::Internal);
+    };
+    result
 }

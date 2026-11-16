@@ -7,7 +7,7 @@
 // ワークスペースとレシピを作るので、本番には使わない。
 // 環境変数 CHECK_RATE_LIMIT=1 のときだけ、最後に回数の制限を確かめる（CI で使う）。
 // この確認は 60 秒の枠を使い切るので、続けて実行すると最初のワークスペースの作成が 429 になる。
-// 1 回の実行でワークスペースを最大 24 個（定期の自動削除の確認を含む）作りうるので、同じローカルの D1 で同じ日に 2 回以上実行すると、
+// 1 回の実行でワークスペースを最大 23 個（定期の自動削除の確認を含む）作りうるので、同じローカルの D1 で同じ日に 2 回以上実行すると、
 // アプリ全体の 1 日の上限（20 個）に当たることがある。そのときは 503 で止まり、作り直し方を示す。
 // 環境変数 SCHEDULED_LOG に wrangler dev --test-scheduled のログのファイルを渡したときだけ、定期の自動削除を動かして確かめる（CI で使う）。
 // この確認は、wrangler でローカルの D1 を直接書き換える（ワークスペースを古くし、写真の行に印を付ける）。
@@ -200,16 +200,13 @@ async function waitForCleanupLog(path: string, offset: number): Promise<string> 
 
 // 定期の自動削除（Cron Trigger）を /__scheduled で動かし、本物の D1 と R2 で、使われていないワークスペースの削除と、
 // 書き込み中の印が残った写真の片付けが、失敗せずに動くことを確かめる。
-async function checkScheduled(logPath: string, photo: Buffer): Promise<void> {
+// kept は、使っているワークスペース（印の残った写真を置く）。古くするワークスペースは、ここで 1 つだけ作る（1 日の作成の上限を使いすぎない）。
+async function checkScheduled(logPath: string, photo: Buffer, keptWorkspace: string): Promise<void> {
   console.log("定期の自動削除（/__scheduled）");
-  // 古くするワークスペース（写真付き）と、印の残った写真を持つワークスペースを作る。
-  const ids: string[] = [];
-  for (const what of ["古くする", "印を残す"]) {
-    await request("POST", "/api/workspaces");
-    expect(201, `POST /api/workspaces（${what}）`);
-    ids.push(checkedId(json<{ id: string }>().id));
-  }
-  const [unused = fail("ワークスペースが無い"), kept = fail("ワークスペースが無い")] = ids;
+  await request("POST", "/api/workspaces");
+  expect(201, "POST /api/workspaces（古くする）");
+  const unused = checkedId(json<{ id: string }>().id);
+  const kept = checkedId(keptWorkspace);
   const photoIds: string[] = [];
   const recipeIds: string[] = [];
   for (const workspace of [unused, kept]) {
@@ -229,7 +226,7 @@ async function checkScheduled(logPath: string, photo: Buffer): Promise<void> {
   );
   const offset = statSync(logPath).size;
   // cron の値は、wrangler.toml の [triggers] と同じにする（アプリは値を見ない）。
-  await request("GET", "/__scheduled?cron=0+*/6+*+*+*");
+  await request("GET", "/__scheduled?cron=0+*+*+*+*");
   expect(200, "GET /__scheduled");
   const line = await waitForCleanupLog(logPath, offset);
   if (!line.includes("自動削除が終わった:")) fail(`定期の自動削除で失敗があった: ${line}`);
@@ -471,7 +468,7 @@ async function main(): Promise<void> {
 
   const scheduledLog = process.env["SCHEDULED_LOG"];
   if (scheduledLog !== undefined && scheduledLog !== "") {
-    await checkScheduled(scheduledLog, photo);
+    await checkScheduled(scheduledLog, photo, workspaceA);
   }
 
   // 最後に、回数の制限（Rate Limiting）を確かめる。

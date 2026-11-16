@@ -79,6 +79,8 @@ pub struct FakeBackend {
     pub task_dropped: bool,
     /// `true` なら、R2 に書き込んでいる間に、別のリクエストがすべての写真の行を消したことにする。
     pub photo_rows_vanish_on_put: bool,
+    /// `true` なら、R2 に書き込んでいる間に、別のリクエスト（レシピかワークスペースの削除）が、すべての写真の行に印を付け直したことにする。
+    pub photo_rows_remarked_on_put: bool,
     /// `true` なら、R2 の削除が失敗したことにする。
     pub broken_r2_delete: bool,
     /// `true` なら、最初の R2 の削除の直後に、別のリクエストが同じレシピに写真を 1 枚追加し（D1 の行と R2 のデータ）、
@@ -133,6 +135,7 @@ impl Default for FakeBackend {
             broken_r2_put: false,
             task_dropped: false,
             photo_rows_vanish_on_put: false,
+            photo_rows_remarked_on_put: false,
             broken_r2_delete: false,
             photo_added_after_first_delete: false,
             workspace_vanishes_on_delete: false,
@@ -213,13 +216,15 @@ impl FakeBackend {
         !self.is_pending(&photo.id)
     }
 
-    /// 写真の印を付ける（`since` が日時）か外す（`None`）。付けるときは印の無い行に、外すときは印の付いた行にだけ効く。
+    /// 写真の印を付ける（`mark`）か外す。`at` は、付ける印の日時か、外す印の日時。
+    /// 付けるときは印の無い行に、外すときは日時が `at` の印の付いた行にだけ効く。
     fn set_pending(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
-        since: Option<i64>,
+        mark: bool,
+        at: i64,
     ) -> BackendResult<bool> {
         self.check()?;
         if self.broken_photo_pending {
@@ -232,13 +237,18 @@ impl FakeBackend {
             return Ok(false);
         }
         let mut pending = self.pending_photos.lock().unwrap();
-        Ok(match since {
-            Some(since) if !pending.contains_key(id.as_str()) => {
-                pending.insert(id.as_str().to_owned(), since);
+        Ok(if mark {
+            if pending.contains_key(id.as_str()) {
+                false
+            } else {
+                pending.insert(id.as_str().to_owned(), at);
                 true
             }
-            Some(_) => false,
-            None => pending.remove(id.as_str()).is_some(),
+        } else if pending.get(id.as_str()) == Some(&at) {
+            pending.remove(id.as_str());
+            true
+        } else {
+            false
         })
     }
 
@@ -620,7 +630,7 @@ impl Backend for FakeBackend {
             let keys = self.workspace_photo_keys(workspace);
             let mut pending = self.pending_photos.lock().unwrap();
             for key in &keys {
-                pending.entry(key.id.clone()).or_insert(now);
+                pending.insert(key.id.clone(), now);
             }
             if self.used_after_hiding.as_deref() == Some(workspace.as_str()) {
                 let now = self.now_millis();
@@ -735,10 +745,10 @@ impl Backend for FakeBackend {
                 .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
                 .map(|(_, _, p)| p.id.clone())
                 .collect();
-            // 印の無い行にだけ、印を付ける（印の付いた行の日時は変えない）。
+            // 本物と同じく、印の付いた行も付け直す。
             let mut pending = self.pending_photos.lock().unwrap();
             for id in &ids {
-                pending.entry(id.clone()).or_insert(now);
+                pending.insert(id.clone(), now);
             }
             Ok(ids)
         }))
@@ -814,8 +824,9 @@ impl Backend for FakeBackend {
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
+        marked_at: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        ready(self.set_pending(workspace, recipe, id, None))
+        ready(self.set_pending(workspace, recipe, id, false, marked_at))
     }
 
     fn hide_photo(
@@ -825,7 +836,7 @@ impl Backend for FakeBackend {
         id: &PhotoId,
         now: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        ready(self.set_pending(workspace, recipe, id, Some(now)))
+        ready(self.set_pending(workspace, recipe, id, true, now))
     }
 
     fn list_pending_photos(
@@ -912,6 +923,13 @@ impl Backend for FakeBackend {
         }
         if self.photo_rows_vanish_on_put {
             self.photos.lock().unwrap().clear();
+        }
+        if self.photo_rows_remarked_on_put {
+            let at = self.now_millis() + 1;
+            let mut pending = self.pending_photos.lock().unwrap();
+            for (_, _, photo) in self.photos.lock().unwrap().iter() {
+                pending.insert(photo.id.clone(), at);
+            }
         }
         ready(if self.broken_r2_put {
             Err(BackendError("壊れた R2".into()))

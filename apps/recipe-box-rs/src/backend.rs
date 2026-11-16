@@ -233,8 +233,10 @@ pub trait Backend: Clone + Send + Sync + 'static {
         id: &RecipeId,
     ) -> impl Future<Output = BackendResult<Option<Vec<String>>>> + Send;
 
-    /// ワークスペースの削除の始めに、すべての写真を返し、印の無い写真の行に削除が終わっていない印（日時は `now`）を付けて隠す。
-    /// 返すのは、印の有無にかかわらず、すべての写真である（R2 のデータを消すため）。
+    /// ワークスペースの削除の始めに、すべての写真を返し、すべての写真の行に削除が終わっていない印（日時は `now`）を付けて隠す。
+    /// 返すのも印を付けるのも、印の有無にかかわらず、すべての写真である（R2 のデータを消すため）。
+    /// 印の付いた行も付け直すのは、追加や写真の削除の途中の処理が、自分の印だと思って外さないようにするためである
+    /// （[`Backend::finish_photo`]）。
     ///
     /// ワークスペースが無いか、印（`pinned`）があるか、`last_used_before` があって最終利用日時がそれより前でなければ、
     /// 何も隠さずに空を返す（[`Backend::delete_workspace`] と同じ条件）。
@@ -271,12 +273,15 @@ pub trait Backend: Clone + Send + Sync + 'static {
         limits: &PhotoLimits,
     ) -> impl Future<Output = BackendResult<PhotoInsert>> + Send;
 
-    /// 写真の行の、書き込みか削除が終わっていない印を外し、見せる写真にする。印の付いた行が無ければ `false` を返す。
+    /// 写真の行の、書き込みか削除が終わっていない印を外し、見せる写真にする。
+    /// 外すのは、印を付けた日時が `marked_at`（呼び出し側が付けた印）の行だけである。
+    /// ほかの処理（レシピやワークスペースの削除）が付け直した印は外さない。外した行が無ければ `false` を返す。
     fn finish_photo(
         &self,
         workspace: &WorkspaceId,
         recipe: &RecipeId,
         id: &PhotoId,
+        marked_at: i64,
     ) -> impl Future<Output = BackendResult<bool>> + Send;
 
     /// 印の無い写真の行に、削除が終わっていない印（日時は `now`）を付けて隠す（写真の削除の始め）。
@@ -304,7 +309,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = BackendResult<Vec<Photo>>> + Send;
 
     /// レシピの削除の始めに、レシピの写真の行の ID を印の有無にかかわらず返し（R2 のデータを消すため）、
-    /// 印の無い行に削除が終わっていない印（日時は `now`）を付けて隠す。
+    /// すべての行に削除が終わっていない印（日時は `now`）を付けて隠す（付け直す理由は [`Backend::hide_workspace_photos`]）。
     /// 読むことと印を付けることを 1 つのトランザクションで行う。
     fn hide_recipe_photos(
         &self,

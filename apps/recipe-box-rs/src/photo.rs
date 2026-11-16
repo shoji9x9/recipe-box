@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     backend::{Backend, BackendError, PhotoInsert, PhotoLimits},
-    error::{ApiError, log_error},
+    error::{ApiError, log_error, run_to_completion_or_internal},
     id,
     recipe::RecipeId,
     stream::{self, PhotoStream, RawPhotoBody},
@@ -315,13 +315,7 @@ pub async fn add<B: Backend>(
         limits,
         body,
     );
-    let Some(result) = backend.run_to_completion(task).await else {
-        log_error(&BackendError(
-            "写真を追加する処理が、結果を返さずに終わった".into(),
-        ));
-        return Err(ApiError::Internal);
-    };
-    result
+    run_to_completion_or_internal(backend, task, "写真を追加する").await
 }
 
 /// [`add`] の 2 から 4。
@@ -350,13 +344,15 @@ async fn store<B: Backend>(
         PhotoId(photo.id.clone()),
         body,
         photo.content_type.clone(),
+        // insert_photo は、追加した日時で印を付ける。
+        photo.created_at,
     )
     .await?;
     Ok(photo)
 }
 
 /// [`add`] の 3 と 4。R2 に書き込み、失敗したら D1 の行を消す。書けたら行の印を外す。
-/// 書いている間に行が消されていれば、R2 のデータを消す。
+/// 書いている間に行が消されたか、レシピやワークスペースの削除が印を付け直していれば、R2 のデータを消す。
 async fn write_object<B: Backend>(
     backend: B,
     workspace: WorkspaceId,
@@ -364,6 +360,7 @@ async fn write_object<B: Backend>(
     id: PhotoId,
     body: PhotoBody,
     content_type: String,
+    marked_at: i64,
 ) -> Result<(), ApiError> {
     let key = object_key(&workspace, &recipe, id.as_str());
     if let Err(error) = backend.put_object(&key, body, &content_type).await {
@@ -376,8 +373,12 @@ async fn write_object<B: Backend>(
         return Err(ApiError::Internal);
     }
     // 書いている間にレシピが消されていれば、行はもう無く、印を外せない。データだけが R2 に残らないよう消す。
+    // レシピかワークスペースの削除が印を付け直していても外さない（その削除が途中で失敗したときに、データの無い写真を見せないため）。
     // 印を外すのに失敗したときは、行に印が付いたまま残るので、自動削除が R2 のデータと一緒に片付ける。
-    if !backend.finish_photo(&workspace, &recipe, &id).await? {
+    if !backend
+        .finish_photo(&workspace, &recipe, &id, marked_at)
+        .await?
+    {
         backend.delete_objects(vec![key]).await?;
         return Err(
             if backend.get_recipe(&workspace, &recipe).await?.is_some() {
@@ -462,17 +463,16 @@ pub async fn remove<B: Backend>(
     photo: &PhotoId,
 ) -> Result<(), ApiError> {
     deny_demo(backend, workspace)?;
-    if !backend
-        .hide_photo(workspace, recipe, photo, backend.now_millis())
-        .await?
-    {
+    let now = backend.now_millis();
+    if !backend.hide_photo(workspace, recipe, photo, now).await? {
         return Err(ApiError::PhotoNotFound);
     }
     let key = object_key(workspace, recipe, photo.as_str());
     if let Err(error) = backend.delete_objects(vec![key]).await {
         log_error(&error);
         // 元に戻せなければ、隠れたまま残り、自動削除が片付ける。
-        if let Err(restore) = backend.finish_photo(workspace, recipe, photo).await {
+        // 間にレシピかワークスペースの削除が印を付け直していれば、その削除に任せて戻さない。
+        if let Err(restore) = backend.finish_photo(workspace, recipe, photo, now).await {
             log_error(&restore);
         }
         return Err(ApiError::Internal);
@@ -511,7 +511,7 @@ pub struct PendingCleanup {
 /// R2 のデータを 1 回の削除で消せる数（1,000）ずつまとめて消し、消せた分の行を D1 の batch でまとめて消す。
 /// D1 の batch は、中の文の数によらず 1 回のクエリに数えられる。
 /// 自動削除の 1 回の実行で呼べる D1 と R2 の数に上限がある（[`crate::workspace::MAX_SUBREQUESTS_PER_RUN`]）ので、
-/// 1 回に片付けるのは [`MAX_PENDING_BATCHES_PER_RUN`] まとまりまでにし、残りは次の実行に回す
+/// 1 回に片付けるのは [`MAX_PENDING_BATCHES_PER_RUN`] まとまりまでにし（選び方は [`crate::workspace::pick_for_run`]）、残りは次の実行に回す
 /// （呼び出しの数は [`PENDING_CLEANUP_SUBREQUESTS`] まで）。
 /// 失敗した行は残し、次の実行でもう一度試す。batch が失敗すると、その 1,000 行までの行がすべて残る
 /// （R2 のデータはもう無いが、行は隠れたまま上限に数えられる）。
@@ -547,8 +547,12 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
     // 1,000 と 2 は usize に収まる。
     let per_delete = usize::try_from(MAX_KEYS_PER_DELETE).unwrap_or(1);
     let per_run = usize::try_from(MAX_PENDING_BATCHES_PER_RUN).unwrap_or(1) * per_delete;
-    summary.deferred = targets.len().saturating_sub(per_run);
-    targets.truncate(per_run);
+    // 選ぶ SQL は順番を決めないので、並べてから選ぶ（失敗し続ける行が、ほかの行を毎回後に回さないように。pick_for_run）。
+    targets.sort_by(|a, b| {
+        (a.0.as_str(), a.1.as_str(), a.2.as_str()).cmp(&(b.0.as_str(), b.1.as_str(), b.2.as_str()))
+    });
+    let (targets, deferred) = crate::workspace::pick_for_run(targets, now, per_run);
+    summary.deferred = deferred;
     for chunk in targets.chunks(per_delete) {
         let keys = chunk
             .iter()
