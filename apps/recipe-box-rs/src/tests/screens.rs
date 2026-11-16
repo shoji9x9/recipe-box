@@ -1208,7 +1208,7 @@ async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {
     assert!(
         response
             .body
-            .contains(r#"<script src="/assets/photo-upload.js" defer></script>"#)
+            .contains(r#"<script src="/assets/photo-upload.js" type="module"></script>"#)
     );
     assert!(response.body.contains(" data-photo-upload "));
     assert!(response.body.contains(r#"data-remaining="5""#));

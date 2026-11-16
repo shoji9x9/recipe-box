@@ -15,7 +15,7 @@
 
 ```bash
 mise install    # mise.lock のとおりに Rust・Node・pnpm・各種の検査ツールを入れる
-pnpm install    # wrangler・commitlint・chrome-devtools-mcp・modern-web-guidance などを入れ、lefthook の git フックを有効にする
+pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-mcp・modern-web-guidance などを入れ、lefthook の git フックを有効にする
 ```
 
 ### よく使うコマンド
@@ -25,10 +25,10 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp・modern-web-guida
 | `mise run dev` | ローカルの D1 にマイグレーションを当て、Worker を起動する（<http://localhost:8787>） |
 | `mise run migrate` | ローカルの D1 にマイグレーションを当てる |
 | `mise run smoke` | 起動中のローカルの Worker に API を呼び、実際の D1 と R2（をまねたもの）を通して確かめる（先に別の端末で `mise run dev`）。ワークスペースを作る回数の制限の確認は、`CHECK_RATE_LIMIT=1` を付けたときだけ行う |
-| `mise run test` | Rust のテストと、スクリプトの単体テスト（seed の `scripts/seed-lib.test.mjs`、modern-web-guidance の `scripts/mwg.test.mjs`）を実行する |
+| `mise run test` | Rust のテストと、JavaScript の単体テスト（vitest。画面とスクリプト。下の「テスト」）を実行する |
 | `mise run build` | Worker をビルドする |
 | `mise run fmt` | Rust・TOML・Markdown を整形する |
-| `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck）と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
+| `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck・JavaScript とテストの型の確認（`tsc`））と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
 | `mise run pin -- (--local \| --remote) [--unpin] < <ID のファイル>` | ワークスペースに、自動削除と削除から外す印を付ける（外す）。共有のデモに使う管理用のコマンドで、本番（`--remote`）には wrangler の認証が要る。デモの ID を表示やシェルの履歴に残さないよう、ID は標準入力で渡す |
 | `mise run seed -- (--local \| --remote) < <ID のファイル>` | 共有のデモを、サンプルのレシピと写真（`seed/`）の状態に戻す。ローカル（`--local`）では先に別の端末で `mise run dev` を起動しておく。本番（`--remote`）には wrangler の認証が要る。印（`mise run pin`）の付いたワークスペースにだけ入れる。ID は標準入力で渡す |
 | `mise run mwg -- (search \| list \| retrieve) ...` | Web の作り方の指針（modern-web-guidance）を引く。画面の HTML・CSS・JavaScript を書く前に使う（AGENTS.md の「スキル」）。利用統計を送らず、読むだけのサブコマンドに限る |
@@ -36,17 +36,33 @@ pnpm install    # wrangler・commitlint・chrome-devtools-mcp・modern-web-guida
 
 commit のときは、lefthook が整形・静的解析・gitleaks・commitlint を実行する。
 
+### テスト
+
+| 対象 | 置く場所 | 仕組み |
+| --- | --- | --- |
+| Rust | 外から呼ぶ API と画面は `apps/recipe-box-rs/src/tests/`。モジュールの中だけの関数は、そのファイルの `#[cfg(test)] mod tests` | `cargo test` |
+| 画面の JavaScript（`apps/<app>/public/assets/`） | `apps/<app>/js-tests/<名前>.test.ts` | vitest。happy-dom の DOM で動かす |
+| Node のスクリプト（`scripts/`） | `scripts/<名前>.test.ts`（スクリプトの隣） | vitest。Node のまま動かす |
+
+- JavaScript のテストは、vitest で TypeScript で書く。どちらの場所かで、vitest が DOM で動かすか Node で動かすかを決める（`vitest.config.ts` の `projects`）。
+- 画面のテストを `public/` の下に置かない。`public/` の下のファイルは、Workers の静的アセットとして誰でも取れる。
+- 型は `mise run typecheck`（`mise run lint` と commit の前の lefthook から呼ぶ）の `tsc` で確かめる。画面は `tsconfig.json`（DOM の型）、スクリプトのテストは `scripts/tsconfig.json`（Node の型）。
+  画面の JavaScript は、ビルドせずに配るので JavaScript のまま書き、型は JSDoc で書く。スクリプト（`.mjs`）には型を付けていないので、テストの `.ts` だけを確かめる。
+
 ### ディレクトリ
 
 | パス | 内容 |
 | --- | --- |
 | `apps/recipe-box-rs/` | リライト前の Rust の Worker |
 | `apps/recipe-box-rs/migrations/` | D1 のマイグレーション（テーブルを作る・変える SQL） |
+| `apps/recipe-box-rs/public/` | Workers の静的アセット（CSS・画面の JavaScript・アイコン）。ここに置いたファイルは誰でも取れるので、テストなどを置かない |
+| `apps/recipe-box-rs/js-tests/` | 画面の JavaScript の単体テスト（上の「テスト」） |
+| `apps/recipe-box-rs/js-types/` | 画面の JavaScript が使う、ほかのライブラリ（htmx）の型の宣言 |
 | `scripts/seed.mjs` | 共有のデモを入れ直す seed のスクリプト（`mise run seed`） |
-| `scripts/seed-lib.mjs` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.mjs` |
+| `scripts/seed-lib.mjs` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
-| `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.mjs` |
-| `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.mjs` |
+| `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.ts` |
+| `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/smoke-test.sh` | ローカルの Worker に API を呼んで確かめるスクリプト（CI でも使う） |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
 

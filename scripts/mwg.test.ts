@@ -1,20 +1,20 @@
-// scripts/mwg.sh と scripts/check-mwg-version.sh の単体テスト（mise run test で実行する）。
+// scripts/mwg.sh と scripts/check-mwg-version.sh の単体テスト（mise run test の vitest で実行する）。
 // mwg.sh のサブコマンドの判定は、install・update を断る唯一の門なので、形ごとに確かめる。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { after, before, describe, test } from "node:test";
+import { afterAll, beforeAll, describe, test } from "vitest";
 
 const scripts = resolve(import.meta.dirname);
 
 describe("mwg.sh", () => {
-  let dir;
-  let env;
+  let dir: string;
+  let env: NodeJS.ProcessEnv;
 
   // 本物のツールを動かさないよう、引数と DISABLE_TELEMETRY を出すだけの pnpm を PATH の先頭に置く。
-  before(() => {
+  beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "mwg-test-"));
     const pnpm = join(dir, "pnpm");
     // 引数を 1 行に 1 つずつ出し、空白を含む引数がそのまま渡るかも確かめる。
@@ -23,9 +23,9 @@ describe("mwg.sh", () => {
     env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
     delete env.DISABLE_TELEMETRY;
   });
-  after(() => rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  const run = (...args) => spawnSync(join(scripts, "mwg.sh"), args, { env, encoding: "utf8" });
+  const run = (...args: string[]) => spawnSync(join(scripts, "mwg.sh"), args, { env, encoding: "utf8" });
 
   for (const args of [
     ["search", "dialog"],
@@ -78,15 +78,15 @@ describe("mwg.sh", () => {
 });
 
 describe("check-mwg-version.sh", () => {
-  let dir;
+  let dir: string;
 
-  before(() => {
+  beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "mwg-version-test-"));
   });
-  after(() => rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   // dir の下に、スキルの SKILL.md とパッケージの skill-version.txt を置いて実行する（どちらも null なら置かない）。
-  const check = (skill, packageVersion) => {
+  const check = (skill: string | null, packageVersion: string | null) => {
     const root = mkdtempSync(join(dir, "case-"));
     if (skill !== null) {
       mkdirSync(join(root, ".claude/skills/modern-web-guidance"), { recursive: true });
@@ -99,7 +99,7 @@ describe("check-mwg-version.sh", () => {
     }
     return spawnSync(join(scripts, "check-mwg-version.sh"), [], { cwd: root, encoding: "utf8" });
   };
-  const skillWith = (version) => `npx -y modern-web-guidance@latest search "<query>" --skill-version ${version}\n`;
+  const skillWith = (version: string) => `npx -y modern-web-guidance@latest search "<query>" --skill-version ${version}\n`;
 
   test("版がそろっていれば通る", () => {
     const result = check(skillWith("2026_10_30-58d055df"), "2026_10_30-58d055df");
