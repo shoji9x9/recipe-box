@@ -47,13 +47,14 @@
       {#- 先頭の写真。写真の無いレシピには、同じ大きさの「写真なし」の枠を出す（読み込み中の写真と見分け、料理名の位置をそろえる）。
           小さな版（画面の JavaScript が作る。長い辺 1280 ピクセルの JPEG）があれば、srcset で、表示に足りる方を選ばせる。
           小さな版の無い写真（JavaScript の無い経路・API・前からある写真）は、元の写真（1 枚 4 MB まで）を出す。
+          sizes は、カードの写真の幅（style.css の .recipes。幅 600px までは 1 列で、画面の幅から余白を除いた幅。ほかは 300px ほどまで）。
           どちらも、見える所に来てから読む（loading="lazy"）。
           ただし写真のある最初のレシピの写真（priority_photo）は、最初の表示で一番大きな要素（LCP）になりやすいので、すぐに高い優先度で読む。
           大きさは width・height と CSS で決めておき、読み込んだときに並びがずれないようにする。
           料理名はすぐ下のリンクにあるので、代替テキストは空にし、「写真なし」も読み上げない（読み上げで料理名を繰り返さない）。 #}
       {%- if let Some(photo_id) = listed.first_photo_id %}
       {%- let photo_path = "/recipes/{}/photos/{}"|format(recipe.id, photo_id) %}
-      <img class="thumb" {% if let Some((thumbnail_width, width)) = listed.first_photo_widths %}src="{{ photo_path }}/thumbnail" srcset="{{ photo_path }}/thumbnail {{ thumbnail_width }}w, {{ photo_path }} {{ width }}w" sizes="(max-width: 600px) 100vw, 360px"{% else %}src="{{ photo_path }}"{% endif %} alt=""{% if priority_photo.as_ref() == Some(loop.index0) %} fetchpriority="high"{% else %} loading="lazy"{% endif %} width="240" height="160">
+      <img class="thumb" {% if let Some((thumbnail_width, width)) = listed.first_photo_widths %}src="{{ photo_path }}/thumbnail" srcset="{{ photo_path }}/thumbnail {{ thumbnail_width }}w, {{ photo_path }} {{ width }}w" sizes="(max-width: 600px) calc(100vw - 88px), 300px"{% else %}src="{{ photo_path }}"{% endif %} alt=""{% if priority_photo.as_ref() == Some(loop.index0) %} fetchpriority="high"{% else %} loading="lazy"{% endif %} width="240" height="160">
       {%- else %}
       <div class="thumb no-photo" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="32" height="32"><path d="M4 5h16v14H4zM4 16l4.5-4.5 4 4 3-3L20 17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="15.5" cy="9" r="1.5" fill="currentColor"/></svg>

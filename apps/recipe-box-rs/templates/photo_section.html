@@ -15,7 +15,7 @@
     {%- for photo in section.photos %}
     <li>
       {%- let photo_path = "/recipes/{}/photos/{}"|format(section.recipe_id, photo.id) %}
-      <img {% if let (Some(thumbnail_width), Some(width)) = (photo.thumbnail_width, photo.width) %}src="{{ photo_path }}/thumbnail" srcset="{{ photo_path }}/thumbnail {{ thumbnail_width }}w, {{ photo_path }} {{ width }}w" sizes="(max-width: 400px) 100vw, 240px"{% else %}src="{{ photo_path }}"{% endif %} alt="{{ section.recipe_name }}の写真 {{ loop.index }}" loading="lazy">
+      <img {% if let (Some(thumbnail_width), Some(width)) = (photo.thumbnail_width, photo.width) %}src="{{ photo_path }}/thumbnail" srcset="{{ photo_path }}/thumbnail {{ thumbnail_width }}w, {{ photo_path }} {{ width }}w" sizes="(max-width: 359px) calc(100vw - 48px), 240px"{% else %}src="{{ photo_path }}"{% endif %} alt="{{ section.recipe_name }}の写真 {{ loop.index }}" loading="lazy">
       {%- if section.editable %}
       {%- call dialog::delete_dialog("delete-photo-{}"|format(photo.id), "写真を削除", "写真を削除しますか？", "{} 枚目の写真を削除します。元には戻せません。"|format(loop.index), "/recipes/{}/photos/{}/delete"|format(section.recipe_id, photo.id), "{} 枚目の写真を削除"|format(loop.index)) %}{% endcall %}
       {%- endif %}

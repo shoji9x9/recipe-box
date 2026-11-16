@@ -126,13 +126,13 @@ async fn thumbnail_is_added_and_shown_with_srcset() {
     assert!(
         detail
             .body
-            .contains(r#"sizes="(max-width: 400px) 100vw, 240px""#)
+            .contains(r#"sizes="(max-width: 359px) calc(100vw - 48px), 240px""#)
     );
     let list = screen_get(&backend, "/", Some(&a)).await;
     assert!(list.body.contains(&srcset), "{}", list.body);
     assert!(
         list.body
-            .contains(r#"sizes="(max-width: 600px) 100vw, 360px""#)
+            .contains(r#"sizes="(max-width: 600px) calc(100vw - 88px), 300px""#)
     );
 
     // 1 枚の写真に 1 つまで。
