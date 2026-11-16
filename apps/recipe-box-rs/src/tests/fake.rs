@@ -113,6 +113,8 @@ pub struct FakeBackend {
     pub thumbnail_sizes: Arc<Mutex<HashMap<String, i64>>>,
     /// `true` なら、小さな版を出す（`finish_thumbnail`）のが失敗したことにする（D1 の失敗）。
     pub broken_finish_thumbnail: bool,
+    /// `true` なら、小さな版を出す（`finish_thumbnail`）のが D1 では確定したのに、失敗が返ったことにする（応答が届かない）。
+    pub finish_thumbnail_commits_then_errors: bool,
     /// R2 を呼んだ回数。
     pub r2_calls: Arc<AtomicUsize>,
     /// D1 と R2 を合わせて、この回数を超えて呼ぶと失敗させる（本物の 1 回の実行の上限をまねる）。
@@ -160,6 +162,7 @@ impl Default for FakeBackend {
             d1_calls: Arc::default(),
             thumbnail_sizes: Arc::default(),
             broken_finish_thumbnail: false,
+            finish_thumbnail_commits_then_errors: false,
             r2_calls: Arc::default(),
             max_calls: None,
         }
@@ -914,27 +917,39 @@ impl Backend for FakeBackend {
         size: i64,
         widths: (i64, i64),
     ) -> impl Future<Output = BackendResult<bool>> + Send {
-        if self.broken_finish_thumbnail {
-            return ready(Err(BackendError("壊れた DB（小さな版）".into())));
-        }
-        ready(self.check().map(|()| {
-            if self.thumbnail_sizes.lock().unwrap().get(id.as_str()) != Some(&size) {
-                return false;
-            }
-            let pending = self.is_pending(id.as_str());
-            let mut photos = self.photos.lock().unwrap();
-            let Some((_, _, photo)) = photos.iter_mut().find(|(w, r, p)| {
-                w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
-            }) else {
-                return false;
-            };
-            if pending || photo.thumbnail_width.is_some() {
-                return false;
-            }
-            photo.thumbnail_width = Some(widths.0);
-            photo.width = Some(widths.1);
-            true
-        }))
+        ready(
+            self.check()
+                .and_then(|()| {
+                    if self.broken_finish_thumbnail {
+                        return Err(BackendError("壊れた DB（小さな版）".into()));
+                    }
+                    Ok(())
+                })
+                .map(|()| {
+                    if self.thumbnail_sizes.lock().unwrap().get(id.as_str()) != Some(&size) {
+                        return false;
+                    }
+                    let pending = self.is_pending(id.as_str());
+                    let mut photos = self.photos.lock().unwrap();
+                    let Some((_, _, photo)) = photos.iter_mut().find(|(w, r, p)| {
+                        w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
+                    }) else {
+                        return false;
+                    };
+                    if pending || photo.thumbnail_width.is_some() {
+                        return false;
+                    }
+                    photo.thumbnail_width = Some(widths.0);
+                    photo.width = Some(widths.1);
+                    true
+                })
+                .and_then(|done| {
+                    if self.finish_thumbnail_commits_then_errors {
+                        return Err(BackendError("D1 の応答が届かない（小さな版）".into()));
+                    }
+                    Ok(done)
+                }),
+        )
     }
 
     fn finish_photo(

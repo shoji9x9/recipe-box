@@ -494,6 +494,38 @@ async fn failed_finish_removes_the_thumbnail_and_releases_its_bytes() {
 }
 
 #[tokio::test]
+async fn finish_that_committed_before_failing_keeps_the_thumbnail() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let photo = add_photo(&backend, &path).await;
+    let flaky = FakeBackend {
+        finish_thumbnail_commits_then_errors: true,
+        ..backend.clone()
+    };
+    let thumbnail = canvas_jpeg(100, 100, &[]);
+    let response = post_thumbnail(
+        &flaky,
+        &path,
+        &photo,
+        "?width=200",
+        thumbnail.clone(),
+        WORKSPACE_A,
+    )
+    .await;
+    // D1 では確定していたので、出している小さな版を消さない。
+    assert_eq!(response.status, StatusCode::NO_CONTENT, "{}", response.body);
+    let response = screen_get(
+        &backend,
+        &format!("{path}/photos/{photo}/thumbnail"),
+        Some(&a),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.bytes, thumbnail);
+}
+
+#[tokio::test]
 async fn other_workspace_cannot_read_or_add_thumbnails() {
     let backend = backend_with_workspaces();
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
@@ -517,6 +549,12 @@ async fn other_workspace_cannot_read_or_add_thumbnails() {
     )
     .await;
     assert_eq!(response.status, StatusCode::NOT_FOUND);
+    // B のワークスペースに、そのレシピが無いので見つからない（ワークスペースで絞り込む）。
+    assert!(
+        response.body.contains("見つかりません"),
+        "{}",
+        response.body
+    );
     // B のワークスペースからは、A の写真に小さな版を足せない（A の写真は、B には無い写真である）。
     let other = add_photo(&backend, &path).await;
     let response = post_thumbnail(

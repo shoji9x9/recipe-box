@@ -593,12 +593,22 @@ async fn store_thumbnail<B: Backend>(
     if matches!(finished, Ok(true)) {
         return Ok(());
     }
+    if let Err(error) = &finished {
+        // D1 では確定したのに、応答が届かずに失敗になることがある。行を読み直し、もう出している小さな版なら消さない。
+        // 読み直せなければ、出しているかが分からないので、消さずに失敗にする（出していれば、消すと壊れた画像になる）。
+        log_error(error);
+        match backend.get_photo(&workspace, &recipe, &photo).await {
+            Ok(Some(row)) if row.thumbnail_width.is_some() => return Ok(()),
+            Ok(_) => {}
+            Err(error) => {
+                log_error(&error);
+                return Err(ApiError::Internal);
+            }
+        }
+    }
     // 出せなかった（書いている間に写真が消されたか消している途中か、D1 が失敗した）。小さな版の R2 のデータを消し、枠を返す。
     // 写真の削除が途中で失敗して元に戻ったときも、枠が残らず、もう一度送れるようにする。
     // R2 の削除が失敗すると、写真の行が無ければ、どの行からもたどれない小さな版が R2 に残る（docs/security.md）。
-    if let Err(error) = &finished {
-        log_error(error);
-    }
     if let Err(error) = backend.delete_objects(vec![key]).await {
         log_error(&error);
     }
