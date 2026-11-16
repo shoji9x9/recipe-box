@@ -23,6 +23,9 @@ defaults:
 jobs:
   deploy:
     name: Deploy to Cloudflare Workers
+    # 本番の権限は、レビューを経て main に入ったコードにだけ渡す。Environment「production」も main だけに制限している
+    # （docs/development.md）。設定だけに頼らないよう、手で動かしたとき（workflow_dispatch）も main 以外では動かさない。
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production

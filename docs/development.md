@@ -151,6 +151,10 @@ GitHub の Settings → Environments に、次の値を置く。
 
 値が無い間、`deploy.yml` は何もせずに終わり、`seed-demo.yml` と `claude-review.yml` は失敗する。
 
+Environment `production` は、「Deployment branches and tags」を「Selected branches and tags」にし、`main` だけを許す。
+本番のトークンとデモの ID を、レビューを経て main に入ったコードにだけ渡すためである（ほかのブランチから `workflow_dispatch` で動かしたり、ブランチの workflow が `environment: production` を名乗ったりしても渡さない）。
+`deploy.yml` と `seed-demo.yml` も、ジョブの `if` で main 以外では動かない。
+
 ## リライトの比較の基準の環境
 
 リライトで比べる現行の側は、選んだ commit をローカルで動かした環境にする（理由と、ローカルと本番の違いは [architecture.md](architecture.md) の「リライトの比較の基準」）。Cloudflare のアカウントは要らない。

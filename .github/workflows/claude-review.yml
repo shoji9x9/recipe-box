@@ -7,6 +7,13 @@ name: Claude review
 # インラインのコメントを書く道具を用意しないためである（Issue #18）。
 # ラベルを付けられるのは、リポジトリの triage 以上の権限を持つ人だけである（GitHub の仕様）。
 # 認証には Environment「claude-review」の secret の CLAUDE_CODE_OAUTH_TOKEN を使う。
+#
+# 公開リポジトリなので、PR には誰でもコメントできる。そのコメントの文をそのままモデルに読ませると、
+# 秘密情報を持つこの job で、書いた人の指示にモデルが従うおそれがある。そのため次のようにする。
+# - モデルに渡す前のコメントは、書き込み権限を持つ人（author_association が OWNER・MEMBER・COLLABORATOR）と、
+#   このレビューの bot（github-actions[bot]）のものだけにして、ファイルに書いておく。モデルにはコメントを読む道具を与えない。
+# - モデルには、ファイルを読んで送れる道具（gh pr comment の --body-file など）を与えない。
+#   PR の全体へのコメントの本文は structured output で返させ、後の step が決まった形で投稿する。
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened, labeled]
@@ -44,7 +51,32 @@ jobs:
           ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 1
           persist-credentials: false
+      # モデルに渡すコメントを、書き込み権限を持つ人とこのレビューの bot のものだけにする（上の説明）。
+      # checkout の中に書く（モデルの道具が読める場所）。commit はしない。
+      - name: Collect comments from trusted authors
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          trusted='select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR" or (.user.type == "Bot" and .user.login == "github-actions[bot]"))'
+          mkdir -p .review-context
+          {
+            echo "# PR のコメント（書き込み権限を持つ人と、このレビューの bot のものだけ）"
+            echo
+            echo "## PR の全体へのコメント"
+            gh api --paginate "repos/$REPO/issues/$PR/comments" \
+              --jq ".[] | $trusted | \"### \\(.user.login)（\\(.created_at)）\\n\\n\\(.body)\\n\""
+            echo "## レビュー"
+            gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
+              --jq ".[] | $trusted | select(.body != \"\") | \"### \\(.user.login)（\\(.submitted_at)）\\n\\n\\(.body)\\n\""
+            echo "## 行へのコメント"
+            gh api --paginate "repos/$REPO/pulls/$PR/comments" \
+              --jq ".[] | $trusted | \"### \\(.user.login)（\\(.created_at)、\\(.path):\\(.line // .original_line)、id \\(.id)、返信先 \\(.in_reply_to_id // \"なし\")）\\n\\n\\(.body)\\n\""
+          } > .review-context/comments.md
       - uses: anthropics/claude-code-action@v1.0.269
+        id: review
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
@@ -64,12 +96,31 @@ jobs:
             指摘には、先頭に【要対応】か【参考】を付けてください。
             - 【要対応】: 直すか、直さない理由の説明が要るもの（不具合、セキュリティ、docs/ の文書や AGENTS.md の決まりとの食い違い、足りないテスト）。
             - 【参考】: 修正を求めない気づきや提案。返信は求めません。
-            特定の行への【要対応】はインラインのコメントで、それ以外は PR のコメントにまとめて書いてください。
-            前のレビューの指摘に、すでに返信や修正で答えているものは、もう一度書かないでください（`gh pr view --comments` で読めます）。
+            特定の行への【要対応】はインラインのコメントで書いてください。
+            それ以外の指摘とまとめは、PR の全体へのコメントの本文として、structured output の `summary` に Markdown で書いてください（後の step が投稿します）。
+            前のレビューの指摘に、すでに返信や修正で答えているものは、もう一度書かないでください。
+            前のコメントは `.review-context/comments.md` にあります（書き込み権限を持つ人とこのレビューの bot のものだけ）。
+            ほかの場所から PR のコメントを読まないでください。
             問題が無ければ、その旨を短く書いてください。
           # リポジトリの hooks や MCP の設定を読み込まず、使える道具をレビューに要るものだけにする。
+          # コメントを読む道具（gh pr view）と、ファイルを読んで送れる道具（gh pr comment）は与えない（上の説明）。
           claude_args: >-
             --setting-sources user
             --strict-mcp-config
-            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
-            --disallowedTools "Edit,Write,WebFetch,WebSearch,NotebookEdit"
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*)"
+            --disallowedTools "Edit,Write,WebFetch,WebSearch,NotebookEdit,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh api:*)"
+            --json-schema '{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}'
+      # モデルが返した本文を、PR の全体へのコメントとして投稿する。値は env で渡し、シェルの構文として読ませない。
+      - name: Post review summary
+        if: steps.review.outputs.structured_output != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          OUTPUT: ${{ steps.review.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          body=$(jq -r '.summary // ""' <<<"$OUTPUT")
+          if [ -n "$body" ]; then
+            printf '%s\n' "$body" | gh pr comment "$PR" --repo "$REPO" --body-file -
+          fi

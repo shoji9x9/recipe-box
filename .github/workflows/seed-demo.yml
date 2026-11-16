@@ -23,6 +23,8 @@ defaults:
 jobs:
   seed:
     name: Seed demo workspace
+    # 本番の権限は main のコードにだけ渡す（deploy.yml と同じ）。
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # 書き込む API の回数の制限（60 秒に 30 回）で待つので、レシピ 80 件を消して入れ直すと 6 分ほどかかる。
     timeout-minutes: 30
