@@ -14,5 +14,7 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true
   },
-  "include": ["apps/recipe-box-rs/public/assets/photo-upload.js", "apps/recipe-box-rs/js-tests/**/*.ts", "vitest.config.ts"]
+  // vitest.config.ts の include と同じ範囲を確かめる。htmx.min.js はビルドで写す配布物なので除く。
+  "include": ["apps/*/public/assets/**/*.js", "apps/*/js-tests/**/*.ts", "vitest.config.ts"],
+  "exclude": ["**/*.min.js"]
 }

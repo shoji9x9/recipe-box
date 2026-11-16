@@ -45,6 +45,10 @@ pre-commit:
           - name: shellcheck
             glob: "*.sh"
             run: shellcheck {staged_files}
+          # 画面の JavaScript とそのテストの型（tsconfig.json）。型はファイルをまたぐので、全体を確かめる。
+          - name: tsc
+            glob: "*.{js,ts,json}"
+            run: pnpm exec tsc -p tsconfig.json
 
     # 3. 秘密情報が stage されていないかを調べる。
     - name: gitleaks

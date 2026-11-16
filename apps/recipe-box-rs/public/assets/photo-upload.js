@@ -26,8 +26,6 @@ const PER_PHOTO_ERRORS = new Set([400, 413, 415]);
  * @typedef {{ kind: "added", reason: null } | { kind: "skip" | "stop" | "redirect", reason: string }} SendResult
  */
 
-/** @typedef {{ ajax: (verb: string, path: string, context: { target: string, swap: string }) => Promise<unknown> }} Htmx */
-
 /**
  * ファイルの欄で複数を選べるようにする。htmx がページを入れ替えたときにも付け直す。
  * @param {ParentNode} root
@@ -57,7 +55,7 @@ function setControlsDisabled(form, disabled) {
  * @param {Failure[]} failures
  * @returns {string[]}
  */
-export function describe(failures) {
+export function describeFailures(failures) {
   return failures.map(([name, reason]) => `${name}: ${reason}`);
 }
 
@@ -159,7 +157,7 @@ function showResults(added, failures) {
     messages.push(message("success", `${added} 枚の写真を追加しました`, []));
   }
   if (failures.length > 0) {
-    messages.push(message("error", `${failures.length} 枚の写真を追加できませんでした`, describe(failures)));
+    messages.push(message("error", `${failures.length} 枚の写真を追加できませんでした`, describeFailures(failures)));
   }
   head.after(...messages);
 }
@@ -182,8 +180,8 @@ async function finish(form, detailPath, added, failures, redirected) {
     window.location.assign(detailPath);
     return;
   }
-  /** @type {Htmx | undefined} */
-  const htmx = /** @type {{ htmx?: Htmx }} */ (/** @type {unknown} */ (window)).htmx;
+  // window.htmx の型は js-tests/window.d.ts で宣言している。
+  const htmx = window.htmx;
   try {
     if (htmx) {
       await htmx.ajax("GET", detailPath, { target: "body", swap: "innerHTML" });
@@ -245,15 +243,16 @@ export function detailPathOf(action) {
 }
 
 /**
+ * 選んだ写真を 1 枚ずつ送り、結果を出す。テストが終わりを待てるよう、export する。
  * @param {HTMLFormElement} form
  * @param {File[]} files
  */
-async function upload(form, files) {
+export async function upload(form, files) {
   /** @type {Failure[]} */
   const failures = [];
   /** @type {File[]} */
   const sending = [];
-  const limits = { maxBytes: Number(form.dataset.maxBytes), tooLarge: form.dataset.tooLarge ?? "" };
+  const limits = { maxBytes: Number(form.dataset.maxBytes), tooLarge: form.dataset.tooLarge || "大きすぎます" };
   for (const file of files) {
     const reason = localReason(limits, file);
     if (reason === null) {
@@ -265,11 +264,17 @@ async function upload(form, files) {
   const remaining = Number(form.dataset.remaining);
   if (sending.length > remaining) {
     // 送らずに断る写真があれば、それも一緒に知らせる（選び直すときに除けるように）。
-    const others = describe(failures).join("。");
+    const others = describeFailures(failures).join("。");
     setStatus(
       form,
       `写真はあと ${remaining} 枚まで追加できます。選んだ写真を減らしてください${others ? `。ほかに、追加できない写真があります（${others}）` : ""}`,
     );
+    return;
+  }
+  // 1 枚も送らなければ、詳細の画面は変わらないので、読み直さずに理由だけを出す。
+  if (sending.length === 0) {
+    setStatus(form, "送り終えました");
+    showResults(0, failures);
     return;
   }
   const detailPath = detailPathOf(form.action);
