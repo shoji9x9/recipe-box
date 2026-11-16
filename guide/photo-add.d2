@@ -12,10 +12,10 @@ r2: R2 {class: store}
 
 client -> worker: 写真のバイト列（Content-Length 付き）
 worker -> worker: 先頭のバイトで形式を決める\n大きさは Content-Length で決める
-worker -> d1: 上限を数えて、行と追加の記録を入れる\n（batch。1 つのトランザクション）
+worker -> d1: 上限を数えて、行（書き込みの終わっていない印付き）と\n追加の記録を入れる（batch。1 つのトランザクション）
 d1 -> worker: 入れた（上限に達していれば入れない → 409・413・503）
 worker -> r2: 本文をストリームのまま書く（waitUntil で最後まで）
 r2 -> worker: 書けた（失敗したら D1 の行を消す → 500）
-worker -> d1: 行はまだ在るか？（レシピが同時に消されていないか）
-d1 -> worker: 在るかを返す（無ければ、Worker が R2 のデータを消す）
+worker -> d1: 行の印を外す（画面と API に出す）
+d1 -> worker: 外せたかを返す（行が無ければ、Worker が R2 のデータを消す）
 worker -> client: 201（追加した写真）

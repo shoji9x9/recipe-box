@@ -270,10 +270,12 @@ pub async fn create<B: Backend>(
 ///
 /// 1. デモでないか、大きさ、形式を確かめる（D1 も R2 も使わない）。
 /// 2. D1 に行と追加の記録を入れる。上限の判定と保存を 1 つのトランザクションで行い、同時に追加されても上限を超えない。
+///    行には、R2 への書き込みが終わっていない印を付ける（画面と API に見せない。上限には数える）。
 /// 3. R2 に書き込む。失敗したら、D1 の行を消す（追加の記録は残し、回数に数える）。
-/// 4. 行がまだ在るかを確かめる。書いている間にレシピが消されていれば、R2 のデータを消す。
+/// 4. 行の印を外す。外せなければ（書いている間にレシピが消された）、R2 のデータを消す。
 ///
 /// 2 から 4 は、送り手との接続が切れても最後まで動かす（[`Backend::run_to_completion`]）。
+/// それでも 3 か 4 が途中で失敗するか止められて、印が付いたまま行が残れば、毎日の自動削除が片付ける（[`clean_pending`]）。
 pub async fn add<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -351,7 +353,8 @@ async fn store<B: Backend>(
     Ok(photo)
 }
 
-/// [`add`] の 3 と 4。R2 に書き込み、失敗したら D1 の行を消す。書いている間に行が消されていれば、R2 のデータを消す。
+/// [`add`] の 3 と 4。R2 に書き込み、失敗したら D1 の行を消す。書けたら行の印を外す。
+/// 書いている間に行が消されていれば、R2 のデータを消す。
 async fn write_object<B: Backend>(
     backend: B,
     workspace: WorkspaceId,
@@ -364,14 +367,15 @@ async fn write_object<B: Backend>(
     if let Err(error) = backend.put_object(&key, body, &content_type).await {
         // 元の失敗を先にログに出す（後始末も失敗したときに、元の原因を失わないため）。
         log_error(&error);
-        // 行だけが残ると、合計の大きさに数えられたまま、読めない写真になる。
+        // 行は、上限に数えられたまま残らないよう消す。消せなくても、印が付いたままなので見せず、自動削除が片付ける。
         if let Err(cleanup) = backend.delete_photo(&workspace, &recipe, &id).await {
             log_error(&cleanup);
         }
         return Err(ApiError::Internal);
     }
-    // 書いている間にレシピか写真が消されていれば、行はもう無い。データだけが R2 に残らないよう消す。
-    if backend.get_photo(&workspace, &recipe, &id).await?.is_none() {
+    // 書いている間にレシピが消されていれば、行はもう無く、印を外せない。データだけが R2 に残らないよう消す。
+    // 印を外すのに失敗したときは、行に印が付いたまま残るので、自動削除が R2 のデータと一緒に片付ける。
+    if !backend.finish_photo(&workspace, &recipe, &id).await? {
         backend.delete_objects(vec![key]).await?;
         return Err(
             if backend.get_recipe(&workspace, &recipe).await?.is_some() {
@@ -445,7 +449,9 @@ pub async fn delete<B: Backend>(
 
 /// 写真を消す。API と画面の両方から使う。
 ///
-/// R2 を先に消す。D1 の行を先に消して R2 の削除が失敗すると、合計に数えられないデータが R2 に残るため。
+/// 先に行に印を付けて隠し、R2 を消してから D1 の行を消す。
+/// D1 の行を先に消して R2 の削除が失敗すると、合計に数えられないデータが R2 に残るため。
+/// R2 か D1 の削除が失敗しても、行は隠れたまま残り、毎日の自動削除が片付ける（[`clean_pending`]）。
 pub async fn remove<B: Backend>(
     backend: &B,
     workspace: &WorkspaceId,
@@ -453,7 +459,7 @@ pub async fn remove<B: Backend>(
     photo: &PhotoId,
 ) -> Result<(), ApiError> {
     deny_demo(backend, workspace)?;
-    if backend.get_photo(workspace, recipe, photo).await?.is_none() {
+    if !backend.hide_photo(workspace, recipe, photo).await? {
         return Err(ApiError::PhotoNotFound);
     }
     backend
@@ -461,6 +467,69 @@ pub async fn remove<B: Backend>(
         .await?;
     backend.delete_photo(workspace, recipe, photo).await?;
     Ok(())
+}
+
+/// 書き込みか削除が終わっていない印が付いたまま、この時間より長く残った写真の行を、自動削除が片付ける（1 時間）。
+/// 追加の途中の行（`waitUntil` で 30 秒まで動く）を片付けないよう、十分に長くする。
+pub const PENDING_CLEANUP_AFTER_MILLIS: i64 = 60 * 60 * 1_000;
+
+/// 印の付いた写真の行を片付けた結果。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PendingCleanup {
+    /// 片付けた行の数。
+    pub cleaned: usize,
+    /// 片付けるのに失敗した行の数（理由はログに出す）。
+    pub failed: usize,
+    /// 片付ける行を選べなかったか。
+    pub list_failed: bool,
+}
+
+/// 定期実行（自動削除）で呼ぶ。書き込みか削除の途中で失敗して、印が付いたまま残った写真の行を、R2 のデータと一緒に消す。
+///
+/// R2 を先に消す（[`remove`] と同じ理由）。R2 にデータが無くても（書く前に失敗した）、R2 の削除は失敗しない。
+/// 1 つの行で失敗しても、ほかの行は片付ける。失敗した行は、次の日にもう一度試す。
+pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup {
+    let mut summary = PendingCleanup::default();
+    let rows = match backend
+        .list_pending_photos(now - PENDING_CLEANUP_AFTER_MILLIS)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            log_error(&error);
+            summary.list_failed = true;
+            return summary;
+        }
+    };
+    for row in rows {
+        let ids = (
+            WorkspaceId::parse(&row.workspace_id),
+            RecipeId::parse(&row.recipe_id),
+            PhotoId::parse(&row.id),
+        );
+        // 形の正しくない ID の行（アプリは作らない）は、R2 のキーを作れないので、失敗に数えて知らせる。
+        let (Some(workspace), Some(recipe), Some(photo)) = ids else {
+            log_error(&BackendError(
+                "片付ける写真の行の ID の形が正しくない".to_owned(),
+            ));
+            summary.failed += 1;
+            continue;
+        };
+        let key = object_key(&workspace, &recipe, photo.as_str());
+        // 失敗の理由は、BackendError を ApiError に変えるところでログに出している。
+        if delete_objects(backend, vec![key]).await.is_err() {
+            summary.failed += 1;
+            continue;
+        }
+        match backend.delete_photo(&workspace, &recipe, &photo).await {
+            Ok(_) => summary.cleaned += 1,
+            Err(error) => {
+                log_error(&error);
+                summary.failed += 1;
+            }
+        }
+    }
+    summary
 }
 
 /// レシピの写真のデータを R2 から消す。

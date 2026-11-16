@@ -448,7 +448,7 @@ pub async fn delete<B: Backend>(
 
 /// レシピと、その写真を消す。API と画面の両方から使う。
 ///
-/// 1. 今ある写真のデータを R2 から消す。ここで失敗しても、D1 の行が残るので、もう一度消せる。
+/// 1. 今ある写真（印の付いた写真も）のデータを R2 から消す。ここで失敗しても、D1 の行が残るので、もう一度消せる。
 /// 2. D1 でレシピと写真の行を 1 つのトランザクションで消し、消した写真の ID を受け取る。
 /// 3. 2 で消した写真のデータを、もう一度すべて R2 から消す。1 の後に追加された写真や、
 ///    1 の後に R2 に書かれた写真のデータを残さないため（R2 の削除は無料で、無いキーは無視される）。
@@ -460,10 +460,13 @@ pub async fn remove<B: Backend>(
     workspace: &WorkspaceId,
     id: &RecipeId,
 ) -> Result<(), ApiError> {
+    // 書き込みか削除の途中の印の付いた写真（画面と API に見せない）も消すので、印にかかわらず読む。
+    // ワークスペースの写真は最大 400 枚なので、ワークスペースの全体を読んでレシピで絞る。
     let before: Vec<String> = backend
-        .list_photos(workspace, id)
+        .list_workspace_photos(workspace)
         .await?
         .into_iter()
+        .filter(|photo| photo.recipe_id == id.as_str())
         .map(|photo| photo.id)
         .collect();
     photo::remove_objects(backend, workspace, id, &before).await?;

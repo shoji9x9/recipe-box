@@ -14,7 +14,7 @@ use crate::{
     error::{ApiError, log_error},
     id,
     limits::{DAY_MILLIS, client_key, start_of_utc_day},
-    photo::{self, object_key},
+    photo::{self, PendingCleanup, object_key},
     recipe::RecipeId,
 };
 
@@ -233,12 +233,18 @@ pub struct CleanupSummary {
     pub list_failed: bool,
     /// 1 日の数を数えるための古い記録を消せなかったか。
     pub records_failed: bool,
+    /// 書き込みか削除の途中で残った写真の行を片付けた結果（[`photo::clean_pending`]）。
+    pub pending_photos: PendingCleanup,
 }
 
 impl CleanupSummary {
     /// どこかで失敗したか。
     pub const fn has_failure(&self) -> bool {
-        self.failed > 0 || self.list_failed || self.records_failed
+        self.failed > 0
+            || self.list_failed
+            || self.records_failed
+            || self.pending_photos.failed > 0
+            || self.pending_photos.list_failed
     }
 }
 
@@ -246,6 +252,7 @@ impl CleanupSummary {
 ///
 /// 1 つのワークスペースで失敗しても、ほかのワークスペースは消す。
 /// ワークスペースの削除とは別に、1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、前の日までのものを消す。
+/// また、書き込みか削除の途中で失敗して残った写真の行を、R2 のデータと一緒に片付ける（[`photo::clean_pending`]）。
 /// 失敗の理由はログに出す。ワークスペースの ID は持ち主の証なので、ログに出す前に伏せる（[`crate::id::redact`]）。
 pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
     let now = backend.now_millis();
@@ -287,6 +294,7 @@ pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
         log_error(&error);
         summary.records_failed = true;
     }
+    summary.pending_photos = photo::clean_pending(backend, now).await;
     summary
 }
 
