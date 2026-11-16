@@ -14,6 +14,8 @@ import {
   MAX_SERVINGS,
   MAX_STEPS,
   MAX_WORKSPACE_PHOTO_BYTES,
+  d1Rows,
+  hasOwnKey,
   lstatWithoutLinks,
   type PathRule,
   regularFileWithoutLinks,
@@ -88,6 +90,44 @@ describe("shortReason", () => {
 
   test("300 文字に切り詰める", () => {
     assert.equal(shortReason("x".repeat(1000)).length, 300);
+  });
+});
+
+describe("hasOwnKey", () => {
+  const targets = { "--local": 1, "--remote": 2 };
+
+  test("record の自分のキーだけを受け付ける", () => {
+    assert.equal(hasOwnKey(targets, "--local"), true);
+    assert.equal(hasOwnKey(targets, "--remote"), true);
+    assert.equal(hasOwnKey(targets, "--prod"), false);
+    assert.equal(hasOwnKey(targets, undefined), false);
+  });
+
+  test("プロトタイプから引き継いだ名前は受け付けない", () => {
+    for (const name of ["toString", "__proto__", "constructor", "hasOwnProperty"]) {
+      assert.equal(hasOwnKey(targets, name), false, name);
+    }
+  });
+});
+
+describe("d1Rows", () => {
+  test("最後の文の結果の行を返す", () => {
+    const output = JSON.stringify([{ results: [{ id: "a" }] }, { results: [{ id: "b" }, { id: "c" }] }]);
+    assert.deepEqual(d1Rows(output), [{ id: "b" }, { id: "c" }]);
+  });
+
+  test("行が無ければ、空の配列を返す（形の違いと見分ける）", () => {
+    assert.deepEqual(d1Rows(JSON.stringify([{ results: [] }])), []);
+  });
+
+  test("形が違えば undefined を返す", () => {
+    for (const output of ["[]", "[{}]", '[{"results": {}}]', '{"results": []}', "null", '"text"']) {
+      assert.equal(d1Rows(output), undefined, output);
+    }
+  });
+
+  test("JSON として読めなければ、例外を投げる", () => {
+    assert.throws(() => d1Rows("✘ [ERROR] not json"), SyntaxError);
   });
 });
 

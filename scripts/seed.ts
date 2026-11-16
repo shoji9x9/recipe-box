@@ -29,6 +29,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import {
+  d1Rows,
+  hasOwnKey,
   type PathRule,
   type PhotoFile,
   pathPattern,
@@ -104,17 +106,13 @@ function usage(): never {
   process.exit(2);
 }
 
-function isTarget(value: string | undefined): value is Target {
-  return value !== undefined && Object.hasOwn(BASE_URLS, value);
-}
-
 // 例外の文。Error でない値が投げられたときは、文字列にする。
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 const args = process.argv.slice(2);
-const target: Target = args.length === 1 && isTarget(args[0]) ? args[0] : usage();
+const target: Target = args.length === 1 && hasOwnKey(BASE_URLS, args[0]) ? args[0] : usage();
 const baseUrl = BASE_URLS[target];
 
 // 1 行目だけを読み、空白を除く。
@@ -281,7 +279,7 @@ async function wranglerWithRetry(what: string, ...wranglerArgs: string[]): Promi
 async function r2(action: keyof typeof R2_ACTIONS, photo: PhotoKey, ...extra: string[]): Promise<boolean> {
   const key = `${BUCKET}/photos/${workspaceId}/${photo.recipeId}/${photo.id}`;
   // 型は動かすときに消えるので、wrangler のサブコマンドに渡す操作を、動かすときにも決まったものに限る。
-  if (!Object.hasOwn(R2_ACTIONS, action)) {
+  if (!hasOwnKey(R2_ACTIONS, action)) {
     throw new Error(`R2 の操作 ${action} は使わない`);
   }
   const what = `写真 ${photo.file} の${R2_ACTIONS[action]}`;
@@ -320,13 +318,6 @@ async function eachPhoto(photos: Photo[], task: (photo: Photo) => Promise<boolea
 // SQL の IN に並べる、写真の ID の一覧。ID は seed が作った 16 進数なので、そのまま埋め込める。
 function photoIdList(photos: Photo[]): string {
   return photos.map((photo) => `'${photo.id}'`).join(", ");
-}
-
-// wrangler の d1 execute --json の出力から、最後の文の結果の行を取り出す。形が思ったものと違えば undefined を返す。
-function d1Rows(output: string): unknown[] | undefined {
-  const parsed: unknown = JSON.parse(output);
-  const results = Array.isArray(parsed) ? (parsed.at(-1) as { results?: unknown } | undefined)?.results : undefined;
-  return Array.isArray(results) ? results : undefined;
 }
 
 // 写真のうち、D1 に行が在るものの ID を返す。

@@ -72,6 +72,20 @@ export function shortReason(message: string): string {
   return (code === undefined ? main : `${main} ${code}`).slice(0, REASON_LENGTH);
 }
 
+// value が、record の自分のキー（プロトタイプから引き継いだ toString などを除く）かを確かめる。
+// 引数や、wrangler のサブコマンドに渡す値を、決まったものに限るのに使う。
+export function hasOwnKey<K extends string>(record: Record<K, unknown>, value: string | undefined): value is K {
+  return value !== undefined && Object.hasOwn(record, value);
+}
+
+// wrangler の d1 execute --json の出力から、最後の文の結果の行を取り出す。形が思ったものと違えば undefined を返す
+// （呼ぶ側は、行が無いのか、出力の形が違うのかを見分ける）。JSON として読めなければ、その例外を投げる。
+export function d1Rows(output: string): unknown[] | undefined {
+  const parsed: unknown = JSON.parse(output);
+  const results = Array.isArray(parsed) ? (parsed.at(-1) as { results?: unknown } | undefined)?.results : undefined;
+  return Array.isArray(results) ? results : undefined;
+}
+
 // 中身の先頭のバイトで形式を決める（アプリと同じ）。
 export function photoContentType(bytes: Buffer): PhotoContentType | null {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
