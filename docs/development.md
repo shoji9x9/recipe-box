@@ -114,11 +114,13 @@ GitHub の Settings → Environments に、次の値を置く。
 git switch --detach <基準の commit>
 mise install                     # mise.lock のとおりにツールを入れる
 pnpm install --frozen-lockfile   # pnpm-lock.yaml のとおりに wrangler（workerd を含む）などを入れる
-rm -rf apps/recipe-box-rs/.wrangler/state   # 前の環境のローカルの D1 と R2 を消し、空から始める
+rm -rf apps/recipe-box-rs/.wrangler/state   # 前の環境のローカルの D1・R2・回数の制限の数を消し、空から始める
+rm -f apps/recipe-box-rs/.dev.vars          # 前に書いた共有のデモの ID（DEMO_WORKSPACE_ID）を残さない
 mise run dev                     # ビルドし、ローカルの D1 にマイグレーションを当て、http://localhost:8787 で起動する
 ```
 
-- 動いていることは、別の端末で `mise run smoke` を実行して確かめる。
+- 動いていることは、別の端末で `mise run smoke` を実行して確かめる。smoke はワークスペース・レシピ・写真を作り、回数の制限と 1 日の作成の上限の数も使う。
+  そのため、確かめた後は、比べ始める前に Worker を止め、`.wrangler/state` を消してから起動し直す。
 - 定期実行（使われていないワークスペースの自動削除）を比べるときは、`mise run dev` の代わりに、`mise run migrate` の後で `apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動する。
   `curl "http://localhost:8787/__scheduled?cron=0+18+*+*+*"` で 1 回動き、結果を起動した端末のログ（「使われていないワークスペースの自動削除」）に出す。
 - 共有のデモのデータを入れるときは、上の「CI と CD」の、共有のデモをローカルで試す手順に従う。

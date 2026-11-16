@@ -25,14 +25,15 @@
 - 基準の環境には、Cloudflare のアカウントは要らない。`wrangler dev` は、何も指定しなければローカルの実行環境だけで動き、ログインを求めない。
   このアプリが使う D1・R2・Rate Limiting・静的アセットは、どれもローカルのものを使う。CI の「Build and smoke test」の job も、Cloudflare の認証情報を渡さずに Worker を起動し、API を確かめている。
   アカウントが要るのは、本番に触る操作（デプロイ・`mise run pin -- --remote`・`mise run seed -- --remote`・本番の `wrangler tail`）だけである。
+  ただし、wrangler は、何も指定しなければ利用統計を Cloudflare に送る。止めるときは、環境変数 `WRANGLER_SEND_METRICS=false` を付けて実行する。
 
 ### ローカルと本番で違うもの
 
 | もの | ローカル（基準の環境） | 本番 |
 | --- | --- | --- |
 | 定期実行（Cron Trigger） | 時刻が来ても動かない。`wrangler dev --test-scheduled` で起動し、`/__scheduled` を呼んだときに動く | `wrangler.toml` の `[triggers]` の時刻に動く |
-| 回数の制限（Rate Limiting）の数え方 | 1 つのプロセスで数えるので、上限の回数ちょうどで `429` になる（ワークスペースの作成は 11 回目） | Cloudflare の拠点ごとに数える、おおよその制限である。上限の回数ちょうどで `429` になるとは限らない |
-| 回数の制限で見分ける IP アドレス（`cf-connecting-ip`） | 送る側が付けたヘッダーの値が、そのまま使われる | Cloudflare が接続元のアドレスを入れる。送る側は変えられない |
+| 回数の制限（Rate Limiting）の数え方 | 時計にそろえた 60 秒の枠で数え、1 つの枠の中では上限の回数ちょうどで `429` になる（ワークスペースの作成は 11 回目）。枠が変わると数え直すので、枠の境目をまたぐと 11 回目も通る。数は `.wrangler/state` に残り、起動し直しても同じ枠の中なら引き継ぐ | Cloudflare の拠点ごとに数える、おおよその制限である。上限の回数ちょうどで `429` になるとは限らない |
+| 回数の制限で見分ける IP アドレス（`cf-connecting-ip`） | 送る側が付けたヘッダーの値が、そのまま使われる。付けなければ、wrangler が接続元のアドレス（`127.0.0.1` など）を入れる | Cloudflare が接続元のアドレスを入れる。送る側は変えられない |
 | 共有のデモの ID（`DEMO_WORKSPACE_ID`） | `apps/recipe-box-rs/.dev.vars` に書く | Worker の secret |
 | ログ | `wrangler dev` を起動した端末に出る | Workers のログ（`[observability]`）に残る |
 
@@ -51,9 +52,19 @@
 ```bash
 # 仕様と上限の変化
 git diff <基準>..origin/main -- docs/spec.md docs/security.md
-# 挙動を変えた変更（feat・fix と、! の付いたもの）
-git log --format='%h %s' <基準>..origin/main | grep -E '^[0-9a-f]+ (feat|fix)(\([^)]*\))?!?:|^[0-9a-f]+ [a-z]+(\([^)]*\))?!:'
+# 挙動を変えた変更（feat・fix・revert と、! の付いたもの）
+git log --format='%h %s' <基準>..origin/main | grep -E '^[0-9a-f]+ (feat|fix|revert)(\([^)]*\))?!?:|^[0-9a-f]+ [a-z]+(\([^)]*\))?!:'
 ```
+
+Dependabot の更新のうち自動でマージされたもの（`dependabot-automerge.yml`）は、人が確かめる前に `chore(deps):` のまま main に入る。
+後から挙動が変わったと分かったときは、`docs/spec.md` などを直す `fix:` の PR の本文に、挙動を変えた元の PR を書く（AGENTS.md）。
+そのため、挙動が実際に変わった commit は、上の一覧に出た `fix:` の PR の本文で確かめる。元の PR が基準より前なら、基準の環境もその挙動である。
+
+### リライトで技術を選ぶときの観点
+
+- seed（共有のデモのデータ、`mise run seed`）を、アプリと同じデータの層（ORM など）で入れられるか。
+  今は D1 に外から直接つなぐ方法が無いので、seed はレシピを公開 API で入れ、写真を wrangler で D1 の SQL と R2 に直接入れている（デモでは API で写真を追加できないため）。
+  そのため、写真の表の列・R2 のキーの形・形式の判定・上限の値を、アプリから seed に写している。写したものが食い違うと、毎日の `seed-demo.yml` が失敗して分かる。
 
 ## 技術構成（リライト前）
 
