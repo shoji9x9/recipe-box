@@ -153,7 +153,7 @@ impl ApiError {
             Self::InvalidThumbnail => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "invalid_thumbnail",
-                "写真の小さな版は、メタデータの無い JPEG で、長い辺が 1280 ピクセルまでにしてください",
+                "写真の小さな版は、JPEG で、長い辺が 1280 ピクセルまでにしてください",
             ),
             Self::ThumbnailExists => (
                 StatusCode::CONFLICT,
@@ -256,4 +256,19 @@ pub(crate) async fn run_to_completion_or_internal<B: Backend, T: Send + 'static>
         return Err(ApiError::Internal);
     };
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiError;
+
+    #[test]
+    fn thumbnail_message_matches_the_limit() {
+        let (_, _, message) = ApiError::InvalidThumbnail.parts();
+        let edge = crate::thumbnail::MAX_THUMBNAIL_EDGE;
+        assert!(
+            message.contains(&format!("長い辺が {edge} ピクセルまで")),
+            "{message}"
+        );
+    }
 }

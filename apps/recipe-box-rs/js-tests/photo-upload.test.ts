@@ -125,13 +125,15 @@ describe("判定の関数", () => {
     expect(await classify(odd)).toEqual({ kind: "added", reason: null, photoId: null });
   });
 
-  test("thumbnailSize は、長い辺を上限に縮め、縮めなくてよい写真には null を返す", () => {
-    expect(thumbnailSize(4000, 3000, 1280)).toEqual({ width: 1280, height: 960 });
-    expect(thumbnailSize(3000, 4000, 1280)).toEqual({ width: 960, height: 1280 });
-    expect(thumbnailSize(10000, 10, 1280)).toEqual({ width: 1280, height: 1 });
-    expect(thumbnailSize(1280, 800, 1280)).toBeNull();
-    expect(thumbnailSize(0, 800, 1280)).toBeNull();
-    expect(thumbnailSize(Number.NaN, 800, 1280)).toBeNull();
+  test("thumbnailSize は、長い辺を上限に縮め、作っても小さくならない写真には null を返す", () => {
+    expect(thumbnailSize(4000, 3000, 1280, 10, 100)).toEqual({ width: 1280, height: 960 });
+    expect(thumbnailSize(3000, 4000, 1280, 10, 100)).toEqual({ width: 960, height: 1280 });
+    expect(thumbnailSize(10000, 10, 1280, 10, 100)).toEqual({ width: 1280, height: 1 });
+    expect(thumbnailSize(1280, 800, 1280, 100, 100)).toBeNull();
+    // 長い辺が短くても、ファイルが小さな版の上限より大きければ（PNG など）、同じ大きさの JPEG にする。
+    expect(thumbnailSize(1200, 800, 1280, 101, 100)).toEqual({ width: 1200, height: 800 });
+    expect(thumbnailSize(0, 800, 1280, 101, 100)).toBeNull();
+    expect(thumbnailSize(Number.NaN, 800, 1280, 101, 100)).toBeNull();
   });
 
   test("classify は、ほかの画面に移らされたら、ページごと読み直す", async () => {
@@ -624,6 +626,8 @@ describe("小さな版", () => {
     );
     const context = {
       imageSmoothingQuality: "low",
+      fillStyle: "",
+      fillRect: () => {},
       drawImage: (_image: unknown, x: number, y: number, width: number, height: number) => drawn.push([x, y, width, height]),
     };
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
@@ -683,10 +687,11 @@ describe("小さな版", () => {
     vi.stubGlobal("fetch", fetchMock);
     await upload(form, [file("a.jpg", 5), file("b.jpg", 5)]);
     const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").map(([url, init]) => [url, init?.headers]);
+    // 写真をすべて送ってから、小さな版を送る。
     expect(posts).toEqual([
       [form.action, { "Content-Type": "image/jpeg" }],
-      [`${form.action}/${ID}/thumbnail?width=4000`, { "Content-Type": "image/jpeg" }],
       [form.action, { "Content-Type": "image/jpeg" }],
+      [`${form.action}/${ID}/thumbnail?width=4000`, { "Content-Type": "image/jpeg" }],
       [`${form.action}/${ID}/thumbnail?width=4000`, { "Content-Type": "image/jpeg" }],
     ]);
     expect(document.querySelector("#messages .message")?.textContent).toBe("2 枚の写真を追加しました");

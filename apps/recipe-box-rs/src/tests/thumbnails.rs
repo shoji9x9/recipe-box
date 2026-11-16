@@ -149,25 +149,15 @@ async fn thumbnail_is_added_and_shown_with_srcset() {
 }
 
 #[tokio::test]
-async fn thumbnail_must_be_a_small_jpeg_without_metadata() {
+async fn thumbnail_must_be_a_small_jpeg() {
     let backend = backend_with_workspaces();
     let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
     let photo = add_photo(&backend, &path).await;
-    let exif = {
-        let mut segment = vec![0xff, 0xe1, 0x00, 0x0a];
-        segment.extend_from_slice(b"Exif\0\0II");
-        segment
-    };
     let mut too_large = canvas_jpeg(100, 100, &[]);
     too_large.resize(MAX_THUMBNAIL_BYTES + 1, 0);
     for (bytes, query, status) in [
         (
             b"\x89PNG\r\n\x1a\n".to_vec(),
-            "?width=100",
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        ),
-        (
-            canvas_jpeg(100, 100, &[exif]),
             "?width=100",
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ),
@@ -187,6 +177,16 @@ async fn thumbnail_must_be_a_small_jpeg_without_metadata() {
         let response = post_thumbnail(&backend, &path, &photo, query, bytes, WORKSPACE_A).await;
         assert_eq!(response.status, status, "{query}");
     }
+    // Content-Length の無い大きな本文も、小さな版の上限で止める。
+    let request = Request::post(format!("{path}/photos/{photo}/thumbnail?width=100"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header("cf-connecting-ip", "192.0.2.1")
+        .header(header::COOKIE, cookie(WORKSPACE_A))
+        .body(Body::from(vec![0xff; MAX_THUMBNAIL_BYTES + 1]))
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
     // 無い写真には足せない。
     let response = post_thumbnail(
         &backend,
@@ -200,6 +200,53 @@ async fn thumbnail_must_be_a_small_jpeg_without_metadata() {
     assert_eq!(response.status, StatusCode::NOT_FOUND);
     assert_eq!(backend.objects.lock().unwrap().len(), 1);
     assert!(backend.thumbnail_sizes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn thumbnail_metadata_is_zeroed_before_saving() {
+    let backend = backend_with_workspaces();
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let photo = add_photo(&backend, &path).await;
+    // ブラウザが書く小さな Exif に見立てたもの（位置情報の文字を入れる）。
+    let mut exif = vec![0xff, 0xe1, 0x00, 0x12];
+    exif.extend_from_slice(b"Exif\0\0GPS-SECRET");
+    let thumbnail = canvas_jpeg(100, 100, &[exif]);
+    let response = post_thumbnail(
+        &backend,
+        &path,
+        &photo,
+        "?width=200",
+        thumbnail.clone(),
+        WORKSPACE_A,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT, "{}", response.body);
+    let stored = backend.objects.lock().unwrap()[&thumbnail_r2_key(&path, &photo)]
+        .0
+        .clone();
+    assert_eq!(stored.len(), thumbnail.len());
+    assert!(!stored.windows(10).any(|w| w == b"GPS-SECRET"));
+}
+
+#[tokio::test]
+async fn demo_is_checked_before_the_thumbnail_itself() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..backend_with_workspaces()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let recipe = create_recipe(&backend, DEMO, "デモ").await;
+    // width が無く、本文も小さな版でなくても、デモなら 403 にする（docs/spec.md の「小さな版」の確かめる順）。
+    let response = post_thumbnail(
+        &backend,
+        &recipe,
+        &"1".repeat(32),
+        "",
+        b"not a jpeg".to_vec(),
+        DEMO,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

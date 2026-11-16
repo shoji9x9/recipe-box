@@ -1189,17 +1189,12 @@ pub async fn add_thumbnail<B: Backend>(
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
     let (id, photo_id) = photo::parse_ids(ids)?;
-    let Query(query) = query.map_err(|_| ApiError::InvalidBody)?;
-    let body = body.map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
-    photo::add_thumbnail(
-        &backend,
-        viewer.id(),
-        &id,
-        &photo_id,
-        Vec::from(body),
-        query.width,
-    )
-    .await?;
+    // クエリと本文の誤りは、デモかを確かめた後に返す（[`photo::add_thumbnail`] の確かめる順）。
+    let width = query.ok().map(|Query(query)| query.width);
+    let body = body
+        .map(Vec::from)
+        .map_err(|rejection| ApiError::from_body_status(rejection.status()));
+    photo::add_thumbnail(&backend, viewer.id(), &id, &photo_id, body, width).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

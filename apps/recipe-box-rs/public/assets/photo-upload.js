@@ -8,7 +8,8 @@
 // 追加: ファイルの欄で複数を選べるようにし、1 枚ずつ、写真のバイト列そのものを同じパスに送る。
 // 本文が 1 枚の写真の大きさに収まり、サーバーは本文を読みためずに R2 へ流せる。サーバーは、追加できたら 204 を返す
 // （フォームのときの 303 で画面を移らせない）。送り終えたら写真の欄を読み直し、何枚入ったかと、入らなかった写真の理由を出す。
-// 小さな版: 追加できた写真ごとに、canvas で長い辺を縮めた JPEG を作り、写真の ID（204 の X-Photo-Id）の小さな版として送る。
+// 小さな版: すべての写真を送り終えてから、追加できた写真ごとに、canvas で長い辺を縮めた JPEG を作り、
+// 写真の ID（204 の X-Photo-Id）の小さな版として送る（写真の追加を、小さな版を作る時間で待たせない）。
 // 一覧と詳細の画面は、小さな版があれば srcset で選ばせる。作れないか送れなくても、写真は残り、元の写真を出すので知らせない。
 // Safari は canvas から WebP を書き出せないので、どのブラウザでも JPEG にする（書き出した形式も確かめる）。
 // canvas が書き出す JPEG にはメタデータが無い（サーバーも、メタデータの無い JPEG だけを受け付ける。src/thumbnail.rs）。
@@ -145,15 +146,22 @@ async function sendOne(form, file) {
 const THUMBNAIL_QUALITIES = [0.82, 0.7];
 
 /**
- * 小さな版の幅と高さ。長い辺が `maxEdge` 以下の写真は、縮めても小さくならないので null（小さな版を作らない）。
+ * 小さな版の幅と高さ。長い辺を `maxEdge` 以下に縮める。長い辺が `maxEdge` 以下で、ファイルも小さな版の上限（`maxBytes`）
+ * 以下の写真は、作っても小さくならないので null（小さな版を作らない）。長い辺が短くてもファイルが大きい写真（PNG など）は、
+ * 同じ大きさの JPEG にする。
  * @param {number} width 元の写真を向きのとおりに置いたときの幅
  * @param {number} height 同じく高さ
  * @param {number} maxEdge 長い辺の上限
+ * @param {number} fileBytes 元の写真のファイルの大きさ
+ * @param {number} maxBytes 小さな版の大きさの上限
  * @returns {{ width: number, height: number } | null}
  */
-export function thumbnailSize(width, height, maxEdge) {
-  if (!(width > 0 && height > 0 && maxEdge > 0) || Math.max(width, height) <= maxEdge) {
+export function thumbnailSize(width, height, maxEdge, fileBytes, maxBytes) {
+  if (!(width > 0 && height > 0 && maxEdge > 0)) {
     return null;
+  }
+  if (Math.max(width, height) <= maxEdge) {
+    return fileBytes > maxBytes ? { width, height } : null;
   }
   const scale = maxEdge / Math.max(width, height);
   return {
@@ -178,7 +186,7 @@ export async function makeThumbnail(file, limits) {
     return null;
   }
   try {
-    const size = thumbnailSize(bitmap.width, bitmap.height, limits.edge);
+    const size = thumbnailSize(bitmap.width, bitmap.height, limits.edge, file.size, limits.bytes);
     if (size === null) {
       return null;
     }
@@ -189,6 +197,9 @@ export async function makeThumbnail(file, limits) {
     if (context === null) {
       return null;
     }
+    // JPEG は透明を持てないので、透明な所は白にする（黒くしない）。
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, size.width, size.height);
     context.imageSmoothingQuality = "high";
     context.drawImage(bitmap, 0, 0, size.width, size.height);
     for (const quality of THUMBNAIL_QUALITIES) {
@@ -493,13 +504,15 @@ export async function upload(form, files) {
   setControlsDisabled(form, true);
   let added = 0;
   let redirected = false;
+  /** @type {[photoId: string, file: File][]} */
+  const thumbnails = [];
   for (const [index, file] of sending.entries()) {
     setStatus(form, `写真を送っています（${index + 1} / ${sending.length} 枚目）`);
     const result = await sendOne(form, file);
     if (result.kind === "added") {
       added += 1;
       if (result.photoId !== null) {
-        await sendThumbnail(form, result.photoId, file);
+        thumbnails.push([result.photoId, file]);
       }
       continue;
     }
@@ -510,6 +523,13 @@ export async function upload(form, files) {
       }
       redirected = result.kind === "redirect";
       break;
+    }
+  }
+  // 小さな版は、写真をすべて送ってから作って送る。写真の欄を読み直す前に送り、読み直した欄で小さな版を出す。
+  if (!redirected) {
+    for (const [index, [photoId, file]] of thumbnails.entries()) {
+      setStatus(form, `小さな版を作っています（${index + 1} / ${thumbnails.length} 枚目）`);
+      await sendThumbnail(form, photoId, file);
     }
   }
   await finish(form, editPath, added, failures, redirected);

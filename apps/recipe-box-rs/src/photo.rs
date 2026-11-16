@@ -432,15 +432,40 @@ pub async fn photo_response<B: Backend>(
     recipe: &RecipeId,
     photo: &PhotoId,
 ) -> Result<Response, ApiError> {
+    stored_file_response(backend, workspace, recipe, photo, false).await
+}
+
+/// 写真（`thumbnail` なら小さな版）のデータの応答。
+async fn stored_file_response<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    recipe: &RecipeId,
+    photo: &PhotoId,
+    thumbnail: bool,
+) -> Result<Response, ApiError> {
     // D1 の行をワークスペースで絞り込んで見つけてから R2 を読む。ほかのワークスペースの写真は読めない。
     let Some(row) = backend.get_photo(workspace, recipe, photo).await? else {
         return Err(ApiError::PhotoNotFound);
     };
-    let key = object_key(workspace, recipe, &row.id);
+    let (key, content_type) = if thumbnail {
+        // 小さな版は、R2 に書けてから幅を入れる（それまでは出さない）。
+        if row.thumbnail_width.is_none() {
+            return Err(ApiError::PhotoNotFound);
+        }
+        (
+            thumbnail_key(workspace, recipe, &row.id),
+            PhotoFormat::Jpeg.content_type(),
+        )
+    } else {
+        (
+            object_key(workspace, recipe, &row.id),
+            row.content_type.as_str(),
+        )
+    };
     let Some(bytes) = backend.get_object(&key).await? else {
         return Err(ApiError::PhotoNotFound);
     };
-    Ok(file_response(&row.content_type, bytes))
+    Ok(file_response(content_type, bytes))
 }
 
 /// 写真か小さな版のデータの応答。ヘッダーは docs/spec.md の「写真の API」。
@@ -475,7 +500,8 @@ const MAX_PHOTO_WIDTH: i64 = 65_535;
 
 /// 写真の小さな版を足す（画面の JavaScript が、写真を追加した後に送る。Issue #52）。`width` は、元の写真を向きのとおりに置いたときの幅。
 ///
-/// 1. デモでないか、大きさ、形（メタデータの無い JPEG で、長い辺が [`MAX_THUMBNAIL_EDGE`] まで）を確かめる（D1 も R2 も使わない）。
+/// 1. デモでないか、本文を読めたか、大きさ、形（JPEG で、長い辺が [`MAX_THUMBNAIL_EDGE`] まで）、`width` を、この順に確かめ、
+///    メタデータを 0 で埋める（[`thumbnail::sanitize`]。D1 も R2 も使わない）。
 /// 2. D1 で、小さな版の枠を取る。ワークスペースの写真の合計の上限に、元の写真と合わせて数える。1 枚の写真に 1 つまで。
 ///    1 日の追加の回数には数えない（元の写真と合わせて 1 回の追加とする）。
 /// 3. R2 に書く。失敗したら、枠を返す。
@@ -488,21 +514,22 @@ pub async fn add_thumbnail<B: Backend>(
     workspace: &WorkspaceId,
     recipe: &RecipeId,
     photo: &PhotoId,
-    bytes: Vec<u8>,
-    width: i64,
+    body: Result<Vec<u8>, ApiError>,
+    width: Option<i64>,
 ) -> Result<(), ApiError> {
     deny_demo(backend, workspace)?;
+    let mut bytes = body?;
     if bytes.len() > MAX_THUMBNAIL_BYTES {
         return Err(ApiError::PayloadTooLarge);
     }
     let (thumbnail_width, thumbnail_height) =
-        thumbnail::jpeg_size(&bytes).ok_or(ApiError::InvalidThumbnail)?;
+        thumbnail::sanitize(&mut bytes).ok_or(ApiError::InvalidThumbnail)?;
     if thumbnail_width.max(thumbnail_height) > MAX_THUMBNAIL_EDGE {
         return Err(ApiError::InvalidThumbnail);
     }
-    if !(1..=MAX_PHOTO_WIDTH).contains(&width) {
-        return Err(ApiError::InvalidBody);
-    }
+    let width = width
+        .filter(|width| (1..=MAX_PHOTO_WIDTH).contains(width))
+        .ok_or(ApiError::InvalidBody)?;
     // 500,000 以下なので i64 に収まる。
     let size = i64::try_from(bytes.len()).map_err(|_| ApiError::PayloadTooLarge)?;
     let task = store_thumbnail(
@@ -560,15 +587,31 @@ async fn store_thumbnail<B: Backend>(
         }
         return Err(ApiError::Internal);
     }
-    if !backend
+    let finished = backend
         .finish_thumbnail(&workspace, &recipe, &photo, size, widths)
-        .await?
-    {
-        // 書いている間に写真が消されたか、消している途中である。小さな版だけが R2 に残らないよう消す。
-        backend.delete_objects(vec![key]).await?;
-        return Err(ApiError::PhotoNotFound);
+        .await;
+    if matches!(finished, Ok(true)) {
+        return Ok(());
     }
-    Ok(())
+    // 出せなかった（書いている間に写真が消されたか消している途中か、D1 が失敗した）。小さな版の R2 のデータを消し、枠を返す。
+    // 写真の削除が途中で失敗して元に戻ったときも、枠が残らず、もう一度送れるようにする。
+    // R2 の削除が失敗すると、写真の行が無ければ、どの行からもたどれない小さな版が R2 に残る（docs/security.md）。
+    if let Err(error) = &finished {
+        log_error(error);
+    }
+    if let Err(error) = backend.delete_objects(vec![key]).await {
+        log_error(&error);
+    }
+    if let Err(error) = backend
+        .release_thumbnail(&workspace, &recipe, &photo, size)
+        .await
+    {
+        log_error(&error);
+    }
+    Err(match finished {
+        Ok(_) => ApiError::PhotoNotFound,
+        Err(_) => ApiError::Internal,
+    })
 }
 
 /// 写真の小さな版のデータの応答（画面だけ）。小さな版が無ければ `404`。
@@ -578,17 +621,7 @@ pub async fn thumbnail_response<B: Backend>(
     recipe: &RecipeId,
     photo: &PhotoId,
 ) -> Result<Response, ApiError> {
-    let Some(row) = backend.get_photo(workspace, recipe, photo).await? else {
-        return Err(ApiError::PhotoNotFound);
-    };
-    if row.thumbnail_width.is_none() {
-        return Err(ApiError::PhotoNotFound);
-    }
-    let key = thumbnail_key(workspace, recipe, &row.id);
-    let Some(bytes) = backend.get_object(&key).await? else {
-        return Err(ApiError::PhotoNotFound);
-    };
-    Ok(file_response(PhotoFormat::Jpeg.content_type(), bytes))
+    stored_file_response(backend, workspace, recipe, photo, true).await
 }
 
 /// `DELETE /api/recipes/{id}/photos/{photo_id}`: 写真を消し、`204` を返す。
