@@ -115,6 +115,7 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
   入れ方は `gh skill install cloudflare/security-audit-skill security-audit --agent claude-code --scope project --pin <commit>`。
   スキルは、ビルドやテストなど対象のコードを動かすのを、外部のネットワークを切った OS のサンドボックスの中だけに限る。その用意が無ければ、コードを動かさずに読むだけで確かめる。
   上げるときは、中身を読んでから入れ直す。7 日の待ち（「依存の追加と更新」）は、commit の日付ではなく、その commit が default ブランチに入った時刻（PR の `merged_at`、PR が無ければリポジトリの push の時刻など）で確かめる。commit の日付は作った人が自由に決められるため。
+  入れ直したら、`THIRD_PARTY_NOTICES.md` の commit を直し、上流の `LICENSE` が変わっていれば、その全文も写し直す（変えた点が変わったときも直す）。
 
 [GoogleChrome/modern-web-guidance](https://github.com/GoogleChrome/modern-web-guidance) から、次のスキルを入れている（commit を固定する）。
 
@@ -136,6 +137,7 @@ README.md には概要と使い方だけを書き、詳細は `docs/` に置く�
   - 上げるときは、スキルの commit と `package.json` の `modern-web-guidance` を同じ版にそろえる（`SKILL.md` の `--skill-version` と、パッケージの `skills/modern-web-guidance/skill-version.txt` が同じになる版）。
     中身を読み、スキルの 7 日の待ちは `security-audit` と同じく、default ブランチに入った時刻で確かめる。
     Dependabot がパッケージを上げる PR を作ったら、同じ PR で、同じ版のスキルを入れ直す。版がそろっていなければ、`mise run lint`（`scripts/check-mwg-version.sh`）が失敗する。
+    入れ直したら、`THIRD_PARTY_NOTICES.md` の commit を直し、上流の `LICENSE` が変わっていれば、その全文も写し直す（変えた点が変わったときも直す）。
 
 スキルなしでどこまでできるかも見るため、必要かどうか迷うスキルは入れない。
 `replace-strategy` とその姉妹スキルは、リライトを始めるときに入れる。
