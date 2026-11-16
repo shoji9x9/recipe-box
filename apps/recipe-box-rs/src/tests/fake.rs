@@ -741,24 +741,30 @@ impl Backend for FakeBackend {
     fn delete_photos(
         &self,
         photos: &[(WorkspaceId, RecipeId, PhotoId)],
+        marked_before: i64,
     ) -> impl Future<Output = BackendResult<()>> + Send {
         if self.broken_photo_delete {
             return ready(Err(BackendError("壊れた DB（写真の削除）".into())));
         }
         ready(self.check().map(|()| {
             // 本物の batch と同じく、まとめて消す（途中で失敗して一部だけが消えることは無い）。
+            // 印を付けた日時が marked_before より前の行だけを消し、消した行の印だけを消す。
+            let marked = self.pending_photos.lock().unwrap().clone();
             let mut rows = self.photos.lock().unwrap();
+            let mut deleted = Vec::new();
             rows.retain(|(w, r, p)| {
-                !photos.iter().any(|(workspace, recipe, id)| {
+                let target = photos.iter().any(|(workspace, recipe, id)| {
                     w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
-                })
+                }) && marked
+                    .get(&p.id)
+                    .is_some_and(|&since| since < marked_before);
+                if target {
+                    deleted.push(p.id.clone());
+                }
+                !target
             });
             drop(rows);
-            let ids: Vec<String> = photos
-                .iter()
-                .map(|(_, _, id)| id.as_str().to_owned())
-                .collect();
-            self.forget_pending(&ids);
+            self.forget_pending(&deleted);
         }))
     }
 

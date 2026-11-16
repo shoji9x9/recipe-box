@@ -970,8 +970,10 @@ impl Backend for CloudflareBackend {
     fn delete_photos(
         &self,
         photos: &[(WorkspaceId, RecipeId, PhotoId)],
+        marked_before: i64,
     ) -> impl Future<Output = BackendResult<()>> + Send {
         let env = self.env.clone();
+        let marked_before = SendWrapper::new(int_to_js(marked_before));
         let rows: Vec<[String; 3]> = photos
             .iter()
             .map(|(workspace, recipe, id)| {
@@ -991,10 +993,13 @@ impl Backend for CloudflareBackend {
             let statements = rows
                 .into_iter()
                 .map(|values| {
+                    let [w, r, id] = values.map(JsValue::from);
+                    // 選んだときの条件（印を付けた日時）を、消すときにも確かめ直す。
                     db.prepare(
-                        "DELETE FROM photos WHERE workspace_id = ? AND recipe_id = ? AND id = ?",
+                        "DELETE FROM photos WHERE workspace_id = ? AND recipe_id = ? AND id = ? \
+                         AND pending_since < ?",
                     )
-                    .bind(&values.map(JsValue::from))
+                    .bind(&[w, r, id, marked_before.0.clone()])
                     .map_err(|e| backend_error(action, &e))
                 })
                 .collect::<BackendResult<Vec<_>>>()?;

@@ -830,3 +830,41 @@ async fn failed_row_deletion_in_cleanup_keeps_all_rows_for_the_next_run() {
     assert!(backend.photos.lock().unwrap().is_empty());
     assert!(backend.pending_photos.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn cleanup_handles_more_rows_than_one_delete_can_take() {
+    let (backend, recipe) = setup().await;
+    // R2 と D1 を 1,000 行ずつまとめて消すので、2 回に分かれる数を入れる。
+    for i in 0..1_001 {
+        let id = format!("{i:032x}");
+        backend.add_photo_row(WORKSPACE_A, &recipe, &id, 1);
+        backend.mark_pending(&id, NOW);
+    }
+    pass_cleanup_time(&backend);
+    let summary = crate::workspace::delete_unused(&backend).await;
+    assert_eq!(summary.pending_photos.cleaned, 1_001);
+    assert_eq!(summary.pending_photos.failed, 0);
+    assert!(backend.photos.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_keeps_rows_whose_mark_changed_after_listing() {
+    let (backend, recipe) = setup().await;
+    let id = "0123456789abcdef0123456789abcdef";
+    backend.add_photo_row(WORKSPACE_A, &recipe, id, 1);
+    backend.mark_pending(id, NOW);
+    pass_cleanup_time(&backend);
+    // 選んだ後に印が外れ（長い追加が終わった）、付け直された（今、消している）行は、まとめて消すときに消さない。
+    let photo = crate::photo::PhotoId::parse(id).unwrap();
+    let rows = [(
+        crate::workspace::WorkspaceId::parse(WORKSPACE_A).unwrap(),
+        crate::recipe::RecipeId::parse(&recipe).unwrap(),
+        photo,
+    )];
+    backend.mark_pending(id, crate::backend::Backend::now_millis(&backend));
+    crate::backend::Backend::delete_photos(&backend, &rows, NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+    assert!(backend.is_pending(id));
+}

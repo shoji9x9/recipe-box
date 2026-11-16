@@ -499,15 +499,16 @@ pub struct PendingCleanup {
 ///
 /// R2 を先に消す（[`remove`] と同じ理由）。R2 にデータが無くても（書く前に失敗した）、R2 の削除は失敗しない。
 /// R2 のデータを 1 回の削除で消せる数（1,000）ずつまとめて消し、消せた分の行を D1 の batch でまとめて消す。
-/// 呼び出しは、選ぶ 1 回と、1,000 行ごとに R2 と D1 の 1 回ずつで、行の数によらない
-/// （無料のプランでは、cron の 1 回の実行の呼び出し（subrequest）の数に上限がある）。
-/// 失敗した行は残し、次の日にもう一度試す。
+/// 呼び出しは、選ぶ 1 回と、1,000 行ごとに R2 と D1 の 1 回ずつ（行が 1,000 増えるごとに 2 回増える）。
+/// 無料のプランでは、cron の 1 回の実行の呼び出し（subrequest）の数に上限があり、先に動くワークスペースの自動削除と分け合う。
+/// D1 の batch は、中の文の数によらず 1 回のクエリに数えられる（D1 の 1 回の実行のクエリの数の上限）。
+/// 失敗した行は残し、次の日にもう一度試す。batch が失敗すると、その 1,000 行までの行がすべて残る
+/// （R2 のデータはもう無いが、行は隠れたまま上限に数えられる）。
+/// 消すときは、選んだときの条件（印を付けた日時）を D1 で確かめ直し、選んだ後に印が外れた行は消さない。
 pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup {
     let mut summary = PendingCleanup::default();
-    let rows = match backend
-        .list_pending_photos(now - PENDING_CLEANUP_AFTER_MILLIS)
-        .await
-    {
+    let before = now - PENDING_CLEANUP_AFTER_MILLIS;
+    let rows = match backend.list_pending_photos(before).await {
         Ok(rows) => rows,
         Err(error) => {
             log_error(&error);
@@ -545,7 +546,7 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
             continue;
         }
         // 行は、R2 のデータを消せた分をまとめて消す（1 回の呼び出し。cron の 1 回の実行の呼び出しの数に上限があるため）。
-        match backend.delete_photos(chunk).await {
+        match backend.delete_photos(chunk, before).await {
             Ok(()) => summary.cleaned += chunk.len(),
             Err(error) => {
                 log_error(&error);
