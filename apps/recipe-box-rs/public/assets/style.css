@@ -373,12 +373,6 @@ button.primary.danger-fill {
     color: var(--muted);
     background: transparent;
 
-    /* 図形がクリックの的（event.target）にならないようにする。ボタンの大きさで縮ませない */
-    & svg {
-      flex: none;
-      pointer-events: none;
-    }
-
     &:hover {
       color: var(--ink);
       background: var(--surface-soft);
