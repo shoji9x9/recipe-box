@@ -2,10 +2,13 @@
 resolver = "3"
 members = ["apps/recipe-box-rs"]
 
-# Workers へ送る wasm を小さくする（workers-rs のテンプレートと同じ設定）。
+# Workers へ送る wasm を小さくする。
+# strip は使わない。strip = true は、wasm-bindgen が Wasm の機能を調べる target_features の節まで消し、
+# ビルドが警告を出す。wasm-bindgen の後の小さくする処理は、worker-build が wasm-opt で行う。
+# worker-build は、wasm-opt に name の節（関数の名前）を残させるので、strip = true より wasm は大きくなる。
+# Workers のアップロードの上限に収まるかは、デプロイの出力（Total Upload の gzip の値）で確かめる。
 [profile.release]
 lto = true
-strip = true
 codegen-units = 1
 
 [workspace.lints.rust]
