@@ -8,6 +8,10 @@
 // 追加: ファイルの欄で複数を選べるようにし、1 枚ずつ、写真のバイト列そのものを同じパスに送る。
 // 本文が 1 枚の写真の大きさに収まり、サーバーは本文を読みためずに R2 へ流せる。サーバーは、追加できたら 204 を返す
 // （フォームのときの 303 で画面を移らせない）。送り終えたら写真の欄を読み直し、何枚入ったかと、入らなかった写真の理由を出す。
+// 小さな版: 追加できた写真ごとに、canvas で長い辺を縮めた JPEG を作り、写真の ID（204 の X-Photo-Id）の小さな版として送る。
+// 一覧と詳細の画面は、小さな版があれば srcset で選ばせる。作れないか送れなくても、写真は残り、元の写真を出すので知らせない。
+// Safari は canvas から WebP を書き出せないので、どのブラウザでも JPEG にする（書き出した形式も確かめる）。
+// canvas が書き出す JPEG にはメタデータが無い（サーバーも、メタデータの無い JPEG だけを受け付ける。src/thumbnail.rs）。
 // 削除: 確認のダイアログのフォームを fetch で送る。サーバーは編集の画面へ移らせるので、移った先の画面から入れ替える。
 //
 // ES モジュールとして読み込む（base.html の <script type="module">）。判定の関数は、単体テスト
@@ -32,11 +36,11 @@ const PER_PHOTO_ERRORS = new Set([400, 413, 415]);
 
 /**
  * 1 枚を送った結果。
- * - "added": 追加できた。
+ * - "added": 追加できた。`photoId` は、追加した写真の ID（サーバーが返さなければ null）。
  * - "skip": その写真だけ追加できなかった。残りは続けて送る。
  * - "stop": 続けても追加できない。残りを送らない。
  * - "redirect": サーバーがほかの画面に移らせた（ワークスペースが無いなど）。残りを送らず、ページごと読み直す。
- * @typedef {{ kind: "added", reason: null } | { kind: "skip" | "stop" | "redirect", reason: string }} SendResult
+ * @typedef {{ kind: "added", reason: null, photoId: string | null } | { kind: "skip" | "stop" | "redirect", reason: string }} SendResult
  */
 
 /**
@@ -107,7 +111,8 @@ export async function failureReason(response) {
  */
 export async function classify(response) {
   if (response.status === 204) {
-    return { kind: "added", reason: null };
+    const id = response.headers.get("X-Photo-Id");
+    return { kind: "added", reason: null, photoId: id !== null && /^[0-9a-f]{32}$/.test(id) ? id : null };
   }
   if (response.redirected) {
     return { kind: "redirect", reason: "追加できませんでした" };
@@ -134,6 +139,101 @@ async function sendOne(form, file) {
     return { kind: "stop", reason: "通信できませんでした" };
   }
   return classify(response);
+}
+
+/** 小さな版の JPEG の品質（0〜1）。大きさの上限を超えたら、低い品質で 1 回だけ作り直す。 */
+const THUMBNAIL_QUALITIES = [0.82, 0.7];
+
+/**
+ * 小さな版の幅と高さ。長い辺が `maxEdge` 以下の写真は、縮めても小さくならないので null（小さな版を作らない）。
+ * @param {number} width 元の写真を向きのとおりに置いたときの幅
+ * @param {number} height 同じく高さ
+ * @param {number} maxEdge 長い辺の上限
+ * @returns {{ width: number, height: number } | null}
+ */
+export function thumbnailSize(width, height, maxEdge) {
+  if (!(width > 0 && height > 0 && maxEdge > 0) || Math.max(width, height) <= maxEdge) {
+    return null;
+  }
+  const scale = maxEdge / Math.max(width, height);
+  return {
+    width: Math.max(1, Math.min(maxEdge, Math.round(width * scale))),
+    height: Math.max(1, Math.min(maxEdge, Math.round(height * scale))),
+  };
+}
+
+/**
+ * 小さな版を作る。作れない（縮めなくてよい・ブラウザが読めない・JPEG を書き出せない・大きすぎる）ときは null。
+ * createImageBitmap は、Exif の向きのとおりに置いた画像を返す（imageOrientation の既定は from-image）。
+ * @param {Blob} file
+ * @param {{ edge: number, bytes: number }} limits
+ * @returns {Promise<{ blob: Blob, width: number } | null>}
+ */
+export async function makeThumbnail(file, limits) {
+  /** @type {ImageBitmap} */
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return null;
+  }
+  try {
+    const size = thumbnailSize(bitmap.width, bitmap.height, limits.edge);
+    if (size === null) {
+      return null;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const context = canvas.getContext("2d");
+    if (context === null) {
+      return null;
+    }
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, size.width, size.height);
+    for (const quality of THUMBNAIL_QUALITIES) {
+      const blob = await new Promise((resolve) => {
+        canvas.toBlob(resolve, "image/jpeg", quality);
+      });
+      // JPEG を書き出せないブラウザは、PNG などを返す。そのときは送らない。
+      if (!(blob instanceof Blob) || blob.type !== "image/jpeg") {
+        return null;
+      }
+      if (blob.size <= limits.bytes) {
+        return { blob, width: bitmap.width };
+      }
+    }
+    return null;
+  } finally {
+    bitmap.close();
+  }
+}
+
+/**
+ * 追加できた写真の小さな版を作って送る。失敗しても写真は残り、元の写真を出すので、知らせない。
+ * @param {HTMLFormElement} form
+ * @param {string} photoId
+ * @param {File} file
+ */
+async function sendThumbnail(form, photoId, file) {
+  const edge = count(form.dataset.thumbnailEdge);
+  const bytes = count(form.dataset.thumbnailBytes);
+  if (edge === null || bytes === null) {
+    return;
+  }
+  try {
+    const thumbnail = await makeThumbnail(file, { edge, bytes });
+    if (thumbnail === null) {
+      return;
+    }
+    await fetch(`${form.action}/${photoId}/thumbnail?width=${thumbnail.width}`, {
+      method: "POST",
+      body: thumbnail.blob,
+      headers: { "Content-Type": "image/jpeg" },
+    });
+  } catch {
+    // 送れなくても、元の写真を出す。
+  }
 }
 
 /**
@@ -398,6 +498,9 @@ export async function upload(form, files) {
     const result = await sendOne(form, file);
     if (result.kind === "added") {
       added += 1;
+      if (result.photoId !== null) {
+        await sendThumbnail(form, result.photoId, file);
+      }
       continue;
     }
     failures.push([file.name, result.reason]);

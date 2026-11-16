@@ -11,11 +11,13 @@
     <p>写真はありません。</p>
     {%- else %}
     {#- 最初の写真は、最初の表示で一番大きな要素（LCP）になりやすいので、遅らせずに高い優先度で読む。
-        ほかの写真は縮小していない原寸（1 枚 4 MB まで）で、狭い画面では 1 列に並んで下に続くので、見える所に来てから読む。 #}
+        ほかの写真は、狭い画面では 1 列に並んで下に続くので、見える所に来てから読む。
+        小さな版（長い辺 1280 ピクセルの JPEG）があれば、srcset で、表示に足りる方を選ばせる。無ければ元の写真（1 枚 4 MB まで）を出す。 #}
     <ul class="photos">
       {%- for photo in photos %}
       <li>
-        <img src="/recipes/{{ recipe.id }}/photos/{{ photo.id }}" alt="{{ recipe.name }}の写真 {{ loop.index }}"{% if loop.first %} fetchpriority="high"{% else %} loading="lazy"{% endif %}>
+        {%- let photo_path = "/recipes/{}/photos/{}"|format(recipe.id, photo.id) %}
+        <img {% if let (Some(thumbnail_width), Some(width)) = (photo.thumbnail_width, photo.width) %}src="{{ photo_path }}/thumbnail" srcset="{{ photo_path }}/thumbnail {{ thumbnail_width }}w, {{ photo_path }} {{ width }}w" sizes="(max-width: 400px) 100vw, 240px"{% else %}src="{{ photo_path }}"{% endif %} alt="{{ recipe.name }}の写真 {{ loop.index }}"{% if loop.first %} fetchpriority="high"{% else %} loading="lazy"{% endif %}>
       </li>
       {%- endfor %}
     </ul>

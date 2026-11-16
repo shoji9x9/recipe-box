@@ -47,6 +47,10 @@ pub enum ApiError {
     PhotoStorageLimitReached,
     /// 写真の形式が JPEG・PNG・WebP のどれでもない（中身の先頭のバイトで決める）。
     UnsupportedPhotoType,
+    /// 写真の小さな版が、メタデータの無い JPEG でないか、大きさ（長い辺）が上限を超える（画面だけ）。
+    InvalidThumbnail,
+    /// 写真には、もう小さな版がある（画面だけ）。
+    ThumbnailExists,
     /// 共有のデモでは、写真を追加・削除できない。
     DemoPhotosDisabled,
     /// 共有のデモのワークスペースは削除できない。
@@ -78,6 +82,8 @@ impl ApiError {
     }
 
     /// 状態コード・機械向けのコード・人向けの説明。画面のエラーの表示にも使う。
+    // 失敗の種類ごとに 1 つずつ並べた表なので、分けずに 1 つの関数に置く。
+    #[allow(clippy::too_many_lines)]
     pub fn parts(&self) -> (StatusCode, &'static str, &'static str) {
         match self {
             Self::WorkspaceIdMissing => (
@@ -143,6 +149,16 @@ impl ApiError {
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_photo_type",
                 "写真は JPEG・PNG・WebP のどれかにしてください",
+            ),
+            Self::InvalidThumbnail => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "invalid_thumbnail",
+                "写真の小さな版は、メタデータの無い JPEG で、長い辺が 1280 ピクセルまでにしてください",
+            ),
+            Self::ThumbnailExists => (
+                StatusCode::CONFLICT,
+                "thumbnail_exists",
+                "この写真には、もう小さな版があります",
             ),
             Self::DemoPhotosDisabled => (
                 StatusCode::FORBIDDEN,

@@ -12,10 +12,11 @@ use std::fmt::Write as _;
 use askama::Template;
 use axum::{
     Extension, Form,
+    body::Bytes,
     extract::{
         FromRequest, Multipart, Path, Query, Request, State,
         multipart::MultipartRejection,
-        rejection::{FormRejection, PathRejection, QueryRejection},
+        rejection::{BytesRejection, FormRejection, PathRejection, QueryRejection},
     },
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header},
     middleware::Next,
@@ -374,6 +375,9 @@ struct PhotoSection {
     /// 1 枚の写真の大きさの上限と、超えたときの説明。画面の JavaScript が、送る前に確かめる。
     max_photo_bytes: usize,
     photo_too_large: &'static str,
+    /// 小さな版の長い辺と大きさの上限。画面の JavaScript が、この大きさに縮めて作る（[`crate::thumbnail`]）。
+    thumbnail_edge: u16,
+    thumbnail_bytes: usize,
 }
 
 /// フォームの画面の、写真にかかわる部分。
@@ -818,6 +822,8 @@ async fn photo_section<B: Backend>(
         remaining: (photo::MAX_PHOTOS_PER_RECIPE - count).max(0),
         max_photo_bytes: photo::MAX_PHOTO_BYTES,
         photo_too_large: PHOTO_TOO_LARGE,
+        thumbnail_edge: crate::thumbnail::MAX_THUMBNAIL_EDGE,
+        thumbnail_bytes: crate::thumbnail::MAX_THUMBNAIL_BYTES,
     })
 }
 
@@ -1153,6 +1159,53 @@ pub async fn photo_file<B: Backend>(
     Ok(photo::photo_response(&backend, viewer.id(), &id, &photo_id).await?)
 }
 
+/// 写真の小さな版を足すときに、元の写真の幅を渡すクエリ（`?width=<ピクセル>`）。
+#[derive(Deserialize)]
+pub struct ThumbnailQuery {
+    width: i64,
+}
+
+/// `GET /recipes/{id}/photos/{photo_id}/thumbnail`: 写真の小さな版のデータ。小さな版が無ければ `404`。
+pub async fn thumbnail_file<B: Backend>(
+    State(backend): State<B>,
+    Extension(session): Extension<Session>,
+    ids: Result<Path<(String, String)>, PathRejection>,
+) -> Result<Response, ScreenError> {
+    let viewer = require_viewer(&backend, &session).await?;
+    let (id, photo_id) = photo::parse_ids(ids)?;
+    Ok(photo::thumbnail_response(&backend, viewer.id(), &id, &photo_id).await?)
+}
+
+/// `POST /recipes/{id}/photos/{photo_id}/thumbnail?width=<ピクセル>`: 写真の小さな版（JPEG のバイト列そのもの）を足し、`204` を返す。
+///
+/// 画面の JavaScript が、写真を追加した後に、canvas で作って送る（[`photo::add_thumbnail`]）。
+/// 失敗しても写真は残り、元の写真を出すので、JavaScript は失敗を知らせない。
+pub async fn add_thumbnail<B: Backend>(
+    State(backend): State<B>,
+    Extension(session): Extension<Session>,
+    ids: Result<Path<(String, String)>, PathRejection>,
+    query: Result<Query<ThumbnailQuery>, QueryRejection>,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, ScreenError> {
+    let viewer = require_viewer(&backend, &session).await?;
+    let (id, photo_id) = photo::parse_ids(ids)?;
+    let Query(query) = query.map_err(|_| ApiError::InvalidBody)?;
+    let body = body.map_err(|rejection| ApiError::from_body_status(rejection.status()))?;
+    photo::add_thumbnail(
+        &backend,
+        viewer.id(),
+        &id,
+        &photo_id,
+        Vec::from(body),
+        query.width,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// 写真のバイト列そのものを追加できたときに、追加した写真の ID を返すヘッダー（JavaScript が小さな版を足すのに使う）。
+pub const PHOTO_ID_HEADER: &str = "x-photo-id";
+
 /// `POST /recipes/{id}/photos`: 写真を追加する。
 ///
 /// 本文は 2 つの形を受け付ける。
@@ -1185,7 +1238,10 @@ pub async fn add_photo<B: Backend>(
         Err(error) => return photo_failure(&backend, &viewer, &session, &id, error).await,
     };
     match photo::add(&backend, viewer.id(), &id, body).await {
-        Ok(_) if from_script => Ok(StatusCode::NO_CONTENT.into_response()),
+        // JavaScript が小さな版を足すのに使うので、写真の ID を返す。
+        Ok(photo) if from_script => {
+            Ok((StatusCode::NO_CONTENT, [(PHOTO_ID_HEADER, photo.id)]).into_response())
+        }
         Ok(_) => Ok(see_other_with(&edit_path(&id), Flash::PhotoAdded)),
         Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
     }

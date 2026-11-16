@@ -11,6 +11,7 @@ mod photo;
 mod recipe;
 mod screen;
 mod stream;
+mod thumbnail;
 mod workspace;
 
 use axum::{
@@ -160,6 +161,10 @@ fn screen_photo_routes<B: Backend>(backend: B) -> Router<B> {
         .route(
             "/recipes/{id}/photos/{photo_id}/delete",
             post(screen::delete_photo::<B>),
+        )
+        .route(
+            "/recipes/{id}/photos/{photo_id}/thumbnail",
+            get(screen::thumbnail_file::<B>).post(screen::add_thumbnail::<B>),
         )
         .route_layer(middleware::from_fn_with_state(
             backend.clone(),

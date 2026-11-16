@@ -16,11 +16,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backend::{Backend, BackendError, PhotoInsert, PhotoLimits},
+    backend::{Backend, BackendError, PhotoInsert, PhotoLimits, ThumbnailReserve},
     error::{ApiError, log_error, run_to_completion_or_internal},
     id,
     recipe::RecipeId,
     stream::{self, PhotoStream, RawPhotoBody},
+    thumbnail::{self, MAX_THUMBNAIL_BYTES, MAX_THUMBNAIL_EDGE},
     workspace::{MAX_WORKSPACES, Workspace, WorkspaceId},
 };
 
@@ -121,6 +122,12 @@ pub struct Photo {
     pub size: i64,
     /// 追加した日時（UNIX 時間のミリ秒）。
     pub created_at: i64,
+    /// 小さな版の幅（ピクセル）。小さな版が無ければ `None`。画面だけが使い、API の応答には入れない。
+    #[serde(default, skip_serializing)]
+    pub thumbnail_width: Option<i64>,
+    /// 元の写真を向きのとおりに置いたときの幅（ピクセル）。小さな版と一緒に画面の JavaScript が送る。API の応答には入れない。
+    #[serde(default, skip_serializing)]
+    pub width: Option<i64>,
 }
 
 /// 追加する写真の本文。
@@ -196,6 +203,21 @@ pub async fn read_bytes_body(
 /// D1 の行をワークスペースで絞り込んで見つけてから使うので、ほかのワークスペースの写真のキーにはならない。
 pub fn object_key(workspace: &WorkspaceId, recipe: &RecipeId, photo: &str) -> String {
     format!("photos/{workspace}/{recipe}/{photo}")
+}
+
+/// 小さな版の R2 のキー（[`object_key`] と同じく、ID から決まる）。
+pub fn thumbnail_key(workspace: &WorkspaceId, recipe: &RecipeId, photo: &str) -> String {
+    format!("thumbnails/{workspace}/{recipe}/{photo}")
+}
+
+/// 写真を消すときに、R2 から消すキー（元の写真と小さな版）。小さな版が無くても、R2 の削除は失敗しない。
+///
+/// 小さな版があるかを D1 で確かめずに両方を消すのは、書いている途中の小さな版（[`add_thumbnail`]）も残さないためである。
+pub fn object_keys(workspace: &WorkspaceId, recipe: &RecipeId, photo: &str) -> [String; 2] {
+    [
+        object_key(workspace, recipe, photo),
+        thumbnail_key(workspace, recipe, photo),
+    ]
 }
 
 /// `GET /api/recipes/{id}/photos` の応答の本文。
@@ -297,6 +319,8 @@ pub async fn add<B: Backend>(
         // 4,000,000 以下なので i64 に収まる。
         size: i64::try_from(body.len()).map_err(|_| ApiError::PayloadTooLarge)?,
         created_at: now,
+        thumbnail_width: None,
+        width: None,
     };
     let limits = PhotoLimits {
         max_per_recipe: MAX_PHOTOS_PER_RECIPE,
@@ -416,8 +440,15 @@ pub async fn photo_response<B: Backend>(
     let Some(bytes) = backend.get_object(&key).await? else {
         return Err(ApiError::PhotoNotFound);
     };
-    let content_type = HeaderValue::from_str(&row.content_type).map_err(|_| ApiError::Internal)?;
-    Ok((
+    Ok(file_response(&row.content_type, bytes))
+}
+
+/// 写真か小さな版のデータの応答。ヘッダーは docs/spec.md の「写真の API」。
+fn file_response(content_type: &str, bytes: Vec<u8>) -> Response {
+    let Ok(content_type) = HeaderValue::from_str(content_type) else {
+        return ApiError::Internal.into_response();
+    };
+    (
         [
             (header::CONTENT_TYPE, content_type),
             (
@@ -436,7 +467,128 @@ pub async fn photo_response<B: Backend>(
         ],
         bytes,
     )
-        .into_response())
+        .into_response()
+}
+
+/// 元の写真の幅（ピクセル）の上限。JPEG・PNG・WebP の幅は、これを超えない。
+const MAX_PHOTO_WIDTH: i64 = 65_535;
+
+/// 写真の小さな版を足す（画面の JavaScript が、写真を追加した後に送る。Issue #52）。`width` は、元の写真を向きのとおりに置いたときの幅。
+///
+/// 1. デモでないか、大きさ、形（メタデータの無い JPEG で、長い辺が [`MAX_THUMBNAIL_EDGE`] まで）を確かめる（D1 も R2 も使わない）。
+/// 2. D1 で、小さな版の枠を取る。ワークスペースの写真の合計の上限に、元の写真と合わせて数える。1 枚の写真に 1 つまで。
+///    1 日の追加の回数には数えない（元の写真と合わせて 1 回の追加とする）。
+/// 3. R2 に書く。失敗したら、枠を返す。
+/// 4. 画面に出すものにする。書いている間に写真が消されていれば、R2 のデータを消す。
+///
+/// 2 から 4 は、送り手との接続が切れても最後まで動かす（[`Backend::run_to_completion`]）。
+/// それでも 3 の後に止められると、枠を取ったまま（合計に数えたまま）画面に出さない小さな版が残る。写真を消すと一緒に消える。
+pub async fn add_thumbnail<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    recipe: &RecipeId,
+    photo: &PhotoId,
+    bytes: Vec<u8>,
+    width: i64,
+) -> Result<(), ApiError> {
+    deny_demo(backend, workspace)?;
+    if bytes.len() > MAX_THUMBNAIL_BYTES {
+        return Err(ApiError::PayloadTooLarge);
+    }
+    let (thumbnail_width, thumbnail_height) =
+        thumbnail::jpeg_size(&bytes).ok_or(ApiError::InvalidThumbnail)?;
+    if thumbnail_width.max(thumbnail_height) > MAX_THUMBNAIL_EDGE {
+        return Err(ApiError::InvalidThumbnail);
+    }
+    if !(1..=MAX_PHOTO_WIDTH).contains(&width) {
+        return Err(ApiError::InvalidBody);
+    }
+    // 500,000 以下なので i64 に収まる。
+    let size = i64::try_from(bytes.len()).map_err(|_| ApiError::PayloadTooLarge)?;
+    let task = store_thumbnail(
+        backend.clone(),
+        workspace.clone(),
+        recipe.clone(),
+        photo.clone(),
+        bytes,
+        size,
+        (i64::from(thumbnail_width), width),
+    );
+    run_to_completion_or_internal(backend, task, "写真の小さな版を足す").await
+}
+
+/// [`add_thumbnail`] の 2 から 4。
+async fn store_thumbnail<B: Backend>(
+    backend: B,
+    workspace: WorkspaceId,
+    recipe: RecipeId,
+    photo: PhotoId,
+    bytes: Vec<u8>,
+    size: i64,
+    widths: (i64, i64),
+) -> Result<(), ApiError> {
+    match backend
+        .reserve_thumbnail(
+            &workspace,
+            &recipe,
+            &photo,
+            size,
+            MAX_PHOTO_BYTES_PER_WORKSPACE,
+        )
+        .await?
+    {
+        ThumbnailReserve::Reserved => {}
+        ThumbnailReserve::PhotoNotFound => return Err(ApiError::PhotoNotFound),
+        ThumbnailReserve::AlreadyExists => return Err(ApiError::ThumbnailExists),
+        ThumbnailReserve::WorkspaceFull => return Err(ApiError::PhotoStorageLimitReached),
+    }
+    let key = thumbnail_key(&workspace, &recipe, photo.as_str());
+    if let Err(error) = backend
+        .put_object(
+            &key,
+            PhotoBody::Bytes(bytes),
+            PhotoFormat::Jpeg.content_type(),
+        )
+        .await
+    {
+        log_error(&error);
+        if let Err(release) = backend
+            .release_thumbnail(&workspace, &recipe, &photo, size)
+            .await
+        {
+            log_error(&release);
+        }
+        return Err(ApiError::Internal);
+    }
+    if !backend
+        .finish_thumbnail(&workspace, &recipe, &photo, size, widths)
+        .await?
+    {
+        // 書いている間に写真が消されたか、消している途中である。小さな版だけが R2 に残らないよう消す。
+        backend.delete_objects(vec![key]).await?;
+        return Err(ApiError::PhotoNotFound);
+    }
+    Ok(())
+}
+
+/// 写真の小さな版のデータの応答（画面だけ）。小さな版が無ければ `404`。
+pub async fn thumbnail_response<B: Backend>(
+    backend: &B,
+    workspace: &WorkspaceId,
+    recipe: &RecipeId,
+    photo: &PhotoId,
+) -> Result<Response, ApiError> {
+    let Some(row) = backend.get_photo(workspace, recipe, photo).await? else {
+        return Err(ApiError::PhotoNotFound);
+    };
+    if row.thumbnail_width.is_none() {
+        return Err(ApiError::PhotoNotFound);
+    }
+    let key = thumbnail_key(workspace, recipe, &row.id);
+    let Some(bytes) = backend.get_object(&key).await? else {
+        return Err(ApiError::PhotoNotFound);
+    };
+    Ok(file_response(PhotoFormat::Jpeg.content_type(), bytes))
 }
 
 /// `DELETE /api/recipes/{id}/photos/{photo_id}`: 写真を消し、`204` を返す。
@@ -467,8 +619,8 @@ pub async fn remove<B: Backend>(
     if !backend.hide_photo(workspace, recipe, photo, now).await? {
         return Err(ApiError::PhotoNotFound);
     }
-    let key = object_key(workspace, recipe, photo.as_str());
-    if let Err(error) = backend.delete_objects(vec![key]).await {
+    let keys = object_keys(workspace, recipe, photo.as_str()).to_vec();
+    if let Err(error) = backend.delete_objects(keys).await {
         log_error(&error);
         // 元に戻せなければ、隠れたまま残り、自動削除が片付ける。
         // 間にレシピかワークスペースの削除が印を付け直していれば、その削除に任せて戻さない。
@@ -486,8 +638,8 @@ pub async fn remove<B: Backend>(
 /// 写真の本文を 1 時間より長く送り続けると、追加の途中で片付けられ、その写真は `404`（`photo_not_found`）になる。
 pub const PENDING_CLEANUP_AFTER_MILLIS: i64 = 60 * 60 * 1_000;
 
-/// 定期実行の 1 回で片付ける、1,000 行（[`MAX_KEYS_PER_DELETE`]）ずつのまとまりの数の上限。残りは次の実行に回す。
-pub const MAX_PENDING_BATCHES_PER_RUN: i64 = 2;
+/// 定期実行の 1 回で片付ける、500 行（[`MAX_PHOTOS_PER_DELETE`]。R2 のキーは 1,000）ずつのまとまりの数の上限。残りは次の実行に回す。
+pub const MAX_PENDING_BATCHES_PER_RUN: i64 = 4;
 /// [`clean_pending`] が 1 回に使う D1 と R2 の呼び出しの数の最大。選ぶ 1 回と、まとまりごとに R2 と D1 の 1 回ずつ。
 /// 自動削除の 1 回の実行の呼び出しの数（[`crate::workspace::CLEANUP_SUBREQUESTS`]）に入る。
 pub const PENDING_CLEANUP_SUBREQUESTS: i64 = 1 + 2 * MAX_PENDING_BATCHES_PER_RUN;
@@ -508,12 +660,12 @@ pub struct PendingCleanup {
 /// 定期実行（自動削除）で呼ぶ。書き込みか削除の途中で失敗して、印が付いたまま残った写真の行を、R2 のデータと一緒に消す。
 ///
 /// R2 を先に消す（[`remove`] と同じ理由）。R2 にデータが無くても（書く前に失敗した）、R2 の削除は失敗しない。
-/// R2 のデータを 1 回の削除で消せる数（1,000）ずつまとめて消し、消せた分の行を D1 の batch でまとめて消す。
+/// R2 のデータ（元の写真と小さな版）を 1 回の削除で消せる数（写真 500 枚、キー 1,000）ずつまとめて消し、消せた分の行を D1 の batch でまとめて消す。
 /// D1 の batch は、中の文の数によらず 1 回のクエリに数えられる。
 /// 自動削除の 1 回の実行で呼べる D1 と R2 の数に上限がある（[`crate::workspace::MAX_SUBREQUESTS_PER_RUN`]）ので、
 /// 1 回に片付けるのは [`MAX_PENDING_BATCHES_PER_RUN`] まとまりまでにし（選び方は [`crate::workspace::pick_for_run`]）、残りは次の実行に回す
 /// （呼び出しの数は [`PENDING_CLEANUP_SUBREQUESTS`] まで）。
-/// 失敗した行は残し、次の実行でもう一度試す。batch が失敗すると、その 1,000 行までの行がすべて残る
+/// 失敗した行は残し、次の実行でもう一度試す。batch が失敗すると、その 500 行までの行がすべて残る
 /// （R2 のデータはもう無いが、行は隠れたまま上限に数えられる）。
 /// 消すときは、選んだときの条件（印を付けた日時）を D1 で確かめ直し、選んだ後に印が外れた行は消さない。
 pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup {
@@ -544,8 +696,8 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
         };
         targets.push((workspace, recipe, photo));
     }
-    // 1,000 と 2 は usize に収まる。
-    let per_delete = usize::try_from(MAX_KEYS_PER_DELETE).unwrap_or(1);
+    // 1 枚の写真で、元の写真と小さな版の 2 つのキーを消す。500 と 2 は usize に収まる。
+    let per_delete = usize::try_from(MAX_PHOTOS_PER_DELETE).unwrap_or(1);
     let per_run = usize::try_from(MAX_PENDING_BATCHES_PER_RUN).unwrap_or(1) * per_delete;
     // 選ぶ SQL は順番を決めないので、並べてから選ぶ（失敗し続ける行が、ほかの行を毎回後に回さないように。pick_for_run）。
     targets.sort_by(|a, b| {
@@ -556,7 +708,7 @@ pub async fn clean_pending<B: Backend>(backend: &B, now: i64) -> PendingCleanup 
     for chunk in targets.chunks(per_delete) {
         let keys = chunk
             .iter()
-            .map(|(workspace, recipe, photo)| object_key(workspace, recipe, photo.as_str()))
+            .flat_map(|(workspace, recipe, photo)| object_keys(workspace, recipe, photo.as_str()))
             .collect();
         // 失敗の理由は、BackendError を ApiError に変えるところでログに出している。
         if delete_objects(backend, keys).await.is_err() {
@@ -584,16 +736,18 @@ pub async fn remove_objects<B: Backend>(
 ) -> Result<(), ApiError> {
     let keys = photos
         .iter()
-        .map(|photo| object_key(workspace, recipe, photo))
+        .flat_map(|photo| object_keys(workspace, recipe, photo))
         .collect();
     delete_objects(backend, keys).await
 }
 
 /// R2 の 1 回の削除で消せるキーの数。
 pub const MAX_KEYS_PER_DELETE: i64 = 1_000;
+/// R2 の 1 回の削除で消せる写真の数（1 枚で、元の写真と小さな版の 2 つのキーを消す。[`object_keys`]）。
+pub const MAX_PHOTOS_PER_DELETE: i64 = MAX_KEYS_PER_DELETE / 2;
 // 1 つのワークスペースの写真を、1 回の削除で消せるようにする（上限を上げたら、ここで気付く）。
 const _: () = assert!(
-    crate::recipe::MAX_RECIPES_PER_WORKSPACE * MAX_PHOTOS_PER_RECIPE <= MAX_KEYS_PER_DELETE
+    crate::recipe::MAX_RECIPES_PER_WORKSPACE * MAX_PHOTOS_PER_RECIPE <= MAX_PHOTOS_PER_DELETE
 );
 
 /// 写真のデータを、キーで R2 から消す。キーが無ければ R2 を呼ばない。

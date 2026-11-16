@@ -853,7 +853,7 @@ async fn failed_row_deletion_in_cleanup_keeps_all_rows_for_the_next_run() {
 #[tokio::test]
 async fn cleanup_handles_more_rows_than_one_delete_can_take() {
     let (backend, recipe) = setup().await;
-    // R2 と D1 を 1,000 行ずつまとめて消すので、2 回に分かれる数を入れる。
+    // R2 と D1 を 500 行（R2 のキーは元の写真と小さな版で 1,000）ずつまとめて消すので、3 回に分かれる数を入れる。
     for i in 0..1_001 {
         let id = format!("{i:032x}");
         backend.add_photo_row(WORKSPACE_A, &recipe, &id, 1);
@@ -1050,7 +1050,7 @@ async fn photo_whose_delete_failed_stays_hidden_if_a_deletion_remarked_it() {
 #[tokio::test]
 async fn pending_rows_that_keep_failing_do_not_block_the_others() {
     let (backend, recipe) = setup().await;
-    // 先頭の 2 つのまとまり（2,000 行）に、消すたびに失敗する行がある。
+    // 先頭の 4 つのまとまり（500 行ずつ、2,000 行）に、消すたびに失敗する行がある。
     // 本物では、ID の形は先に確かめるので、行ごとに失敗し続けることはまず無いが、選び方を確かめるために作る。
     for i in 0..5_000 {
         let id = format!("{i:032x}");
@@ -1058,11 +1058,14 @@ async fn pending_rows_that_keep_failing_do_not_block_the_others() {
         backend.mark_pending(&id, NOW);
     }
     let backend = FakeBackend {
-        undeletable_photos: vec![format!("{:032x}", 0), format!("{:032x}", 1_000)],
+        undeletable_photos: [0, 500, 1_000, 1_500]
+            .iter()
+            .map(|i| format!("{i:032x}"))
+            .collect(),
         ..backend
     };
     pass_cleanup_time(&backend);
-    // 最初の実行が、失敗する 2 つのまとまりから選び始める時刻にする（選び始める位置は、実行の番号 × 2,000 を行の数で割った余り）。
+    // 最初の実行が、失敗する 4 つのまとまりから選び始める時刻にする（選び始める位置は、実行の番号 × 2,000 を行の数で割った余り）。
     let interval = crate::workspace::CLEANUP_INTERVAL_MILLIS;
     while (backend.now.load(Ordering::Relaxed) / interval * 2_000) % 5_000 != 0 {
         backend.advance(interval);
