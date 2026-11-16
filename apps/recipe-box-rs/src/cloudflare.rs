@@ -1101,20 +1101,35 @@ impl Backend for CloudflareBackend {
         let content_type = content_type.to_owned();
         SendFuture::new(async move {
             let action = "写真を R2 に書き込めない";
-            let data = match body {
-                PhotoBody::Bytes(bytes) => Data::Bytes(bytes),
-                // 長さの分かるストリーム（FixedLengthStream の読む側）なので、R2 がそのまま読める。
-                PhotoBody::Stream(stream) => Data::ReadableStream(stream.readable.0),
+            // ストリームの本文は、流し始めた後に失敗すると取り消すので、先に R2 を用意する
+            // （用意できなければ、流さずに捨てた本文として取り消す。stream::PhotoStream の Drop）。
+            let bucket = bucket(&env)?;
+            let (data, readable) = match body {
+                PhotoBody::Bytes(bytes) => (Data::Bytes(bytes), None),
+                // 書き換えた頭と本文の残りを続けて流す、長さの分かるストリーム（FixedLengthStream の読む側）なので、
+                // R2 がそのまま読める。
+                PhotoBody::Stream(stream) => {
+                    let readable = stream
+                        .into_readable()
+                        .map_err(|e| backend_error(action, &worker::Error::from(e)))?;
+                    (Data::ReadableStream(readable.clone()), Some(readable))
+                }
             };
-            bucket(&env)?
+            let result = bucket
                 .put(key, data)
                 .http_metadata(HttpMetadata {
                     content_type: Some(content_type),
                     ..HttpMetadata::default()
                 })
                 .execute()
-                .await
-                .map_err(|e| backend_error(action, &e))?;
+                .await;
+            if let Err(error) = result {
+                // R2 が読まずに失敗したときは、本文の残りを取り消す（読み始めていれば、R2 の側で取り消される）。
+                if let Some(readable) = readable {
+                    crate::stream::cancel_readable(&readable);
+                }
+                return Err(backend_error(action, &error));
+            }
             Ok(())
         })
     }

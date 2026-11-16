@@ -338,8 +338,9 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 </ul>
 <h4 id="本文を-wasm-に写すときの-cpu-時間">本文を Wasm に写すときの CPU 時間</h4>
 <p>写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
-そこで、写真のバイト列をそのまま送る追加では、本文を読みためず、形式を決めるための先頭の数バイトだけを読み、残りはストリームのまま R2 に流します。
-測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> に、仕組みは <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a> と <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
+そこで、写真のバイト列をそのまま送る追加では、本文を読みためず、形式を決めてメタデータ（撮った場所など）を取り除くための頭の部分（画像のデータより前）だけを読み、残りはストリームのまま R2 に流します。
+頭の部分は Rust で、長さを変えずに書き換えます（向きだけを残し、ほかは 0 で埋める）。本文の全体を JavaScript に流して書き換えると、CPU 時間が 1 回 150〜200 ms 増えたためです。
+測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> と <a href="https://github.com/shoji9x9/recipe-box/issues/52">Issue #52</a> に、仕組みは <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a> と <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
 <h3 id="リクエストの流れ">リクエストの流れ</h3>
 <p><a href="/assets/guide/request-flow.svg"><img src="/assets/guide/request-flow.svg" alt="リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口に進む。ルートが無ければ 404 か 405、書き込みの回数・本文の大きさ・送り元が許す範囲になければ 429・413・403 で断る。通れば、ワークスペースを使うルートなら使うワークスペースを決め（API で ID が誤っていれば 400 か 404 で断る。画面で自分のワークスペースも共有のデモも無ければ「はじめる」画面へ移す）、ハンドラーが入力を確かめ（通らなければ断る）、D1・R2 を使う。上限などで失敗すれば断り、うまくいけば応答を返す"></a></p>
 <p>図の見方: 楕円は始まりと終わりです。紫のひし形は「はい」と「いいえ」で先が分かれる問いで、断る応答は必ずひし形から出ます。赤の四角はこのアプリのコードの処理です。処理の中で決まる失敗（D1 に書くときに数える上限など）は、処理の後の「うまくいったか？」から断ります。赤の破線は断る応答を返す流れで、色の見分けにくい人や白黒の印刷でも通常の流れと区別できるよう、色に加えて破線にしています。</p>
@@ -548,7 +549,7 @@ let results = db
 <h3 id="写真の保管">写真の保管</h3>
 <p>写真は R2 に置き、行（大きさ・形式など）を D1 に置きます。上限は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。
 R2 は無料の範囲を超えると課金されるので、R2 に書く前に D1 で上限を判定します。書く順序は次のとおりです。</p>
-<p><a href="/assets/guide/photo-add.svg"><img src="/assets/guide/photo-add.svg" alt="写真を追加するときの順序。Worker が先頭のバイトで形式を決め、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す"></a></p>
+<p><a href="/assets/guide/photo-add.svg"><img src="/assets/guide/photo-add.svg" alt="写真を追加するときの順序。Worker が頭の部分で形式を決めてメタデータを取り除き、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す"></a></p>
 <ul>
 <li>印の付いた写真は、画面と API に見せません。上限には数えるので、同時に追加されても上限を超えません。</li>
 <li>消すときは、行に印を付けて隠してから、R2 のデータを先に消し、D1 の行を消します。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためです。R2 の削除が失敗したら、印を外して元に戻します。</li>
@@ -679,7 +680,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <td>写真の受け取り</td>
 <td>multipart のふつうのフォームと、API はバイト列そのもの。<code>Content-Length</code> で先に断る</td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F%E3%81%AE-api">写真の API</a></td>
-<td>本文の上限、形式を先頭のバイトで決めること</td>
+<td>本文の上限、形式を頭の部分で決めること、メタデータを取り除くこと</td>
 </tr>
 <tr>
 <td>定期実行</td>

@@ -81,6 +81,18 @@ GitHub Actions（`deploy.yml`・`seed-demo.yml` など）は、公開リポジ�
 - 有料のプランでは、Workers の利用額の上限（spending limit）を設定でき、達すると新しい呼び出し（リクエストと Cron Trigger）を止められる。
   ただし数えるのは Workers のリクエストと CPU 時間の料金だけで、D1・R2・ログの料金は含まない（[公式の文書](https://developers.cloudflare.com/workers/platform/spend-management/)）。R2 には、利用を止める上限の設定が無い。
 
+## 写真のメタデータ
+
+写真の EXIF などには、撮った場所（GPS の位置）が入ることがある。写真はワークスペースの ID を知る人に見えるので、保存する前に取り除く（どの経路の追加でも同じ。仕組みは docs/spec.md の「写真」）。
+Worker の CPU 時間を抑えるため、ファイルの頭の部分（画像のデータより前）だけを書き換え、画像を展開しない。そのため、次のものは残りうる。
+
+- JPEG の、最初の画像の後ろ（EOI の後）にある 2 枚目の画像（スマートフォンの HDR のゲインマップや、MPF の画像など）と、それに付いた EXIF。
+- JPEG の、最初の画像のデータ（SOS）より後ろに置かれた APP セグメント（ふつうの写真には無い）。
+- PNG の、画像のデータ（IDAT）より後ろの文字のチャンク（`tEXt`・`zTXt`・`iTXt`）と `eXIf`。`eXIf` は仕様で IDAT より前に置くので、ふつうは消える。
+- WebP の、`VP8X` の印と食い違って置かれたメタデータ（印でメタデータを持つと分かる WebP と、拡張の無い形（`VP8 `・`VP8L`）の後ろにチャンクを付け足した WebP は断る）。
+
+画面の写真を追加する欄の近くに、残ることがあると書く。共有のデモの写真（`seed/photos/`）には、位置情報が無いことを確かめてある。
+
 ## ログ
 
 - Workers のログ（`wrangler.toml` の `[observability]`）を有効にし、アプリが `console` に出したもの（エラーなど）を、後から Cloudflare のダッシュボードで見られるようにする。

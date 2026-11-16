@@ -1116,6 +1116,7 @@ fn photo_alert(error: &ApiError) -> Option<&'static str> {
         ApiError::PayloadTooLarge => Some(PHOTO_TOO_LARGE),
         ApiError::InvalidBody => Some("写真を読めませんでした。もう一度選んで送ってください"),
         ApiError::UnsupportedPhotoType
+        | ApiError::UnsupportedPhotoMetadata
         | ApiError::PhotoLimitReached
         | ApiError::PhotoStorageLimitReached
         | ApiError::PhotoNotFound

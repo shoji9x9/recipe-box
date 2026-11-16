@@ -8,7 +8,7 @@ use axum::{
 use super::{
     TestResponse, WORKSPACE_A, WORKSPACE_B,
     fake::{FakeBackend, NOW},
-    send,
+    jpeg, jpeg_with_location, jpeg_with_orientation_only, send,
 };
 use crate::{
     recipe::{MAX_BODY_BYTES, MAX_RECIPES_PER_WORKSPACE},
@@ -1173,13 +1173,6 @@ async fn photo_bytes_can_be_sent_without_multipart() {
     assert_eq!(backend.objects.lock().unwrap().len(), 1);
 }
 
-/// JPEG の先頭のバイトで始まり、全体で `size` バイトのデータ。
-fn jpeg(size: usize) -> Vec<u8> {
-    let mut bytes = vec![0; size];
-    bytes[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
-    bytes
-}
-
 /// 詳細の画面にある写真の URL（`/recipes/<id>/photos/<photo_id>`）。
 fn photo_srcs(body: &str) -> Vec<String> {
     body.split(r#"<img src=""#)
@@ -1197,6 +1190,15 @@ async fn photo_can_be_added_shown_and_deleted_on_the_edit_page() {
     let response = screen_get(&backend, &edit, Some(&a)).await;
     assert!(response.body.contains("写真はありません"));
     assert!(response.body.contains(r#"enctype="multipart/form-data""#));
+    // 位置情報を取り除くことを、ファイルの欄の説明として書く。
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="photo-privacy""#)
+    );
+    assert!(response.body.contains(
+        r#"id="photo-privacy">写真の位置情報は、保存する前に取り除きます（一部の写真では残ることがあります）。</p>"#
+    ));
     // 写真の欄は、料理名などのフォームの外に置く（写真の操作は、料理名などの「保存する」とは別）。
     let (recipe_form, rest) = response.body.split_once("</form>").unwrap();
     assert!(recipe_form.contains(r#"name="name""#));
@@ -1291,6 +1293,18 @@ async fn photo_errors_are_shown_on_the_edit_page() {
             "写真は JPEG・PNG・WebP のどれかにしてください",
         ),
         (
+            // 頭の部分が途中で切れた JPEG。
+            Some(vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10]),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "壊れたファイルと、画像の前の情報が 1 MiB を超えるファイルは追加できません",
+        ),
+        (
+            // EXIF の印の付いた WebP。
+            Some(b"RIFF\x16\0\0\0WEBPVP8X\x0a\0\0\0\x08\0\0\0\0\0\0\0\0\0".to_vec()),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "撮った場所などの情報（EXIF・XMP）を含む WebP は追加できません",
+        ),
+        (
             Some(jpeg(crate::photo::MAX_PHOTO_BYTES + 1)),
             StatusCode::PAYLOAD_TOO_LARGE,
             "写真は 1 枚 4,000,000 バイト（約 4 MB）までです",
@@ -1309,6 +1323,25 @@ async fn photo_errors_are_shown_on_the_edit_page() {
         assert!(response.body.contains(r#"id="photos""#), "{message}");
     }
     assert!(backend.photos.lock().unwrap().is_empty());
+    assert!(backend.objects.lock().unwrap().is_empty());
+}
+
+/// フォーム（JavaScript の無い経路）と写真のバイト列そのもの（JavaScript の経路）のどちらでも、
+/// 位置情報を取り除いてから保存する。
+#[tokio::test]
+async fn location_is_removed_on_both_upload_paths() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let response = post_photo(&backend, &path, Some(&a), Some(&jpeg_with_location())).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let response = post_raw_photo(&backend, &path, &a, "image/jpeg", jpeg_with_location()).await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT, "{}", response.body);
+    let stored = backend.objects.lock().unwrap();
+    assert_eq!(stored.len(), 2);
+    for (bytes, _) in stored.values() {
+        assert_eq!(bytes, &jpeg_with_orientation_only());
+    }
 }
 
 /// 一覧の検索は、日本語の変換中に検索しないよう、`public/assets/search.js` が起こす search-input で検索する。
