@@ -101,7 +101,7 @@ jobs:
         run: mise run build
       - name: Apply migrations to local D1
         run: mise run migrate
-      # ローカルで Worker を起動し、実際の D1 を通して API を確かめる（scripts/smoke-test.sh）。
+      # ローカルで Worker を起動し、実際の D1 を通して API を確かめる（scripts/smoke-test.ts）。
       - name: Smoke test
         working-directory: apps/recipe-box-rs
         run: |
@@ -113,7 +113,7 @@ jobs:
             fi
             sleep 2
           done
-          if ! CHECK_RATE_LIMIT=1 ../../scripts/smoke-test.sh http://localhost:8787; then
+          if ! CHECK_RATE_LIMIT=1 node ../../scripts/smoke-test.ts http://localhost:8787; then
             echo "--- wrangler のログ ---"
             cat /tmp/wrangler.log
             exit 1
