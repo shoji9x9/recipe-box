@@ -153,7 +153,7 @@ GitHub の Settings → Environments に、次の値を置く。
 
 Environment `production` は、「Deployment branches and tags」を「Selected branches and tags」にし、`main` だけを許す。
 本番のトークンとデモの ID を、レビューを経て main に入ったコードにだけ渡すためである（ほかのブランチから `workflow_dispatch` で動かしたり、ブランチの workflow が `environment: production` を名乗ったりしても渡さない）。
-`deploy.yml` と `seed-demo.yml` も、ジョブの `if` で main 以外では動かない。
+これを守るのは Environment の設定である（ブランチの workflow は、自分の手順を書き換えられるため）。`deploy.yml` と `seed-demo.yml` は、誤って main 以外から手で動かしたときに気付けるよう、最初の手順で失敗する。
 
 ## リライトの比較の基準の環境
 

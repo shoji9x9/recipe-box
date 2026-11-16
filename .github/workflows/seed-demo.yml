@@ -23,8 +23,6 @@ defaults:
 jobs:
   seed:
     name: Seed demo workspace
-    # 本番の権限は main のコードにだけ渡す（deploy.yml と同じ）。
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # 書き込む API の回数の制限（60 秒に 30 回）で待つので、レシピ 80 件を消して入れ直すと 6 分ほどかかる。
     timeout-minutes: 30
@@ -32,6 +30,15 @@ jobs:
     permissions:
       contents: read # seed のデータとスクリプトを読む
     steps:
+      # main からだけ動かす（deploy.yml の Require main と同じ。守るのは Environment「production」の設定）。
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::デモの初期化は main からだけ動かす（今は $REF）"
+            exit 1
+          fi
       - name: Check secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

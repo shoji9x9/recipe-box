@@ -9,11 +9,15 @@ name: Claude review
 # 認証には Environment「claude-review」の secret の CLAUDE_CODE_OAUTH_TOKEN を使う。
 #
 # 公開リポジトリなので、PR には誰でもコメントできる。そのコメントの文をそのままモデルに読ませると、
-# 秘密情報を持つこの job で、書いた人の指示にモデルが従うおそれがある。そのため次のようにする。
-# - モデルに渡す前のコメントは、書き込み権限を持つ人（author_association が OWNER・MEMBER・COLLABORATOR）と、
-#   このレビューの bot（github-actions[bot]）のものだけにして、ファイルに書いておく。モデルにはコメントを読む道具を与えない。
-# - モデルには、ファイルを読んで送れる道具（gh pr comment の --body-file など）を与えない。
-#   PR の全体へのコメントの本文は structured output で返させ、後の step が決まった形で投稿する。
+# 秘密情報を持つこの job で、書いた人の指示にモデルが従うおそれがある。守りの中心は、モデルに渡す入力を信頼できるものに限ることで、次のようにする。
+# - 入力は、PR のタイトルと本文（同じリポジトリのブランチの PR だけが対象なので、書き込み権限を持つ人が書いたもの）、diff、
+#   持ち主と共同作業者（author_association が OWNER・COLLABORATOR。個人のリポジトリなので、共同作業者は書き込み権限を持つ）のコメント、
+#   このレビューの投稿（全体へのコメントは目印 <!-- claude-review --> の付いたもの。行へのコメントは github-actions[bot] のもの）だけにする。
+#   これらを checkout の外のファイルに書いておき、モデルにはコメントを読む道具を与えない。
+# - モデルの出力（全体へのコメントの本文と、行へのコメント）は公開される。モデルが操られても秘密情報を写せないよう、
+#   読めるファイルから環境変数（/proc）や一時ファイル・設定のディレクトリを除く。ファイルをそのまま送れる道具（gh pr comment の --body-file など）も与えず、
+#   全体へのコメントの本文は structured output で返させて、後の step が決まった形で投稿する。
+# - diff を読む道具は、この PR の番号の決まった形だけにする（ほかの PR やリポジトリの文を読ませない）。
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened, labeled]
@@ -51,30 +55,38 @@ jobs:
           ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 1
           persist-credentials: false
-      # モデルに渡すコメントを、書き込み権限を持つ人とこのレビューの bot のものだけにする（上の説明）。
-      # checkout の中に書く（モデルの道具が読める場所）。commit はしない。
-      - name: Collect comments from trusted authors
+      # モデルに渡す PR の情報とコメントを、信頼できるものだけにする（上の説明）。
+      # checkout の外（作業ディレクトリの親）に書く。PR の中のファイルと混ざらず、PR が置いたリンクにも左右されない。
+      - name: Collect PR context from trusted authors
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
-          trusted='select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR" or (.user.type == "Bot" and .user.login == "github-actions[bot]"))'
-          mkdir -p .review-context
+          people='(.author_association == "OWNER" or .author_association == "COLLABORATOR")'
+          bot='(.user.type == "Bot" and .user.login == "github-actions[bot]")'
+          dir="$GITHUB_WORKSPACE/../review-context"
+          mkdir -p "$dir"
           {
-            echo "# PR のコメント（書き込み権限を持つ人と、このレビューの bot のものだけ）"
+            echo "# PR の情報（持ち主・共同作業者と、このレビューの投稿だけ）"
             echo
+            echo "## PR のタイトル"
+            printf '%s\n\n' "$TITLE"
+            echo "## PR の本文"
+            printf '%s\n\n' "$BODY"
             echo "## PR の全体へのコメント"
             gh api --paginate "repos/$REPO/issues/$PR/comments" \
-              --jq ".[] | $trusted | \"### \\(.user.login)（\\(.created_at)）\\n\\n\\(.body)\\n\""
+              --jq ".[] | select($people or ($bot and (.body | startswith(\"<!-- claude-review -->\")))) | \"### \\(.user.login)（\\(.created_at)）\\n\\n\\(.body)\\n\""
             echo "## レビュー"
             gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
-              --jq ".[] | $trusted | select(.body != \"\") | \"### \\(.user.login)（\\(.submitted_at)）\\n\\n\\(.body)\\n\""
+              --jq ".[] | select($people) | select(.body != \"\") | \"### \\(.user.login)（\\(.submitted_at)）\\n\\n\\(.body)\\n\""
             echo "## 行へのコメント"
             gh api --paginate "repos/$REPO/pulls/$PR/comments" \
-              --jq ".[] | $trusted | \"### \\(.user.login)（\\(.created_at)、\\(.path):\\(.line // .original_line)、id \\(.id)、返信先 \\(.in_reply_to_id // \"なし\")）\\n\\n\\(.body)\\n\""
-          } > .review-context/comments.md
+              --jq ".[] | select($people or $bot) | \"### \\(.user.login)（\\(.created_at)、\\(.path):\\(.line // .original_line)、id \\(.id)、返信先 \\(.in_reply_to_id // \"なし\")）\\n\\n\\(.body)\\n\""
+          } > "$dir/pr.md"
       - uses: anthropics/claude-code-action@v1.0.269
         id: review
         with:
@@ -96,10 +108,11 @@ jobs:
             指摘には、先頭に【要対応】か【参考】を付けてください。
             - 【要対応】: 直すか、直さない理由の説明が要るもの（不具合、セキュリティ、docs/ の文書や AGENTS.md の決まりとの食い違い、足りないテスト）。
             - 【参考】: 修正を求めない気づきや提案。返信は求めません。
+            差分は `gh pr diff ${{ github.event.pull_request.number }}` で読めます。
             特定の行への【要対応】はインラインのコメントで書いてください。
             それ以外の指摘とまとめは、PR の全体へのコメントの本文として、structured output の `summary` に Markdown で書いてください（後の step が投稿します）。
             前のレビューの指摘に、すでに返信や修正で答えているものは、もう一度書かないでください。
-            前のコメントは `.review-context/comments.md` にあります（書き込み権限を持つ人とこのレビューの bot のものだけ）。
+            PR のタイトル・本文と前のコメントは `${{ github.workspace }}/../review-context/pr.md` にあります（持ち主・共同作業者と、このレビューの投稿だけ）。
             ほかの場所から PR のコメントを読まないでください。
             問題が無ければ、その旨を短く書いてください。
           # リポジトリの hooks や MCP の設定を読み込まず、使える道具をレビューに要るものだけにする。
@@ -107,8 +120,8 @@ jobs:
           claude_args: >-
             --setting-sources user
             --strict-mcp-config
-            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*)"
-            --disallowedTools "Edit,Write,WebFetch,WebSearch,NotebookEdit,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh api:*)"
+            --allowedTools "Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff ${{ github.event.pull_request.number }})"
+            --disallowedTools "Edit,Write,WebFetch,WebSearch,NotebookEdit,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh api:*),Read(//proc/**),Read(//tmp/**),Read(//etc/**),Read(//home/runner/work/_temp/**),Read(//home/runner/.*/**),Read(//home/runner/.*)"
             --json-schema '{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}'
       # モデルが返した本文を、PR の全体へのコメントとして投稿する。値は env で渡し、シェルの構文として読ませない。
       - name: Post review summary
@@ -122,5 +135,6 @@ jobs:
           set -euo pipefail
           body=$(jq -r '.summary // ""' <<<"$OUTPUT")
           if [ -n "$body" ]; then
-            printf '%s\n' "$body" | gh pr comment "$PR" --repo "$REPO" --body-file -
+            # 目印は、次のレビューが、このレビューの投稿だけを信頼して読むためのもの（上の Collect の step）。
+            printf '<!-- claude-review -->\n%s\n' "$body" | gh pr comment "$PR" --repo "$REPO" --body-file -
           fi

@@ -23,15 +23,23 @@ defaults:
 jobs:
   deploy:
     name: Deploy to Cloudflare Workers
-    # 本番の権限は、レビューを経て main に入ったコードにだけ渡す。Environment「production」も main だけに制限している
-    # （docs/development.md）。設定だけに頼らないよう、手で動かしたとき（workflow_dispatch）も main 以外では動かさない。
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
     permissions:
       contents: read # コードを読む
     steps:
+      # 本番の権限は、レビューを経て main に入ったコードにだけ渡す。それを守るのは Environment「production」の
+      # main だけを許す設定である（docs/development.md。ブランチの workflow はこの step を消せるので、ここでは守れない）。
+      # この step は、誤って main 以外から手で動かしたときに、黙って skip せずに失敗して気付けるようにするためのもの。
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::デプロイは main からだけ動かす（今は $REF）"
+            exit 1
+          fi
       - name: Check Cloudflare credentials
         id: cred
         env:
