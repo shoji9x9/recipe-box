@@ -1965,3 +1965,367 @@ async fn edit_form_errors_are_shown_even_if_the_photo_section_cannot_be_read() {
     assert!(response.body.contains("煮る"));
     assert!(!response.body.contains(r#"id="photos""#));
 }
+
+/// 書き込みの回数の制限に当たったら、「はじめる」画面に理由を出し、ワークスペースを作らない。
+#[tokio::test]
+async fn write_limit_on_start_shows_the_reason_on_the_landing_page() {
+    let backend = FakeBackend {
+        write_limited: true,
+        ..FakeBackend::default()
+    };
+    let response = screen_post(&backend, "/workspace", None, "").await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(response.content_type.starts_with("text/html"));
+    assert!(
+        response.body.contains("しばらく待って"),
+        "{}",
+        response.body
+    );
+    // エラーの画面ではなく、「はじめる」画面（作るボタンがある）。
+    assert!(
+        response.body.contains(r#"action="/workspace""#),
+        "{}",
+        response.body
+    );
+    assert!(
+        !response.body.contains("<title>エラー"),
+        "{}",
+        response.body
+    );
+    assert_eq!(set_cookies(&response), Vec::<String>::new());
+    assert!(backend.workspaces.lock().unwrap().is_empty());
+    assert!(backend.workspace_creations.lock().unwrap().is_empty());
+    assert_eq!(response.headers["hx-push-url"], "false");
+    assert_eq!(response.headers[header::CACHE_CONTROL], "no-store");
+}
+
+/// 書き込みの回数の制限に当たったら、「ワークスペース」の画面に理由を出し、切り替えない。
+#[tokio::test]
+async fn write_limit_on_switch_shows_the_reason_on_the_workspace_page() {
+    let backend = FakeBackend {
+        write_limited: true,
+        ..backend_with_workspaces()
+    };
+    let response = screen_post(
+        &backend,
+        "/workspace/switch",
+        Some(&cookie(WORKSPACE_A)),
+        &format!("id={WORKSPACE_B}"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        response.body.contains("しばらく待って"),
+        "{}",
+        response.body
+    );
+    // 「ワークスペース」の画面で、今の自分の ID を出したまま。
+    assert!(response.body.contains(WORKSPACE_A), "{}", response.body);
+    assert!(response.body.contains(r#"action="/workspace/switch""#));
+    assert_eq!(set_cookies(&response), Vec::<String>::new());
+    assert_eq!(response.headers["hx-push-url"], "false");
+}
+
+/// 書き込みの回数の制限に当たったら、登録と更新のフォームを、書きかけの入力を保って出し直し、理由を出す。
+#[tokio::test]
+async fn write_limit_keeps_the_recipe_form_input() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let limited = FakeBackend {
+        write_limited: true,
+        ..backend.clone()
+    };
+    // 入力に誤り（空の料理名）があっても、回数の制限を先に答える（API と同じ順）。
+    for form in [
+        "name=%E8%82%89%E3%81%98%E3%82%83%E3%81%8C&servings=3&steps=%E7%85%AE%E3%82%8B",
+        "name=&servings=3&steps=%E7%85%AE%E3%82%8B",
+    ] {
+        for target in ["/recipes", path.as_str()] {
+            let response = screen_post(&limited, target, Some(&a), form).await;
+            assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS, "{target}");
+            assert!(
+                response.body.contains("しばらく待って"),
+                "{}",
+                response.body
+            );
+            assert!(response.body.contains("煮る"), "{}", response.body);
+            assert!(response.body.contains(&format!(r#"action="{target}""#)));
+            assert!(!response.body.contains("入力に誤りがあります"));
+            assert_eq!(response.headers["hx-push-url"], "false");
+        }
+    }
+    // 保存していない。
+    let recipes = backend.recipes.lock().unwrap();
+    assert_eq!(recipes.len(), 1);
+    assert!(recipes.values().all(|recipe| recipe.name == "カレー"));
+}
+
+/// 回数の制限に当たり、本文も大きすぎるときは、フォームを読まずにエラーの画面で回数の制限を答える。
+#[tokio::test]
+async fn write_limit_with_too_large_body_is_answered_without_reading_the_form() {
+    let backend = FakeBackend {
+        write_limited: true,
+        ..backend_with_workspaces()
+    };
+    let mut request = screen_request(
+        &Method::POST,
+        "/recipes",
+        Some(&cookie(WORKSPACE_A)),
+        Some("name=x&servings=1"),
+    );
+    request.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        (MAX_BODY_BYTES + 1).to_string().parse().unwrap(),
+    );
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(response.body.contains("<title>エラー"), "{}", response.body);
+    assert!(!response.body.contains(r#"name="name""#));
+}
+
+/// フォームの無い書き込み（削除など）は、回数の制限に当たると、エラーの画面で断る。
+#[tokio::test]
+async fn write_limit_on_other_writes_shows_the_error_page() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let limited = FakeBackend {
+        write_limited: true,
+        ..backend.clone()
+    };
+    for target in [format!("{path}/delete"), "/workspace/delete".to_owned()] {
+        let form = format!("id={WORKSPACE_A}");
+        let response = screen_post(&limited, &target, Some(&a), &form).await;
+        assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS, "{target}");
+        assert!(response.body.contains("<title>エラー"), "{}", response.body);
+    }
+    assert_eq!(backend.recipes.lock().unwrap().len(), 1);
+    assert_eq!(backend.workspaces.lock().unwrap().len(), 2);
+}
+
+/// D1 の一時的な失敗で保存できなかったときも、書きかけの入力を保ってフォームを出し直す。
+#[tokio::test]
+async fn server_failure_on_save_keeps_the_recipe_form_input() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let broken = FakeBackend {
+        broken_recipe_write: true,
+        ..backend.clone()
+    };
+    for target in ["/recipes", path.as_str()] {
+        let response = screen_post(
+            &broken,
+            target,
+            Some(&a),
+            "name=x&servings=3&steps=%E7%85%AE%E3%82%8B",
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{target}"
+        );
+        assert!(response.body.contains("サーバーで問題が起きました"));
+        assert!(response.body.contains("煮る"), "{}", response.body);
+        assert!(response.body.contains(&format!(r#"action="{target}""#)));
+    }
+}
+
+/// 消されたレシピへの保存は、送り直しても保存できないので、エラーの画面にする。
+#[tokio::test]
+async fn saving_a_deleted_recipe_shows_not_found() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let response = screen_post(&backend, &format!("{path}/delete"), Some(&a), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let response = screen_post(&backend, &path, Some(&a), "name=x&servings=1").await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(response.body.contains("レシピが見つかりません"));
+    assert!(backend.recipes.lock().unwrap().is_empty());
+}
+
+/// 同じレシピを 2 つのタブで編集したときは、後から保存したほうが残る（楽観ロックをしない）。
+#[tokio::test]
+async fn later_save_wins_when_edited_in_two_tabs() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    for name in ["first", "second"] {
+        let form = format!("name={name}&servings=1");
+        let response = screen_post(&backend, &path, Some(&a), &form).await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER);
+    }
+    let response = screen_get(&backend, &path, Some(&a)).await;
+    assert!(response.body.contains("second"));
+    assert!(!response.body.contains("first"));
+}
+
+/// 画面の無いパスは、一覧に戻れる 404 のエラーの画面にし、画面と同じヘッダーを付ける。
+#[tokio::test]
+async fn unknown_page_shows_the_not_found_page() {
+    let backend = backend_with_workspaces();
+    for path in [
+        "/nope",
+        "/recipes/",
+        "/assets/nope.css",
+        "/workspace/switch/",
+    ] {
+        let response = screen_get(&backend, path, Some(&cookie(WORKSPACE_A))).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+        assert!(response.content_type.starts_with("text/html"), "{path}");
+        assert!(response.body.contains("ページが見つかりません"), "{path}");
+        assert!(response.body.contains(r#"href="/">一覧に戻る"#), "{path}");
+        let csp = response.headers[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("script-src 'self'"), "{csp}");
+        assert_eq!(response.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(response.headers[header::REFERRER_POLICY], "same-origin");
+        assert_eq!(response.headers[header::CACHE_CONTROL], "no-store");
+    }
+}
+
+/// POST だけのパスへの GET は、関係する画面へ移す。ほかの受け付けないメソッドは、405 のエラーの画面にする。
+#[tokio::test]
+async fn get_to_post_only_paths_moves_to_the_related_page() {
+    let backend = backend_with_workspaces();
+    let id = "0123456789abcdef0123456789abcdef";
+    let photo = "fedcba9876543210fedcba9876543210";
+    let cases = [
+        ("/recipes".to_owned(), "/".to_owned()),
+        ("/recipes/check".to_owned(), "/".to_owned()),
+        (format!("/recipes/{id}/delete"), format!("/recipes/{id}")),
+        (
+            format!("/recipes/{id}/photos"),
+            format!("/recipes/{id}/edit"),
+        ),
+        (
+            format!("/recipes/{id}/photos/{photo}/delete"),
+            format!("/recipes/{id}/edit"),
+        ),
+        // ID の形が正しくなければ、パスの文字を移り先に写さずに一覧へ移す。
+        (
+            "/recipes/%2F%2Fevil.example/delete".to_owned(),
+            "/".to_owned(),
+        ),
+        ("/recipes/xyz/photos".to_owned(), "/".to_owned()),
+        ("/workspace/switch".to_owned(), "/workspace".to_owned()),
+        ("/workspace/delete".to_owned(), "/workspace".to_owned()),
+        ("/workspace/demo".to_owned(), "/workspace".to_owned()),
+        ("/workspace/own".to_owned(), "/workspace".to_owned()),
+    ];
+    for (path, location) in cases {
+        let response = screen_get(&backend, &path, Some(&cookie(WORKSPACE_A))).await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER, "{path}");
+        assert_eq!(response.location, location, "{path}");
+        assert_eq!(
+            response.headers[header::CACHE_CONTROL],
+            "no-store",
+            "{path}"
+        );
+    }
+    // GET の無いパスでも、ほかのメソッドは 405 のエラーの画面にする。受け付けるメソッドは Allow で知らせる。
+    for (method, path) in [
+        (Method::PUT, format!("/recipes/{id}")),
+        (Method::DELETE, "/workspace".to_owned()),
+        (Method::POST, format!("/recipes/{id}/photos/{photo}")),
+        (Method::PUT, "/recipes/check".to_owned()),
+    ] {
+        let request = screen_request(&method, &path, Some(&cookie(WORKSPACE_A)), None);
+        let response = send(router(backend.clone()), request).await;
+        assert_eq!(
+            response.status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {path}"
+        );
+        assert!(response.content_type.starts_with("text/html"), "{path}");
+        assert!(response.body.contains("この方法では開けません"), "{path}");
+        assert!(!response.allow.is_empty(), "{path}");
+        assert_eq!(response.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    }
+}
+
+/// パスの ID が UTF-8 として読めないときも、API と同じく「見つからない」の 404 にする（axum の既定の 400 にしない）。
+#[tokio::test]
+async fn ids_that_are_not_utf8_are_not_found() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    let cases = [
+        (
+            Method::GET,
+            "/recipes/%ff".to_owned(),
+            "レシピが見つかりません",
+        ),
+        (
+            Method::GET,
+            "/recipes/%ff/edit".to_owned(),
+            "レシピが見つかりません",
+        ),
+        (
+            Method::POST,
+            "/recipes/%ff".to_owned(),
+            "レシピが見つかりません",
+        ),
+        (
+            Method::POST,
+            "/recipes/%ff/delete".to_owned(),
+            "レシピが見つかりません",
+        ),
+        (
+            Method::POST,
+            "/recipes/%ff/photos".to_owned(),
+            "レシピが見つかりません",
+        ),
+        (
+            Method::GET,
+            "/recipes/%ff/photos/x".to_owned(),
+            "レシピが見つかりません",
+        ),
+        (
+            Method::POST,
+            "/recipes/%ff/photos/x/delete".to_owned(),
+            "レシピが見つかりません",
+        ),
+        (Method::GET, format!("{path}/photos/%ff"), "見つかりません"),
+    ];
+    for (method, target, message) in cases {
+        let form = (method == Method::POST).then_some("name=x&servings=1");
+        let request = screen_request(&method, &target, Some(&a), form);
+        let response = send(router(backend.clone()), request).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{method} {target}");
+        assert!(
+            response.body.contains(message),
+            "{target}: {}",
+            response.body
+        );
+        assert!(!response.body.contains("Invalid URL"), "{target}");
+    }
+}
+
+/// 作った要求で同じ欄を 2 つ送っても、API の「JSON として読めない」ではなく、画面の言葉で答える。
+#[tokio::test]
+async fn unreadable_form_is_answered_in_screen_words() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let path = create_recipe(&backend, WORKSPACE_A, "カレー").await;
+    for target in ["/recipes", path.as_str(), "/recipes/check"] {
+        let response = screen_post(
+            &backend,
+            target,
+            Some(&a),
+            "name=x&servings=1&steps=a&steps=b",
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{target}");
+        assert!(
+            response.body.contains("フォームの内容を読めませんでした"),
+            "{}",
+            response.body
+        );
+        assert!(!response.body.contains("JSON"), "{target}");
+    }
+}
