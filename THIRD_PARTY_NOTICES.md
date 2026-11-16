@@ -1,10 +1,11 @@
 # 第三者の著作物の表示
 
 このリポジトリは、根の [LICENSE](LICENSE)（MIT License）で公開している。
-ただし、次のものは第三者の著作物で、それぞれの元のライセンスによる。ライセンスの全文は、入れた commit の `LICENSE` を、そのまま写している。
+ただし、次のものは第三者の著作物で、それぞれの元のライセンスによる。ライセンスの全文は、各節に書いた出典のファイルを写している。
 
 - `.claude/skills/security-audit/`（[cloudflare/security-audit-skill](#cloudflaresecurity-audit-skill)、MIT License）
 - `.claude/skills/modern-web-guidance/`（[GoogleChrome/modern-web-guidance](#googlechromemodern-web-guidance)、Apache License 2.0）
+- `apps/recipe-box-rs/public/assets/guide/*.svg` に埋め込まれたフォント（[Source Sans Pro](#source-sans-pro)、SIL Open Font License 1.1）
 
 `.claude/skills/` のほかの 4 つ（`pr-finalize-loop`・`dependabot-merge`・`dependabot-alert-issue`・`browser-test`）は、[shoji9x9/skills](https://github.com/shoji9x9/skills) から入れたもので、このリポジトリと同じ著作権者の MIT License による。
 ただし、それぞれの `scripts/skill-config/vendor/` にある jsonc-parser（`jsonc-parser.mjs`・`jsonc-parser.d.mts`）は Microsoft の著作物で、MIT License による。ライセンスの全文は、同じディレクトリの `LICENSE.md` にある。
@@ -267,7 +268,7 @@ SOFTWARE.
 - 著作権の表示（埋め込まれたフォントの name の表の copyright の欄）: `© 2010 - 2018 Adobe Systems Incorporated (http://www.adobe.com/), with Reserved Font Name ‘Source’.`
 - ライセンス: SIL Open Font License 1.1（全文は下）
 - 全文の出典: <https://github.com/adobe-fonts/source-sans> の、同じ版のタグ `2.045R-ro/1.095R-it`（commit `ce77773581f4d454f0fa985c073bb25c721bfcf5`）の `LICENSE.txt`。
-  改行を CRLF から LF に変えたほかは、そのまま写している。
+  改行を CRLF から LF に変えたほかは、行末の空白（PREAMBLE の `embedded,` の後）も含めて、そのまま写している。
 
 ```text
 Copyright 2010-2018 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'. All Rights Reserved. Source is a trademark of Adobe in the United States and/or other countries.
