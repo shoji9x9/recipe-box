@@ -19,6 +19,8 @@
     <script src="/assets/photo-upload.js" type="module"></script>
     {#- 一覧の検索で、日本語の入力の変換中は検索しない。入力を消すボタンも扱う。ES モジュール。 #}
     <script src="/assets/search.js" type="module"></script>
+    {#- hx-boost で画面が移った後のフォーカスと、Invoker Commands に対応していないブラウザでの削除のダイアログの開閉。ES モジュール。 #}
+    <script src="/assets/page.js" type="module"></script>
   </head>
   <body hx-boost="true">
     <header>
@@ -27,7 +29,7 @@
     </header>
     {#- 共有のデモを見ている間は、どの画面にも出す。 #}
     {%- if layout.demo_shared %}
-    <section class="demo-banner">
+    <section class="demo-banner" aria-label="共有のデモ">
       <p>誰でも見て編集できる、共有のデモです。個人情報や、人に見られて困ることを書かないでください。デモは毎日リセットします。</p>
       <form method="post" action="/workspace">
         <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
@@ -35,7 +37,7 @@
     </section>
     {%- endif %}
     {%- if layout.demo_visiting %}
-    <section class="demo-banner">
+    <section class="demo-banner" aria-label="共有のデモ">
       <p>共有のデモを表示しています。ここでの登録や編集は、誰にでも見えます。1 時間たつと、自分のレシピ帳に戻ります。</p>
       <form method="post" action="/workspace/own">
         <button type="submit" class="primary">自分のレシピ帳に戻る</button>
@@ -48,14 +50,16 @@
         {%- block head_actions %}{% endblock %}
       </div>
       {#- ページ全体へのメッセージ。自動では消さない。
-          編集の画面で写真を追加・削除したとき、画面の JavaScript（photo-upload.js）は、ここと写真の欄だけを入れ替える。 #}
+          編集の画面で写真を追加・削除したとき、画面の JavaScript（photo-upload.js）は、ここと写真の欄だけを入れ替える。
+          知らせの入れ物（role="status" と role="alert"）は、知らせが無くても置き、JavaScript は中身だけを変える。
+          スクリーンリーダーは、入れ物が前からあって中身が変わったときに読み上げ、知らせごと新しく入れた入れ物は読み上げないことがあるため。 #}
       <div id="messages" class="messages">
-        {%- if let Some(message) = layout.flash %}
-        <p class="message success" role="status">{{ message }}</p>
-        {%- endif %}
-        {%- if let Some(message) = layout.alert %}
-        <p class="message error" role="alert">{{ message }}</p>
-        {%- endif %}
+        <div id="messages-status" role="status">
+          {%- if let Some(message) = layout.flash %}<p class="message success">{{ message }}</p>{% endif -%}
+        </div>
+        <div id="messages-alert" role="alert">
+          {%- if let Some(message) = layout.alert %}<p class="message error">{{ message }}</p>{% endif -%}
+        </div>
       </div>
       {%- block content %}{% endblock %}
     </main>

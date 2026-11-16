@@ -15,7 +15,7 @@
     <li>
       <img src="/recipes/{{ section.recipe_id }}/photos/{{ photo.id }}" alt="{{ section.recipe_name }}の写真 {{ loop.index }}" loading="lazy">
       {%- if section.editable %}
-      {%- call dialog::delete_dialog("delete-photo-{}"|format(photo.id), "写真を削除", "写真を削除しますか？", "{} 枚目の写真を削除します。元には戻せません。"|format(loop.index), "/recipes/{}/photos/{}/delete"|format(section.recipe_id, photo.id)) %}{% endcall %}
+      {%- call dialog::delete_dialog("delete-photo-{}"|format(photo.id), "写真を削除", "写真を削除しますか？", "{} 枚目の写真を削除します。元には戻せません。"|format(loop.index), "/recipes/{}/photos/{}/delete"|format(section.recipe_id, photo.id), "{} 枚目の写真を削除"|format(loop.index)) %}{% endcall %}
       {%- endif %}
     </li>
     {%- endfor %}
@@ -31,6 +31,8 @@
       <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp">
       <button type="submit">追加する</button>
     </div>
+    {#- 送っている間などの知らせ。photo-upload.js が中身だけを変える（入れ物を前から置いておき、読み上げられるようにする）。 #}
+    <p class="note" role="status" data-photo-status></p>
   </form>
   {%- else %}
   <p class="note">写真は {{ section.max_photos }} 枚まで付けられます。追加するときは、どれかを削除してください。</p>
