@@ -21,12 +21,11 @@ rust: "Rust\n（stream.rs・metadata.rs）" {class: app}
 r2: R2 {class: store}
 
 runtime -> rust: リクエストを渡す（本文はまだ読まない）
-rust -> js: 本文の先頭を読むよう指示\n（readAtLeast）
-js -> rust: 読んだ先頭を返す {class: result}
+rust -> js: 本文の先頭だけを読むよう指示\n（readAtLeast）
+js -> rust: 先頭だけを返す\n（残りは Rust に渡さない） {class: result}
 rust -> rust: metadata.rs が、先頭の位置情報などを\n0 で埋める {class: key}
-rust -> js: 書き換えた先頭を渡し、\nR2 へ流すストリームを作るよう指示\n（joinPhoto）
+rust -> js: 書き換えた先頭だけを渡し、\nR2 へ流すストリームを作るよう指示\n（joinPhoto）
 js -> rust: R2 に渡すストリームを返す\n（まだ何も流れていない） {class: result}
 rust -> r2: ストリームを渡して書くよう指示（put）
-js -> r2: R2 が読み始めると、\n書き換えた先頭と、読みすぎた分が流れる
-runtime -> r2: 本文の残りを pipeTo で流す\n（JavaScript の関数も Wasm も通らない） {class: key}
+runtime -> r2: 本文の残りを pipeTo で流す\n（先頭を書き終えると自動で始まる。\nJavaScript の関数も Wasm も通らない） {class: key}
 r2 -> rust: 書けた {class: result}
