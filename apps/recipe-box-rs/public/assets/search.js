@@ -12,6 +12,10 @@
 // 値が同じなら htmx の changed が 1 回の検索にまとめる。
 // htmx のイベントの絞り込み（[...]）は、eval を禁じている（htmx-config の allowEval）ので使わない。
 //
+// htmx は、search-input から 300 ms 待ってから、その時の欄の値で検索する。変換を始めた最初の英字（「k」など）で
+// search-input が起きた後、待つ間に「かr」のような変換中の日本語になることがある。そこで、検索を送る直前
+// （htmx:confirm）にも確かめ、変換中で ASCII でない文字を含むなら送らない。確定したときに改めて検索する。
+//
 // 入力を消すボタン（data-search-clear）も扱う。ブラウザが出す ×（Tab で選べない）の代わりに置いている。
 //
 // ES モジュールとして読み込む（base.html の <script type="module">）。判定の関数は、単体テスト
@@ -52,6 +56,15 @@ export function searchesOnInput(event, value) {
 }
 
 /**
+ * 検索を送ってよいか。変換中で、欄の値が ASCII でない文字を含むなら送らない。
+ * @param {boolean} composing 変換中か
+ * @param {string} value 欄の今の値
+ */
+export function allowsRequest(composing, value) {
+  return !composing || ASCII_ONLY.test(value);
+}
+
+/**
  * 入力を消すボタンが押されたら、外側の検索のフォームの欄を空にして絞り込まない一覧にし、欄にフォーカスを戻す。
  * ボタンは、JavaScript が動かないときのために別のフォーム（templates/list.html の clear-search）を送るので、送らせない。
  * 検索は、打ったときと同じ search-input で起こす。changed が覚える前の値も空になり、同じ文字を打ち直しても検索する。
@@ -72,7 +85,17 @@ export function clearOnClick(event) {
   return true;
 }
 
+// 変換中の検索の欄。compositionstart から compositionend まで。
+/** @type {WeakSet<HTMLInputElement>} */
+const composing = new WeakSet();
+
 // htmx がページを入れ替えても効くよう、document で受ける。
+document.addEventListener("compositionstart", (event) => {
+  const input = searchInput(event.target);
+  if (input) {
+    composing.add(input);
+  }
+});
 document.addEventListener("input", (event) => {
   const input = searchInput(event.target);
   if (input && searchesOnInput(event, input.value)) {
@@ -82,7 +105,14 @@ document.addEventListener("input", (event) => {
 document.addEventListener("compositionend", (event) => {
   const input = searchInput(event.target);
   if (input) {
+    composing.delete(input);
     search(input);
+  }
+});
+document.addEventListener("htmx:confirm", (event) => {
+  const input = searchInput(event.target);
+  if (input && !allowsRequest(composing.has(input), input.value)) {
+    event.preventDefault();
   }
 });
 document.addEventListener("click", clearOnClick);

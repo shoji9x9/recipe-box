@@ -2,15 +2,15 @@
 // happy-dom の DOM に検索のフォームを置き、input・compositionend・click を起こして、search-input が起きるかを確かめる。
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { clearOnClick, searchesOnInput } from "../public/assets/search.js";
+import { allowsRequest, searchesOnInput } from "../public/assets/search.js";
 
-// 読み込んだときに、document に input・compositionend・click の受け手を付ける（モジュールの最後）。
+// 読み込んだときに、document に compositionstart・input・compositionend・htmx:confirm・click の受け手を付ける（モジュールの最後）。
 
 /** templates/list.html と同じ形の検索のフォーム。 */
 function render(value: string): { input: HTMLInputElement; clear: HTMLButtonElement; searches: string[] } {
   document.body.innerHTML = `
     <form method="get" action="/" role="search" class="search">
-      <input id="q" type="search" name="q" value="${value}" placeholder="料理名で探す" data-search-input>
+      <input id="q" type="search" name="q" placeholder="料理名で探す" data-search-input>
       <button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す"><svg aria-hidden="true"><path d=""/></svg></button>
       <button type="submit">探す</button>
     </form>
@@ -20,6 +20,7 @@ function render(value: string): { input: HTMLInputElement; clear: HTMLButtonElem
   if (!input || !clear) {
     throw new Error("検索のフォームが無い");
   }
+  input.value = value;
   const searches: string[] = [];
   input.addEventListener("search-input", () => searches.push(input.value));
   return { input, clear, searches };
@@ -111,18 +112,40 @@ describe("入力を消すボタン", () => {
   test("ほかのボタンでは、何もしない", () => {
     const { input, searches } = render("カレー");
     const submit = document.querySelector<HTMLButtonElement>("button:not([data-search-clear])");
-    if (!submit) {
-      throw new Error("探すボタンが無い");
-    }
-    let handled: boolean | null = null;
     // 探すボタンのフォームの送信は、happy-dom でページを移らせないよう止める。
-    submit.addEventListener("click", (event) => {
-      handled = clearOnClick(event);
-      event.preventDefault();
-    });
-    submit.click();
-    expect(handled).toBe(false);
+    submit?.addEventListener("click", (event) => event.preventDefault());
+    submit?.click();
     expect(input.value).toBe("カレー");
     expect(searches).toEqual([]);
+  });
+});
+
+describe("検索を送る直前の確かめ（htmx:confirm）", () => {
+  test.each([
+    { composing: false, value: "おにぎり", expected: true },
+    { composing: true, value: "かr", expected: false },
+    { composing: true, value: "k", expected: true },
+  ])("変換中=$composing・値「$value」なら送る=$expected", ({ composing, value, expected }) => {
+    expect(allowsRequest(composing, value)).toBe(expected);
+  });
+
+  /** htmx が検索を送る直前に起こす htmx:confirm を起こし、止められたかを返す。 */
+  function confirm(input: HTMLInputElement): boolean {
+    const event = new CustomEvent("htmx:confirm", { bubbles: true, cancelable: true });
+    input.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  test("最初の英字で検索が始まっても、送る時に変換中の日本語なら送らず、確定したら検索する", () => {
+    const { input, searches } = render("");
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    type(input, "k", true);
+    expect(searches).toEqual(["k"]);
+    // htmx が 300 ms 待つ間に、変換中の日本語になった。
+    type(input, "かr", true);
+    expect(confirm(input)).toBe(true);
+    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    expect(searches).toEqual(["k", "かr"]);
+    expect(confirm(input)).toBe(false);
   });
 });

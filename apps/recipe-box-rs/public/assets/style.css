@@ -327,6 +327,8 @@ button.primary.danger-fill {
   }
 
   & input {
+    /* 入力を消すボタンと探すボタンを並べても、狭い画面で横にはみ出さないよう、欄の幅を縮められるようにする */
+    min-width: 0;
     min-height: var(--control-height);
     padding: 0;
     border: none;
