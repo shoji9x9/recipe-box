@@ -1,6 +1,7 @@
 {#- 編集の画面の写真の欄（form.html が section を渡して include する）。料理名などのフォームの外に置く。
     写真は、追加・削除したときにすぐ保存する（料理名などの「保存する」とは別の操作）。
     JavaScript が動くときは、photo-upload.js が追加と削除を送り、この欄（#photos）と知らせ（#messages）だけを入れ替える。
+    追加した写真には、photo-upload.js が小さな版（data-thumbnail-edge・data-thumbnail-bytes まで）を作って送る。
     書きかけの料理名などは消えない。動かなければ、普通のフォームとして送り、編集の画面に戻る（書きかけの入力は消える）。 #}
 <section class="section" id="photos" data-photo-section aria-labelledby="photos-title">
   <h2 id="photos-title">写真</h2>
@@ -13,7 +14,8 @@
   <ul class="photos">
     {%- for photo in section.photos %}
     <li>
-      <img src="/recipes/{{ section.recipe_id }}/photos/{{ photo.id }}" alt="{{ section.recipe_name }}の写真 {{ loop.index }}" loading="lazy">
+      {%- let photo_path = "/recipes/{}/photos/{}"|format(section.recipe_id, photo.id) %}
+      <img {% if let (Some(thumbnail_width), Some(width)) = (photo.thumbnail_width, photo.width) %}src="{{ photo_path }}/thumbnail" srcset="{{ photo_path }}/thumbnail {{ thumbnail_width }}w, {{ photo_path }} {{ width }}w" sizes="(max-width: 359px) calc(100vw - 48px), 240px"{% else %}src="{{ photo_path }}"{% endif %} alt="{{ section.recipe_name }}の写真 {{ loop.index }}" loading="lazy">
       {%- if section.editable %}
       {%- call dialog::delete_dialog("delete-photo-{}"|format(photo.id), "写真を削除", "写真を削除しますか？", "{} 枚目の写真を削除します。元には戻せません。"|format(loop.index), "/recipes/{}/photos/{}/delete"|format(section.recipe_id, photo.id), "{} 枚目の写真を削除"|format(loop.index)) %}{% endcall %}
       {%- endif %}
@@ -25,7 +27,8 @@
   <p class="note">共有のデモでは、写真を追加・削除できません。</p>
   {%- else if section.remaining > 0 %}
   <form method="post" action="/recipes/{{ section.recipe_id }}/photos" enctype="multipart/form-data" class="photo-form"
-    data-photo-upload data-remaining="{{ section.remaining }}" data-max-bytes="{{ section.max_photo_bytes }}" data-too-large="{{ section.photo_too_large }}">
+    data-photo-upload data-remaining="{{ section.remaining }}" data-max-bytes="{{ section.max_photo_bytes }}" data-too-large="{{ section.photo_too_large }}"
+    data-thumbnail-edge="{{ section.thumbnail_edge }}" data-thumbnail-bytes="{{ section.thumbnail_bytes }}">
     <label for="photo">写真を追加（JPEG・PNG・WebP、1 枚 4 MB まで、{{ section.max_photos }} 枚まで）</label>
     <div class="row">
       <input id="photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" aria-describedby="photo-privacy">

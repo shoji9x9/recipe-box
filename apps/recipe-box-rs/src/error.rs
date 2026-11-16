@@ -49,6 +49,10 @@ pub enum ApiError {
     UnsupportedPhotoType,
     /// メタデータ（EXIF・XMP）を持つと印で分かる WebP。頭だけでは取り除けないので断る（[`crate::metadata`]）。
     UnsupportedPhotoMetadata,
+    /// 写真の小さな版が JPEG でないか、大きさ（長い辺）が上限を超える（画面だけ。メタデータは 0 で埋める。[`crate::thumbnail`]）。
+    InvalidThumbnail,
+    /// 写真には、もう小さな版がある（画面だけ）。
+    ThumbnailExists,
     /// 共有のデモでは、写真を追加・削除できない。
     DemoPhotosDisabled,
     /// 共有のデモのワークスペースは削除できない。
@@ -80,6 +84,8 @@ impl ApiError {
     }
 
     /// 状態コード・機械向けのコード・人向けの説明。画面のエラーの表示にも使う。
+    // 失敗の種類ごとに 1 つずつ並べた表なので、分けずに 1 つの関数に置く。
+    #[allow(clippy::too_many_lines)]
     pub fn parts(&self) -> (StatusCode, &'static str, &'static str) {
         match self {
             Self::WorkspaceIdMissing => (
@@ -150,6 +156,16 @@ impl ApiError {
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_photo_metadata",
                 "撮った場所などの情報（EXIF・XMP）を含む WebP は追加できません。JPEG か PNG にして追加してください",
+            ),
+            Self::InvalidThumbnail => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "invalid_thumbnail",
+                "写真の小さな版は、JPEG で、長い辺が 1280 ピクセルまでにしてください",
+            ),
+            Self::ThumbnailExists => (
+                StatusCode::CONFLICT,
+                "thumbnail_exists",
+                "この写真には、もう小さな版があります",
             ),
             Self::DemoPhotosDisabled => (
                 StatusCode::FORBIDDEN,
@@ -247,4 +263,19 @@ pub(crate) async fn run_to_completion_or_internal<B: Backend, T: Send + 'static>
         return Err(ApiError::Internal);
     };
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiError;
+
+    #[test]
+    fn thumbnail_message_matches_the_limit() {
+        let (_, _, message) = ApiError::InvalidThumbnail.parts();
+        let edge = crate::thumbnail::MAX_THUMBNAIL_EDGE;
+        assert!(
+            message.contains(&format!("長い辺が {edge} ピクセルまで")),
+            "{message}"
+        );
+    }
 }

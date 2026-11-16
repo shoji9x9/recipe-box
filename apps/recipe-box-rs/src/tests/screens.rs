@@ -15,17 +15,17 @@ use crate::{
     router,
 };
 
-const HOST: &str = "recipe-box.example";
-const DEMO: &str = "dddddddddddddddddddddddddddddddd";
+pub(super) const HOST: &str = "recipe-box.example";
+pub(super) const DEMO: &str = "dddddddddddddddddddddddddddddddd";
 
-fn backend_with_workspaces() -> FakeBackend {
+pub(super) fn backend_with_workspaces() -> FakeBackend {
     let backend = FakeBackend::default();
     backend.add_workspace(WORKSPACE_A, NOW);
     backend.add_workspace(WORKSPACE_B, NOW);
     backend
 }
 
-fn cookie(workspace: &str) -> String {
+pub(super) fn cookie(workspace: &str) -> String {
     format!("__Host-workspace={workspace}")
 }
 
@@ -57,7 +57,11 @@ fn screen_request(
     }
 }
 
-async fn screen_get(backend: &FakeBackend, path: &str, cookie: Option<&str>) -> TestResponse {
+pub(super) async fn screen_get(
+    backend: &FakeBackend,
+    path: &str,
+    cookie: Option<&str>,
+) -> TestResponse {
     send(
         router(backend.clone()),
         screen_request(&Method::GET, path, cookie, None),
@@ -65,7 +69,7 @@ async fn screen_get(backend: &FakeBackend, path: &str, cookie: Option<&str>) -> 
     .await
 }
 
-async fn screen_post(
+pub(super) async fn screen_post(
     backend: &FakeBackend,
     path: &str,
     cookie: Option<&str>,
@@ -96,7 +100,7 @@ fn set_cookie_named(response: &TestResponse, name: &str) -> Option<String> {
 }
 
 /// レシピを画面から登録し、詳細の画面のパスを返す。
-async fn create_recipe(backend: &FakeBackend, workspace: &str, name: &str) -> String {
+pub(super) async fn create_recipe(backend: &FakeBackend, workspace: &str, name: &str) -> String {
     let form = format!("name={}&servings=2&ingredients=&steps=", urlencode(name));
     let response = screen_post(backend, "/recipes", Some(&cookie(workspace)), &form).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
@@ -1084,7 +1088,7 @@ fn photo_form(photo: Option<&[u8]>) -> (String, Vec<u8>) {
     (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
-async fn post_photo(
+pub(super) async fn post_photo(
     backend: &FakeBackend,
     recipe_path: &str,
     cookie: Option<&str>,
@@ -1108,7 +1112,7 @@ async fn post_photo(
 }
 
 /// 写真のバイト列をそのまま本文にして送る（JavaScript が 1 枚ずつ送るときの形）。
-async fn post_raw_photo(
+pub(super) async fn post_raw_photo(
     backend: &FakeBackend,
     recipe_path: &str,
     cookie: &str,

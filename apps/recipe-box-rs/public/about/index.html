@@ -477,7 +477,7 @@ Invoker Commands に対応していない少し古いブラウザでは、小さ
 &lt;/dialog&gt;
 {%- endmacro %}
 </code></pre>
-<p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）と、画面が移った後のフォーカスと古いブラウザでのダイアログを補うもの（<code>page.js</code>）だけです。写真と検索のものは、動かなければふつうのフォームとして働きます。</p>
+<p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送り、その後に一覧と詳細に出す小さな版を作って送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）と、画面が移った後のフォーカスと古いブラウザでのダイアログを補うもの（<code>page.js</code>）だけです。写真と検索のものは、動かなければふつうのフォームとして働きます。</p>
 <h3 id="テストの仕組み">テストの仕組み</h3>
 <p>アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分は、<code>Backend</code> トレイトにまとめています。</p>
 <p>次は、トレイトの先頭（乱数・時計・回数の制限）だけです。ワークスペース・レシピ・写真を読み書きするメソッドが続きます（全体は <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a>）。</p>
@@ -658,6 +658,16 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <li>D1 に行を入れてから R2 への書き込みと後始末までは、送り手との接続が切れても最後まで行います（Workers の <code>waitUntil</code>）。</li>
 <li>それでも途中で失敗するか Worker が止められて、印が付いたまま残った行は、定期の自動削除が R2 のデータと一緒に片付けます。印には付けた日時を持たせ、1 時間を過ぎたものだけを片付けて、追加や削除の途中の行には触れません。</li>
 </ul>
+<p>一覧と詳細で原寸の写真（1 枚 4 MB まで）を送らないよう、写真の小さな版（長い辺を 1280 ピクセルまでに縮めた JPEG）も保存します。
+長い辺が 1280 ピクセル以下で、ファイルも小さい写真には作りません（作っても小さくならないため）。
+小さな版は、Worker ではなくブラウザ（<code>photo-upload.js</code>）が canvas で作ります。Worker で画像を展開して縮めると、CPU 時間が 1 回 10 ms を大きく超えるためです。
+写真を送り終えてから、別のリクエストで送ります。決まりは <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%B0%8F%E3%81%95%E3%81%AA%E7%89%88">docs/spec.md の「小さな版」</a>にあります。</p>
+<p><a href="/assets/guide/photo-thumbnail.svg"><img src="/assets/guide/photo-thumbnail.svg" alt="写真の小さな版を足すときの順序。ブラウザが写真を送って写真の ID を受け取り、canvas で長い辺を 1280 ピクセルまでに縮めた JPEG を作って送る（小さな写真には作らない）。Worker は形を確かめてメタデータを 0 で埋め、D1 で合計の上限を数えて枠を取ってから R2 に書き、幅を入れて画面に出す。書けなければ枠を返す。写真が消えていれば、R2 のデータを消して枠を返す"></a></p>
+<ul>
+<li>一覧と詳細は、<code>srcset</code> と <code>sizes</code> で、表示に足りる方（ふつうは小さな版）をブラウザに選ばせます。</li>
+<li>小さな版が無い写真（JavaScript の無いフォーム・API・小さな写真・作れなかった写真）は、元の写真を出します。作れなくても写真は残るので、失敗を知らせません。</li>
+<li>小さな版はワークスペースの合計の上限に数え、写真を消すときは、元の写真と同じ R2 の呼び出しで一緒に消します。</li>
+</ul>
 <h3 id="共有のデモと-seed">共有のデモと seed</h3>
 <p>初めて開いた人には、誰でも見て編集できる共有のデモを見せます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E3%83%87%E3%83%A2%E7%94%A8%E3%81%AE%E3%83%87%E3%83%BC%E3%82%BF">docs/spec.md の「デモ用のデータ」</a>）。デモの ID は公開しません。</p>
 <ul>
@@ -772,15 +782,15 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 </tr>
 <tr>
 <td>写真の保管</td>
-<td>R2。D1 に行を入れて上限を判定してから R2 に書く</td>
+<td>R2。D1 に行を入れて上限を判定してから R2 に書く。小さな版も R2 に置き、合計に数える</td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">写真</a></td>
 <td>オブジェクトストレージ（R2・S3 など）に置くか、DB に置くか。どちらでも API の仕様は変えない。置き場の料金と制限が変わるので、大きさの上限・合計の上限を見直す（費用の対策を作り直す）</td>
 </tr>
 <tr>
 <td>写真の受け取り</td>
-<td>multipart のふつうのフォームと、API はバイト列そのもの。<code>Content-Length</code> で先に断る</td>
-<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F%E3%81%AE-api">写真の API</a></td>
-<td>本文の上限、形式を頭の部分で決めること、メタデータを取り除くこと</td>
+<td>multipart のふつうのフォームと、API はバイト列そのもの。<code>Content-Length</code> で先に断る。画面の JavaScript は、写真の後に、ブラウザで作った小さな版を別のリクエストで送る。一覧と詳細は <code>srcset</code> で選ばせ、小さな版が無ければ元の写真を出す</td>
+<td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F%E3%81%AE-api">写真の API</a>・<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%B0%8F%E3%81%95%E3%81%AA%E7%89%88">小さな版</a></td>
+<td>本文の上限、形式を頭の部分で決めること、メタデータを取り除くこと。小さな版をどこで作るか（ブラウザか、サーバーか、画像の変換のサービスか）は、CPU 時間の上限と料金で決める。作れないときに元の写真に戻ることを保つ</td>
 </tr>
 <tr>
 <td>定期実行</td>

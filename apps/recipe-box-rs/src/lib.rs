@@ -12,6 +12,7 @@ mod photo;
 mod recipe;
 mod screen;
 mod stream;
+mod thumbnail;
 mod workspace;
 
 use axum::{
@@ -161,6 +162,13 @@ fn screen_photo_routes<B: Backend>(backend: B) -> Router<B> {
         .route(
             "/recipes/{id}/photos/{photo_id}/delete",
             post(screen::delete_photo::<B>),
+        )
+        .route(
+            "/recipes/{id}/photos/{photo_id}/thumbnail",
+            // 小さな版の本文は、写真より小さい上限で止める（上限を超える本文を読みためない）。
+            get(screen::thumbnail_file::<B>)
+                .post(screen::add_thumbnail::<B>)
+                .layer(DefaultBodyLimit::max(thumbnail::MAX_THUMBNAIL_BYTES)),
         )
         .route_layer(middleware::from_fn_with_state(
             backend.clone(),

@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     limits::{DAY_MILLIS, start_of_utc_day},
-    photo::{MAX_KEYS_PER_DELETE, MAX_PENDING_BATCHES_PER_RUN, PENDING_CLEANUP_AFTER_MILLIS},
+    photo::{MAX_PENDING_BATCHES_PER_RUN, MAX_PHOTOS_PER_DELETE, PENDING_CLEANUP_AFTER_MILLIS},
     workspace::{
         CLEANUP_INTERVAL_MILLIS, CLEANUP_RUNS_PER_DAY, CLEANUP_SUBREQUESTS, CleanupSummary,
         MAX_SUBREQUESTS_PER_RUN, MAX_WORKSPACES_PER_DAY, MAX_WORKSPACES_PER_RUN,
@@ -253,7 +253,7 @@ async fn many_due_workspaces_and_pending_photos_stay_within_the_call_limit() {
         workspaces.push(workspace);
     }
     // 1 回で片付けられる数より多い、書き込み中の印が残った写真の行（使われているワークスペースのもの）。
-    let per_run = to_usize(MAX_PENDING_BATCHES_PER_RUN * MAX_KEYS_PER_DELETE);
+    let per_run = to_usize(MAX_PENDING_BATCHES_PER_RUN * MAX_PHOTOS_PER_DELETE);
     let pending = per_run + 500;
     backend.add_workspace(WORKSPACE_C, NOW);
     let recipe = "3".repeat(32);

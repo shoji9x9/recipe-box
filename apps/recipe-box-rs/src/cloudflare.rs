@@ -17,7 +17,8 @@ use worker::{
 use crate::{
     backend::{
         Backend, BackendError, BackendResult, ListedRecipe, PendingPhoto, PhotoInsert, PhotoKey,
-        PhotoLimits, RecipePage, UnusedWorkspace, WorkspaceLimits, WorkspaceStatus,
+        PhotoLimits, RecipePage, ThumbnailReserve, UnusedWorkspace, WorkspaceLimits,
+        WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -141,7 +142,11 @@ fn int_to_js(value: i64) -> JsValue {
 }
 
 /// 写真を読むときの列。`Photo` の項目と同じ名前・順番にする。
-const PHOTO_COLUMNS: &str = "id, content_type, size, created_at";
+const PHOTO_COLUMNS: &str = "id, content_type, size, created_at, thumbnail_width, width";
+/// ワークスペースの写真の大きさの合計（元の写真と小さな版）を求める副問い合わせ。`?` はワークスペースの ID。
+/// 小さな版は、書いている途中（`thumbnail_size` だけが入っている）のものも数える。
+const WORKSPACE_PHOTO_BYTES: &str = "(SELECT COALESCE(SUM(size + COALESCE(thumbnail_size, 0)), 0) \
+     FROM photos WHERE workspace_id = ?)";
 
 /// 一覧のクエリの行。レシピの列と、先頭の写真の ID。
 #[derive(serde::Deserialize)]
@@ -151,6 +156,11 @@ struct ListedRow {
     /// 先頭の写真を求めないクエリ（API の一覧）では、列が無いので `None` になる。
     #[serde(default)]
     first_photo_id: Option<String>,
+    /// 先頭の写真の小さな版の幅と、元の写真の幅。小さな版が無ければ `None`。
+    #[serde(default)]
+    first_thumbnail_width: Option<i64>,
+    #[serde(default)]
+    first_photo_width: Option<i64>,
 }
 
 /// 一覧のクエリで、レシピごとの先頭の写真（追加した日時の古い順、同じ日時なら ID の小さい順の最初）の ID を求める列。
@@ -163,6 +173,13 @@ const FIRST_PHOTO_COLUMN: &str = "(SELECT MIN(p.id) FROM photos p \
      AND p.created_at = (SELECT MIN(q.created_at) FROM photos q \
      WHERE q.workspace_id = recipes.workspace_id AND q.recipe_id = recipes.id AND q.pending_since IS NULL)) \
      AS first_photo_id";
+
+/// 小さな版の枠を取れなかったときに、理由を調べる行。
+#[derive(serde::Deserialize)]
+struct ThumbnailState {
+    pending_since: Option<i64>,
+    thumbnail_size: Option<i64>,
+}
 
 /// `SELECT COUNT(*) AS total` の行。
 #[derive(serde::Deserialize)]
@@ -475,16 +492,25 @@ impl Backend for CloudflareBackend {
             // 同じ日時に作ったレシピの順番が毎回変わらないよう、ID でも並べる。
             // LIMIT と OFFSET は ISO の標準ではないが、PostgreSQL でも同じ意味で動く（AGENTS.md）。
             // 先頭の写真は、画面の一覧のときだけ求める（API の一覧では、返さない値のために photos を読まない）。
-            let first_photo = if with_first_photo {
-                format!(", {FIRST_PHOTO_COLUMN}")
+            // 画面の一覧では、先頭の写真の小さな版の幅も読む（srcset）。ページを先に絞ってから、
+            // その先頭の写真の行だけを主キーで読む。
+            let sql = if with_first_photo {
+                format!(
+                    "SELECT page.*, p.thumbnail_width AS first_thumbnail_width, p.width AS first_photo_width \
+                     FROM (SELECT {RECIPE_COLUMNS}, workspace_id, {FIRST_PHOTO_COLUMN} FROM recipes \
+                     WHERE {condition} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?) AS page \
+                     LEFT JOIN photos p ON p.workspace_id = page.workspace_id AND p.recipe_id = page.id \
+                     AND p.id = page.first_photo_id \
+                     ORDER BY page.created_at DESC, page.id DESC"
+                )
             } else {
-                String::new()
+                format!(
+                    "SELECT {RECIPE_COLUMNS} FROM recipes WHERE {condition} \
+                     ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+                )
             };
             let page = db
-                .prepare(format!(
-                    "SELECT {RECIPE_COLUMNS}{first_photo} FROM recipes WHERE {condition} \
-                     ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
-                ))
+                .prepare(sql)
                 .bind(&page_values)
                 .map_err(|e| backend_error(action, &e))?;
             let count = db
@@ -507,6 +533,7 @@ impl Backend for CloudflareBackend {
                 .into_iter()
                 .map(|row| ListedRecipe {
                     recipe: row.recipe,
+                    first_photo_widths: row.first_thumbnail_width.zip(row.first_photo_width),
                     first_photo_id: row.first_photo_id,
                 })
                 .collect();
@@ -779,15 +806,15 @@ impl Backend for CloudflareBackend {
             // アプリ全体の写真の合計は数えない（photos の全体を読むことになるため）。ワークスペースの数の上限と、
             // ワークスペースごとの合計の上限で守る（photo::MAX_PHOTO_BYTES_TOTAL）。
             let insert = db
-                .prepare(
+                .prepare(format!(
                     "INSERT INTO photos \
                      (workspace_id, recipe_id, id, content_type, size, created_at, pending_since) \
                      SELECT ?, ?, ?, ?, ?, ?, ? FROM (VALUES (0)) AS one \
                      WHERE EXISTS (SELECT 1 FROM recipes WHERE workspace_id = ? AND id = ?) \
                      AND (SELECT COUNT(*) FROM photos WHERE workspace_id = ? AND recipe_id = ?) < ? \
                      AND (SELECT COUNT(*) FROM photo_uploads WHERE created_at >= ?) < ? \
-                     AND (SELECT COALESCE(SUM(size), 0) FROM photos WHERE workspace_id = ?) + ? <= ?",
-                )
+                     AND {WORKSPACE_PHOTO_BYTES} + ? <= ?"
+                ))
                 .bind(&[
                     w(),
                     r(),
@@ -830,13 +857,13 @@ impl Backend for CloudflareBackend {
             // 保存しなかったときだけ、どの上限に当たったかを調べる。
             let action = "写真の上限を調べられない";
             let usage = db
-                .prepare(
+                .prepare(format!(
                     "SELECT \
                      (SELECT COUNT(*) FROM recipes WHERE workspace_id = ? AND id = ?) AS recipes, \
                      (SELECT COUNT(*) FROM photos WHERE workspace_id = ? AND recipe_id = ?) AS recipe_photos, \
-                     (SELECT COALESCE(SUM(size), 0) FROM photos WHERE workspace_id = ?) AS workspace_bytes \
-                     FROM (VALUES (0)) AS one",
-                )
+                     {WORKSPACE_PHOTO_BYTES} AS workspace_bytes \
+                     FROM (VALUES (0)) AS one"
+                ))
                 .bind(&[w(), r(), w(), r(), w()])
                 .map_err(|e| backend_error(action, &e))?
                 .first::<PhotoUsage>(None)
@@ -852,6 +879,142 @@ impl Backend for CloudflareBackend {
             } else {
                 PhotoInsert::CapacityReached
             })
+        })
+    }
+
+    fn reserve_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+        max_bytes_per_workspace: i64,
+    ) -> impl Future<Output = BackendResult<ThumbnailReserve>> + Send {
+        let env = self.env.clone();
+        let values = [
+            workspace.to_string(),
+            recipe.to_string(),
+            id.as_str().to_owned(),
+        ];
+        SendFuture::new(async move {
+            let action = "写真の小さな版の枠を取れない";
+            let db = database(&env)?;
+            let [w, r, id] = values.map(JsValue::from);
+            // 上限の判定と枠を取るのを 1 つの文にして、同時に送られても上限を超えないようにする。
+            let result = run(
+                &db,
+                &format!(
+                    "UPDATE photos SET thumbnail_size = ? \
+                     WHERE workspace_id = ? AND recipe_id = ? AND id = ? \
+                     AND pending_since IS NULL AND thumbnail_size IS NULL \
+                     AND {WORKSPACE_PHOTO_BYTES} + ? <= ?"
+                ),
+                &[
+                    int_to_js(size),
+                    w.clone(),
+                    r.clone(),
+                    id.clone(),
+                    w.clone(),
+                    int_to_js(size),
+                    int_to_js(max_bytes_per_workspace),
+                ],
+                action,
+            )
+            .await?;
+            if changed_rows(&result, action)? > 0 {
+                return Ok(ThumbnailReserve::Reserved);
+            }
+            // 取れなかったときだけ、理由を調べる。
+            let action = "写真の小さな版の枠を取れない理由を調べられない";
+            let row = db
+                .prepare(
+                    "SELECT pending_since, thumbnail_size FROM photos \
+                     WHERE workspace_id = ? AND recipe_id = ? AND id = ?",
+                )
+                .bind(&[w, r, id])
+                .map_err(|e| backend_error(action, &e))?
+                .first::<ThumbnailState>(None)
+                .await
+                .map_err(|e| backend_error(action, &e))?;
+            Ok(match row {
+                None
+                | Some(ThumbnailState {
+                    pending_since: Some(_),
+                    ..
+                }) => ThumbnailReserve::PhotoNotFound,
+                Some(ThumbnailState {
+                    thumbnail_size: Some(_),
+                    ..
+                }) => ThumbnailReserve::AlreadyExists,
+                Some(_) => ThumbnailReserve::WorkspaceFull,
+            })
+        })
+    }
+
+    fn release_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+    ) -> impl Future<Output = BackendResult<()>> + Send {
+        let env = self.env.clone();
+        let values = [
+            workspace.to_string(),
+            recipe.to_string(),
+            id.as_str().to_owned(),
+        ];
+        SendFuture::new(async move {
+            let db = database(&env)?;
+            let [w, r, id] = values.map(JsValue::from);
+            run(
+                &db,
+                "UPDATE photos SET thumbnail_size = NULL \
+                 WHERE workspace_id = ? AND recipe_id = ? AND id = ? \
+                 AND thumbnail_size = ? AND thumbnail_width IS NULL",
+                &[w, r, id, int_to_js(size)],
+                "写真の小さな版の枠を返せない",
+            )
+            .await?;
+            Ok(())
+        })
+    }
+
+    fn finish_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+        widths: (i64, i64),
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
+        let env = self.env.clone();
+        let values = [
+            workspace.to_string(),
+            recipe.to_string(),
+            id.as_str().to_owned(),
+        ];
+        SendFuture::new(async move {
+            let action = "写真の小さな版を出せない";
+            let db = database(&env)?;
+            let [w, r, id] = values.map(JsValue::from);
+            let result = run(
+                &db,
+                "UPDATE photos SET thumbnail_width = ?, width = ? \
+                 WHERE workspace_id = ? AND recipe_id = ? AND id = ? \
+                 AND pending_since IS NULL AND thumbnail_size = ? AND thumbnail_width IS NULL",
+                &[
+                    int_to_js(widths.0),
+                    int_to_js(widths.1),
+                    w,
+                    r,
+                    id,
+                    int_to_js(size),
+                ],
+                action,
+            )
+            .await?;
+            Ok(changed_rows(&result, action)? > 0)
         })
     }
 

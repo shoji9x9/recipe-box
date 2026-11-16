@@ -95,10 +95,24 @@ pub enum PhotoInsert {
     CapacityReached,
 }
 
+/// 写真の小さな版を入れる枠を取った結果。取れなかったときは、その理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailReserve {
+    Reserved,
+    /// そのレシピに、その写真が無い（書き込みか削除が終わっていない印の付いた写真を含む）。
+    PhotoNotFound,
+    /// その写真には、もう小さな版がある（書いている途中のものを含む）。
+    AlreadyExists,
+    /// 足すと、ワークスペースの写真の大きさの合計が上限を超える。
+    WorkspaceFull,
+}
+
 /// 一覧に出すレシピと、その先頭の写真。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedRecipe {
     pub recipe: Recipe,
+    /// 先頭の写真の小さな版の幅と、元の写真の幅（どちらも小さな版があるときだけ）。
+    pub first_photo_widths: Option<(i64, i64)>,
     /// 先頭の写真（追加した順の最初）の ID。写真が無ければ `None`。
     pub first_photo_id: Option<String>,
 }
@@ -272,6 +286,38 @@ pub trait Backend: Clone + Send + Sync + 'static {
         photo: &Photo,
         limits: &PhotoLimits,
     ) -> impl Future<Output = BackendResult<PhotoInsert>> + Send;
+
+    /// 写真の小さな版（大きさ `size`）を入れる枠を取る。印の無い写真で、まだ小さな版が無く、
+    /// ワークスペースの写真の合計（元の写真と小さな版）に足して `max_bytes_per_workspace` 以下のときだけ取る。
+    /// 上限の判定と枠を取るのを 1 つの文にし、同時に送られても上限を超えない。取った枠は合計に数えるが、画面にはまだ出さない。
+    fn reserve_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+        max_bytes_per_workspace: i64,
+    ) -> impl Future<Output = BackendResult<ThumbnailReserve>> + Send;
+
+    /// 取った枠（大きさ `size`）を返す（R2 に書けなかったとき）。もう出している小さな版の枠は返さない。
+    fn release_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+    ) -> impl Future<Output = BackendResult<()>> + Send;
+
+    /// R2 に書けた小さな版を、画面に出すものにする（小さな版と元の写真の幅を入れる）。
+    /// 枠（大きさ `size`）を取った印の無い写真の行が無くなっていれば（書いている間に消された）、`false` を返す。
+    fn finish_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+        widths: (i64, i64),
+    ) -> impl Future<Output = BackendResult<bool>> + Send;
 
     /// 写真の行の、書き込みか削除が終わっていない印を外し、見せる写真にする。
     /// 外すのは、印を付けた日時が `marked_at`（呼び出し側が付けた印）の行だけである。

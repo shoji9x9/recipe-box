@@ -15,7 +15,8 @@ use std::{
 use crate::{
     backend::{
         Backend, BackendError, BackendResult, ListedRecipe, PendingPhoto, PhotoInsert, PhotoKey,
-        PhotoLimits, RecipePage, UnusedWorkspace, WorkspaceLimits, WorkspaceStatus,
+        PhotoLimits, RecipePage, ThumbnailReserve, UnusedWorkspace, WorkspaceLimits,
+        WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId, object_key},
     recipe::{Recipe, RecipeFields, RecipeId, search_name},
@@ -108,6 +109,12 @@ pub struct FakeBackend {
     pub used_after_hiding: Option<String>,
     /// D1 を呼んだ回数（batch は 1 回）。本物の 1 回の実行のクエリの数の上限を確かめるのに使う。
     pub d1_calls: Arc<AtomicUsize>,
+    /// 写真の小さな版の大きさ（`thumbnail_size`）。写真の ID ごと（写真の ID は乱数なので、ID だけで見分ける）。
+    pub thumbnail_sizes: Arc<Mutex<HashMap<String, i64>>>,
+    /// `true` なら、小さな版を出す（`finish_thumbnail`）のが失敗したことにする（D1 の失敗）。
+    pub broken_finish_thumbnail: bool,
+    /// `true` なら、小さな版を出す（`finish_thumbnail`）のが D1 では確定したのに、失敗が返ったことにする（応答が届かない）。
+    pub finish_thumbnail_commits_then_errors: bool,
     /// R2 を呼んだ回数。
     pub r2_calls: Arc<AtomicUsize>,
     /// D1 と R2 を合わせて、この回数を超えて呼ぶと失敗させる（本物の 1 回の実行の上限をまねる）。
@@ -153,6 +160,9 @@ impl Default for FakeBackend {
             broken_owner_delete: false,
             used_after_hiding: None,
             d1_calls: Arc::default(),
+            thumbnail_sizes: Arc::default(),
+            broken_finish_thumbnail: false,
+            finish_thumbnail_commits_then_errors: false,
             r2_calls: Arc::default(),
             max_calls: None,
         }
@@ -192,6 +202,8 @@ impl FakeBackend {
                 content_type: "image/jpeg".to_owned(),
                 size,
                 created_at,
+                thumbnail_width: None,
+                width: None,
             },
         ));
     }
@@ -220,6 +232,16 @@ impl FakeBackend {
     /// 写真の行に、印が付いていないか（見せる写真か）。
     fn is_visible(&self, photo: &Photo) -> bool {
         !self.is_pending(&photo.id)
+    }
+
+    /// ワークスペースの写真の大きさの合計（元の写真と、枠を取った小さな版）。本物の `WORKSPACE_PHOTO_BYTES` と同じ。
+    fn workspace_bytes(&self, photos: &[(String, String, Photo)], workspace: &WorkspaceId) -> i64 {
+        let thumbnails = self.thumbnail_sizes.lock().unwrap();
+        photos
+            .iter()
+            .filter(|(w, _, _)| w == workspace.as_str())
+            .map(|(_, _, p)| p.size + thumbnails.get(&p.id).copied().unwrap_or(0))
+            .sum()
     }
 
     /// 写真の印を付ける（`mark`）か外す。`at` は、付ける印の日時か、外す印の日時。
@@ -524,17 +546,18 @@ impl Backend for FakeBackend {
                 .skip(usize::try_from(offset).unwrap())
                 .take(usize::try_from(limit).unwrap())
                 .map(|recipe| {
-                    let first_photo_id = photos
+                    let first_photo = photos
                         .iter()
                         .filter(|_| with_first_photo)
                         .filter(|(w, r, _)| w == workspace.as_str() && *r == recipe.id)
                         .map(|(_, _, photo)| photo)
                         .filter(|photo| self.is_visible(photo))
-                        .min_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)))
-                        .map(|photo| photo.id.clone());
+                        .min_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
                     ListedRecipe {
                         recipe,
-                        first_photo_id,
+                        first_photo_widths: first_photo
+                            .and_then(|photo| photo.thumbnail_width.zip(photo.width)),
+                        first_photo_id: first_photo.map(|photo| photo.id.clone()),
                     }
                 })
                 .collect();
@@ -721,11 +744,7 @@ impl Backend for FakeBackend {
                 .iter()
                 .filter(|(w, r, _)| w == workspace.as_str() && r == recipe.as_str())
                 .count();
-            let workspace_bytes: i64 = photos
-                .iter()
-                .filter(|(w, _, _)| w == workspace.as_str())
-                .map(|(_, _, p)| p.size)
-                .sum();
+            let workspace_bytes = self.workspace_bytes(&photos, workspace);
             let uploads_since = uploads.iter().filter(|&&at| at >= limits.since).count();
             if i64::try_from(in_recipe).unwrap() >= limits.max_per_recipe {
                 return PhotoInsert::RecipeFull;
@@ -834,6 +853,103 @@ impl Backend for FakeBackend {
             }
             deleted
         }))
+    }
+
+    fn reserve_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+        max_bytes_per_workspace: i64,
+    ) -> impl Future<Output = BackendResult<ThumbnailReserve>> + Send {
+        ready(self.check().map(|()| {
+            let photos = self.photos.lock().unwrap();
+            let Some((_, _, photo)) = photos.iter().find(|(w, r, p)| {
+                w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
+            }) else {
+                return ThumbnailReserve::PhotoNotFound;
+            };
+            if !self.is_visible(photo) {
+                return ThumbnailReserve::PhotoNotFound;
+            }
+            if self.thumbnail_sizes.lock().unwrap().contains_key(&photo.id) {
+                return ThumbnailReserve::AlreadyExists;
+            }
+            if self.workspace_bytes(&photos, workspace) + size > max_bytes_per_workspace {
+                return ThumbnailReserve::WorkspaceFull;
+            }
+            self.thumbnail_sizes
+                .lock()
+                .unwrap()
+                .insert(photo.id.clone(), size);
+            ThumbnailReserve::Reserved
+        }))
+    }
+
+    fn release_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+    ) -> impl Future<Output = BackendResult<()>> + Send {
+        ready(self.check().map(|()| {
+            let photos = self.photos.lock().unwrap();
+            let shown = photos.iter().any(|(w, r, p)| {
+                w == workspace.as_str()
+                    && r == recipe.as_str()
+                    && p.id == id.as_str()
+                    && p.thumbnail_width.is_some()
+            });
+            let mut sizes = self.thumbnail_sizes.lock().unwrap();
+            if !shown && sizes.get(id.as_str()) == Some(&size) {
+                sizes.remove(id.as_str());
+            }
+        }))
+    }
+
+    fn finish_thumbnail(
+        &self,
+        workspace: &WorkspaceId,
+        recipe: &RecipeId,
+        id: &PhotoId,
+        size: i64,
+        widths: (i64, i64),
+    ) -> impl Future<Output = BackendResult<bool>> + Send {
+        ready(
+            self.check()
+                .and_then(|()| {
+                    if self.broken_finish_thumbnail {
+                        return Err(BackendError("壊れた DB（小さな版）".into()));
+                    }
+                    Ok(())
+                })
+                .map(|()| {
+                    if self.thumbnail_sizes.lock().unwrap().get(id.as_str()) != Some(&size) {
+                        return false;
+                    }
+                    let pending = self.is_pending(id.as_str());
+                    let mut photos = self.photos.lock().unwrap();
+                    let Some((_, _, photo)) = photos.iter_mut().find(|(w, r, p)| {
+                        w == workspace.as_str() && r == recipe.as_str() && p.id == id.as_str()
+                    }) else {
+                        return false;
+                    };
+                    if pending || photo.thumbnail_width.is_some() {
+                        return false;
+                    }
+                    photo.thumbnail_width = Some(widths.0);
+                    photo.width = Some(widths.1);
+                    true
+                })
+                .and_then(|done| {
+                    if self.finish_thumbnail_commits_then_errors {
+                        return Err(BackendError("D1 の応答が届かない（小さな版）".into()));
+                    }
+                    Ok(done)
+                }),
+        )
     }
 
     fn finish_photo(
