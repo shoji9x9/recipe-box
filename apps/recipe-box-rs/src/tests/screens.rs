@@ -1217,6 +1217,23 @@ async fn search_waits_for_the_ime_to_commit() {
     );
 }
 
+/// 入力を消すボタンは、Tab で選べる本物のボタンにする（ブラウザが出す × は Tab で選べない）。
+/// JavaScript が動かなければ、空のフォームを送って、絞り込まない一覧に戻る。
+#[tokio::test]
+async fn search_has_a_focusable_clear_button() {
+    let backend = backend_with_workspaces();
+    let a = cookie(WORKSPACE_A);
+    let response = screen_get(&backend, "/?q=%E3%82%AB%E3%83%AC%E3%83%BC", Some(&a)).await;
+    assert!(response.body.contains(
+        r#"<button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す">×</button>"#
+    ));
+    assert!(
+        response
+            .body
+            .contains(r#"<form id="clear-search" method="get" action="/" hidden></form>"#)
+    );
+}
+
 /// 画面の JavaScript（`public/assets/photo-upload.js`）が、送る前に確かめるための値。
 #[tokio::test]
 async fn photo_form_tells_the_script_the_remaining_count_and_size_limit() {

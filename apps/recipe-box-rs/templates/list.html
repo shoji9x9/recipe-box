@@ -13,8 +13,13 @@
   <input id="q" type="search" name="q" value="{{ q }}" placeholder="料理名で探す" autocomplete="off" data-search-input
          hx-get="/" hx-trigger="search-input changed delay:300ms, search"
          hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true">
+  {#- 入力を消すボタン。ブラウザが出す ×（Tab で選べない）の代わりに置く。文字があるときだけ出す（CSS）。
+      JavaScript が動けば、search.js が欄を空にして検索し、欄にフォーカスを戻す。
+      動かなければ、下の空のフォーム（clear-search）を送り、絞り込まない一覧に戻る。 #}
+  <button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す">×</button>
   <button type="submit">探す</button>
 </form>
+<form id="clear-search" method="get" action="/" hidden></form>
 <section id="results">
   {%- if let Some(error) = query_error %}
   <p class="message error" role="alert">{{ error }}</p>
