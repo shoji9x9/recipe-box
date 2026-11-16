@@ -108,11 +108,11 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | --- | --- |
 | `ci.yml` | PR ごとに、静的解析・依存の検査・テスト・ビルドと動作確認・秘密情報の検査を行う |
 | `pr-title.yml` | PR のタイトルが Conventional Commits の形かを調べる（タイトルを直したときにも動く） |
-| `codeql.yml` | Rust のコードと workflow を CodeQL で解析する |
+| `codeql.yml` | Rust のコード・JavaScript と TypeScript・workflow を CodeQL で解析する |
 | `claude-review.yml` | PR を Claude Code でレビューする |
 | `seed-demo.yml` | 毎日 UTC の 19 時（日本時間の 4 時）に、共有のデモを seed で入れ直す（手でも実行できる） |
-| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。D1 と R2 のバケットが無ければ作り、先に D1 にマイグレーションを当てる |
-| `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする |
+| `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。D1 と R2 のバケットが無ければ作り、先に D1 にマイグレーションを当てる。デプロイの後に、本番の API・トップの画面・静的アセットが 200 を返すかを、読むだけのリクエストで確かめる |
+| `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする。GITHUB_TOKEN でのマージでは `deploy.yml` の push が動かないので、マージされるのを待って `deploy.yml` を起動する |
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
 
 main は、ブランチルールで PR を通さない変更と強制 push を禁止し、CI の成功を必須にしている。
@@ -125,7 +125,9 @@ D1 のデータベース（`recipe-box`）は、無ければ `deploy.yml` が作
 共有のデモをローカルで試すときは、`mise run dev` を起動した後で、ワークスペースを作って ID をファイルに書き（`curl -s -X POST http://localhost:8787/api/workspaces | jq -r .id > <ID のファイル>`）、`apps/recipe-box-rs/.dev.vars` に `DEMO_WORKSPACE_ID=<ID>` と書いて `mise run dev` を起動し直す。
 その後、`mise run pin -- --local < <ID のファイル>` で印を付け、`mise run seed -- --local < <ID のファイル>` でサンプルを入れる。
 本番のデモは、毎日 `seed-demo.yml` が入れ直す。すぐに戻したいときは、Actions の画面から手で実行する。
-GitHub は、公開リポジトリで 60 日活動（commit など）が無いと、schedule で動く workflow を止める。止まると、デモが入れ直されなくなるので、Actions の画面で `seed-demo.yml` を有効にし直す。
+GitHub は、公開リポジトリで 60 日活動（commit など）が無いと、schedule で動く workflow を止める。止まると、デモが入れ直されなくなるので、Actions の画面で `seed-demo.yml` を有効にし直す（下の「最低限のメンテナンス」）。
+`seed-demo.yml` など schedule で動く workflow が失敗したことは、GitHub Actions の失敗の通知（メールなど）で知らされる。
+通知が届くのは、その workflow の cron の行を最後に変えた人（止まった workflow を有効にし直したときは、その人）で、届くかどうかは GitHub の通知の設定（Actions）による。
 
 本番は `<名前>.workers.dev` で公開する（`wrangler.toml` の `workers_dev = true`）。版ごとのプレビューの URL は、誰でも開ける URL を増やさないよう作らない（`preview_urls = false`）。
 
@@ -137,6 +139,27 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
   `apps/recipe-box-rs` で `pnpm exec wrangler tail recipe-box --format pretty` を実行する（`wrangler login` が要る）。流れている間だけ見え、残らない。
   `--format json` は、リクエストのヘッダー（API の `X-Workspace-Id` を含みうる）も出すので、その出力を人に見せたり、ファイルに残したりしない。
 - リクエストの数・エラーの割合・CPU 時間の傾向は、ダッシュボードの、同じ Worker の Metrics で見る。
+
+### デプロイが失敗したとき
+
+`deploy.yml` は、マイグレーションを当ててからコードを入れ替え、最後に本番が応答するかを確かめる。どこで失敗したかで、することが変わる。
+
+1. マイグレーションが失敗したときは、コードは入れ替わらない。それより前のマイグレーション（同じデプロイで先に当たったもの）は残るが、表や列を足すだけに書いているので、古いコードのまま動く。
+   原因を直す PR を入れるか、一時的な失敗なら Actions の画面で失敗した run を再実行する。
+2. マイグレーションは当たったが `wrangler deploy` が失敗したときも、1 と同じである（古いコードが新しい表のまま動く）。原因を直して、Actions で再実行する。
+3. 新しいコードが本番で壊れたとき（最後の確かめが失敗したときを含む）は、前の版に戻す。
+   `apps/recipe-box-rs` で `pnpm exec wrangler rollback [<version-id>]`（`wrangler login` が要る。版を省くと 1 つ前の版）を実行するか、ダッシュボードの Worker（`recipe-box`）の Deployments から戻す。
+   戻るのはコードと設定だけで、バインディングとデータ（D1・R2）は戻らない。マイグレーションを足すだけにしているのは、このためである。
+   次に main へ push するとまたデプロイされるので、戻した後は、直すか revert する PR を続けて入れる。
+   （[Rollbacks](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/)）
+4. マイグレーションのファイルは書き換えない。当てたマイグレーションを取り消すときも、新しい番号のマイグレーションを足す（AGENTS.md の「SQL」）。
+5. D1 のデータを過去の時点に戻すのは、ほかに手が無いときの最後の手段にする。
+   D1 の Time Travel で、無料のプランなら 7 日以内の時点に戻せる。`pnpm exec wrangler d1 time-travel info recipe-box --timestamp=<時刻>` でその時点の bookmark を調べ、`pnpm exec wrangler d1 time-travel restore recipe-box --bookmark=<bookmark>` で戻す。
+   - 戻すと、その場でデータベースの全体が上書きされ、その時点より後の書き込みはすべて消える。
+   - R2 は戻らない。その後に消した写真は、R2 のデータの無い写真の行になり、その後に足した写真は、どの行からもたどれない R2 のデータになる。
+   - マイグレーションの記録（`d1_migrations`）も戻るので、戻した時点の表に合う版のコードにそろえる（次のデプロイで、その後のマイグレーションがもう一度当たる）。
+   - コマンドの引数は、実行する前に `pnpm exec wrangler d1 time-travel restore --help` で確かめる。
+   （[Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)）
 
 ### デプロイとレビューの準備
 
@@ -154,6 +177,41 @@ GitHub の Settings → Environments に、次の値を置く。
 Environment `production` は、「Deployment branches and tags」を「Selected branches and tags」にし、`main` だけを許す。
 本番のトークンとデモの ID を、レビューを経て main に入ったコードにだけ渡すためである（ほかのブランチから `workflow_dispatch` で動かしたり、ブランチの workflow が `environment: production` を名乗ったりしても渡さない）。
 これを守るのは Environment の設定である（ブランチの workflow は、自分の手順を書き換えられるため）。`deploy.yml` と `seed-demo.yml` は、誤って main 以外から手で動かしたときに気付けるよう、最初の手順で失敗する。
+
+## 最低限のメンテナンス
+
+新しい機能は足さず、依存とツールを新しく保ち、壊れたら直すだけにする。
+
+### 毎週（自動で届くもの）
+
+- Dependabot の PR と、`outdated.yml` が作る mise のツールの Issue を見る。
+- 自動でマージされない PR（ラベル `dependabot/needs-review`）は、`dependabot-merge` スキルで確かめてマージする。挙動が変わる更新なら、`fix(deps):` にして文書も直す（AGENTS.md の「ブランチと PR」）。
+- `modern-web-guidance` のパッケージを上げる PR では、同じ PR で、同じ版のスキルを入れ直す（AGENTS.md の「スキル」）。
+- main が先に進んで、ブランチが古い（BEHIND）まま止まった Dependabot の PR は、PR に `@dependabot rebase` とコメントして作り直させる（main は、ブランチが最新であることを必須にしている）。
+
+### 毎月
+
+- `dependabot-alert-issue` スキルで、Dependabot の alert から Issue を作る。`mise run audit` も実行する。
+- `outdated.yml` の Issue にある mise のツールを、まとめて上げる（`mise install` の後に `mise lock`。AGENTS.md の「ツールの版」）。Node は、使っているメジャーの版のサポートの終わり（EOL）が近くないかも見る。
+
+### schedule が止まらないようにする
+
+GitHub は、公開リポジトリで 60 日活動が無いと、schedule で動く workflow（`seed-demo.yml`・`outdated.yml`・`codeql.yml`）を止める。
+60 日の間に 1 回は main に commit が入るようにする（Dependabot の PR のマージでもよい）。止まったら、Actions の画面か `gh workflow enable <workflow>` で有効にし直す。
+
+### 放っておくと古くなるもの
+
+| もの | すること |
+| --- | --- |
+| `wrangler.toml` の `compatibility_date` | ふだんは上げない（古い日付のままでも動き続ける）。上げるときは、その間に既定になる compatibility flag（[一覧](https://developers.cloudflare.com/workers/configuration/compatibility-flags/)）を読み、挙動が変われば `fix:` の PR にする |
+| Cloudflare のデプロイのトークン（`CLOUDFLARE_API_TOKEN`） | 期限を付けたなら、切れる前に、同じ権限（上の「デプロイとレビューの準備」）で作り直し、Environment `production` の secret を差し替えて、古いトークンを消す |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude setup-token` で作ったトークンには期限がある。切れると `claude-review.yml` が失敗するので、作り直して Environment `claude-review` の secret を差し替える |
+| 手元で調べるための読み取り専用の Cloudflare のトークン | 作ったなら、期限が切れる前に作り直すか、要らなければ消す |
+| `docs/security.md` と、この文書の「本番のログ」の料金 | 「2026-11-30 まで」と「2026-12-01 から」の 2 つを書いている。2026-12-01 を過ぎたら、新しい料金だけの書き方に直す |
+| `docs/security.md` の費用の表の「2026-11 時点」（`guide/about.md` にもある） | 料金と無料の範囲は変わる。公式の文書で確かめ直したら、値と時点を直す |
+| mise の Rust・Node の版と、`worker-build`・`worker`（`=0.8.7`）の固定 | `outdated.yml` の Issue と Dependabot で上げる。`worker-build`（`mise.toml`）と `worker`（`apps/recipe-box-rs/Cargo.toml`）は同じ版にそろえて一緒に上げる |
+| CI の `runs-on: ubuntu-latest` | 指す Ubuntu の版は GitHub が変える。CI が急に落ちたら、まずランナーの版の変化を疑う |
+| Cloudflare の Monitors（定期の処理の失敗の通知） | #56 で入れたら、設定が消えていないかを見る |
 
 ## 使うのをやめるとき
 

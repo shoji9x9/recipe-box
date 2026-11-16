@@ -1,5 +1,5 @@
 {
-  // Node のスクリプト（seed）とスクリプトのテストの型を確かめる（mise run typecheck）。
+  // Node のスクリプト（scripts/ の seed・pin・guide・smoke など）とスクリプトのテストの型を確かめる（mise run typecheck）。
   // 共通の設定はルートの tsconfig.json から引き継ぎ、DOM の代わりに Node の型を使う。
   "extends": "../tsconfig.json",
   "compilerOptions": {
