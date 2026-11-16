@@ -1,4 +1,4 @@
-# pnpm の設定。Node のパッケージは、wrangler・commitlint・chrome-devtools-mcp・htmx・modern-web-guidance と、JavaScript のテストと型の確認（vitest・happy-dom・TypeScript・Node と commitlint の型）のためだけに使う。
+# pnpm の設定。Node のパッケージは、wrangler・commitlint・chrome-devtools-mcp・htmx・modern-web-guidance・markdown-it（解説の生成）と、JavaScript のテストと型の確認（vitest・happy-dom・TypeScript・Node と commitlint の型）のためだけに使う。
 
 # 公開から 7 日（10080 分）たっていない版を入れない。条件に合う版が無ければ失敗する。
 minimumReleaseAge: 10080

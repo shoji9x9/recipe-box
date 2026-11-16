@@ -137,3 +137,23 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler deploy
+      # デプロイした本番が応答するかを、GET だけで確かめる（レシピなどのデータを作ったり変えたりしない。
+      # トップの画面は、共有のデモの最終利用日時を書き換えることがあるが、人が開いたときと同じである）。
+      # API（D1 を使わない）・トップの画面（Worker と D1）・静的アセット（Worker を通らない）の 3 つを見る。
+      # 本番の URL は Cloudflare のアカウントの workers.dev のサブドメインで決まり、wrangler.toml からは分からないので、
+      # README.md と scripts/seed.ts と同じ値をここに書く。
+      - name: Check production
+        if: steps.cred.outputs.present == 'true'
+        env:
+          BASE_URL: https://recipe-box.shoji9x9.workers.dev
+        run: |
+          for path in /api/health / /assets/style.css; do
+            # 転送（3xx）も失敗に数えるよう、状態コードが 200 かを比べる。
+            status=$(curl -sS --retry 3 --retry-delay 5 --retry-all-errors --max-time 30 \
+              -o /dev/null -w '%{http_code}' "$BASE_URL$path" || true)
+            if [ "$status" != "200" ]; then
+              echo "::error::デプロイした本番の $path が 200 を返さない（$status。docs/development.md の「デプロイが失敗したとき」）"
+              exit 1
+            fi
+          done
+          echo "本番の /api/health・/・/assets/style.css が応答した"

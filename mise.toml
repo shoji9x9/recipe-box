@@ -64,7 +64,7 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、JavaScript の単体テスト（画面と、seed・pin・modern-web-guidance のスクリプト）を実行する"
+description = "Rust のテストと、JavaScript の単体テスト（画面と、seed・pin・解説（guide）・modern-web-guidance のスクリプト）を実行する"
 run = [
   "cargo test --workspace --locked",
   # 画面（apps/*/js-tests/）とスクリプト（scripts/*.test.ts）。vitest.config.ts。
