@@ -139,13 +139,21 @@ Rust から Workers の機能（リクエスト・D1・R2・Rate Limiting など
 #### JavaScript と Rust（Wasm）の分担
 
 Rust で書いていても、Worker の中では JavaScript と Rust（Wasm）が一緒に動きます。Workers のランタイム（V8）が動かすのは JavaScript で、Wasm はその JavaScript から読み込まれるためです。
-Hono で書いた Worker なら全部が JavaScript ですが、このアプリでは次の 3 つの層に分かれます。
+Hono で書いた Worker なら全部が JavaScript ですが、このアプリでは次のように分かれます。
 
-1. **Workers のランタイム（V8）**: リクエストを受け取り、`wrangler.toml` の `main`（`build/index.js`）を動かします。D1・R2 の binding と、リクエストの本文のストリームもここにあります。
-2. **`build/index.js`**: `worker-build` が作る JavaScript です。wasm-bindgen が作る橋渡し（glue）のコードと、手で書いた [src/photo-stream.js](repo:apps/recipe-box-rs/src/photo-stream.js) を 1 つにまとめ、Wasm（`index_bg.wasm`）を読み込みます。リクエストが来ると、Rust の `#[event(fetch)]` の関数を呼びます。
+1. **Workers のランタイム（V8）**: 実行の土台です。リクエストを受け取り、`wrangler.toml` の `main`（`build/index.js`）と、そこから読み込まれる Wasm を、この上で動かします。D1・R2 の binding と、リクエストの本文のストリームもランタイムが持ちます。
+2. **`build/index.js`**: `worker-build` が作る JavaScript です。wasm-bindgen が作る橋渡し（glue）のコードと、手で書いた [src/photo-stream.js](repo:apps/recipe-box-rs/src/photo-stream.js) を 1 つにまとめ、Wasm（`index_bg.wasm`）を読み込みます。
+   リクエストが来ると、ランタイムがこのファイルの fetch のハンドラーを呼び、ハンドラーが Rust の `#[event(fetch)]` の関数を呼びます。
 3. **Rust を Wasm にしたもの**: axum の Router・ハンドラー・上限の判定・写真のメタデータの書き換え（[src/metadata.rs](repo:apps/recipe-box-rs/src/metadata.rs)）など、決めることはすべてここで行います。
+   画面の HTML のテンプレートも、ここに入っています。askama は、テンプレートをコンパイルのときに Rust のコードにするので（[askama](#askama)）、テンプレートのファイルは Worker と一緒には配らず、Wasm の一部になります。
 
-<!-- diagram: worker-layers | Worker の中の層。Workers のランタイム（V8）がリクエストを受け、worker-build が作る build/index.js の wasm-bindgen の橋渡しが、Rust を Wasm にしたものの #[event(fetch)] と axum を呼ぶ。Rust は workers-rs を通して D1 と R2 を呼び、手で書いた photo-stream.js に、本文の頭を読ませて残りを pipeTo で流させる -->
+<!-- diagram: worker-layers | Worker の中の層と呼ぶ向き。ブラウザのリクエストを Workers のランタイム（V8）が受け、build/index.js の fetch のハンドラーを呼び、ハンドラーが Rust を Wasm にしたもの（#[event(fetch)] と axum・askama のテンプレート・metadata.rs・workers-rs）を呼ぶ。Rust は workers-rs と wasm-bindgen を通して build/index.js の橋渡しと photo-stream.js を呼び、それがランタイムの D1・R2 の binding を呼び、ランタイムが D1・R2 と通信する。静的アセットは、Worker を通らずにランタイムが返す。応答と結果は、同じ線を逆にたどって戻る -->
+
+図の矢印は、呼ぶ向きです。応答と、呼んだ結果は、同じ線を逆にたどって戻ります。ランタイムから JavaScript、JavaScript から Rust を呼ぶのは fetch のときで、Rust から JavaScript を呼ぶのは、D1・R2・乱数・photo-stream.js を使うときです。
+
+- **D1・R2 を使うとき**: Rust が D1・R2 と直接通信するのではありません。D1・R2 の binding は、ランタイムが Worker に渡す JavaScript の値（オブジェクト）です。
+  Rust は workers-rs を通して、wasm-bindgen の橋渡しでその JavaScript の値の関数を呼び、実際の通信はランタイムが行います。
+- **静的アセット**: CSS・画面の JavaScript・解説（`public/`）は、ランタイムがファイルとして返し、Worker（`build/index.js` と Wasm）を通りません（[静的アセット](#静的アセット)）。
 
 JavaScript の値（Request・Response、D1・R2 の binding、ReadableStream）は、Wasm のメモリーに写さず、JavaScript の側に置いたまま、参照（Rust の `JsValue` と、js-sys・web-sys の型）として Rust に渡します。
 中身（バイト列や文字列）を Rust で読むときだけ、Wasm のメモリーに写します。
@@ -168,7 +176,9 @@ Rust から JavaScript を呼ぶ道は 3 つあります。
 そこで、形式を決めてメタデータ（撮った場所など）を取り除く判断は Rust に置き、JavaScript には、頭の部分（画像のデータより前）を読んで Rust に渡すことと、書き換えた頭の後に残りを流すことだけをさせます。
 残りは、ランタイムの組み込みの `pipeTo` で R2 へ流すので、JavaScript の関数も Wasm も通りません。
 
-<!-- diagram: photo-stream | 写真のバイト列を追加するときに、JavaScript と Rust が何を渡し合うか。Rust が photo-stream.js に本文の頭を 64 KiB ずつ読ませ、頭だけを Wasm のメモリーに写す。Rust の metadata.rs が形式を決めて位置情報などを 0 で埋め、D1 に行を入れる。photo-stream.js が書き換えた頭と読みすぎた分を書き、残りはランタイムの pipeTo で R2 に流す -->
+<!-- diagram: photo-stream | 写真のバイト列を追加するときに、JavaScript と Rust が何を渡し合うか。Rust が photo-stream.js に本文の頭を 64 KiB ずつ読ませ、頭だけを Wasm のメモリーに写す。Rust の metadata.rs が形式を決めて位置情報などを 0 で埋める。photo-stream.js が書き換えた頭と読みすぎた分を書き、残りはランタイムの pipeTo で R2 に流す -->
+
+この図は、誰が読み、誰が決め、誰が流すかだけを描いています。D1 と R2 に書く順序と上限の判定は、[写真の保管](#写真の保管)の図にあります。
 
 <!-- code: apps/recipe-box-rs/src/photo-stream.js#join-photo -->
 

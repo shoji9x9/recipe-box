@@ -1,41 +1,39 @@
 # Worker の中の JavaScript と Rust（Wasm）の関係。mise run guide が SVG にする（docs/development.md の「解説」）。
 ...@_style
-# 線の文字を斜体にしない（_style.d2）。この図は両向きの線（<->）を使うので、そちらにも書く。
+# 線の文字を斜体にしない（_style.d2）。
 (** -> **)[*].style.italic: false
-(** <-> **)[*].style.italic: false
 
 direction: right
 
-# 左から、D1・R2 → ランタイム → worker-build が作る JavaScript → Rust（Wasm）の順に、外側から内側へ並べる。
-# 呼び出しと値は両方の向きに行き来するので、線は両向きにし、交差しないよう左から右へだけ結ぶ。
-stores: D1・R2 {
+# 呼ぶ向きに、左から右へ一列に並べる。応答と結果は、同じ線を逆にたどって戻る。
+# 線を水平にするため、一列の要素は同じ高さにし、中に入れ子の枠を作らない（中身は文字で書く）。
+# 枠をまたぐ線は中心どうしを結ぶので、枠の外の要素（ブラウザと D1・R2）も同じ形の枠に入れ、中の要素と高さをそろえる。
+# build/index.js は、Rust を呼ぶ入口と、Rust から呼ばれる橋渡しの 2 か所に出てくるので、2 つに分けて描く。
+# 静的アセットの流れは、Worker を通らない別の流れなので、ブラウザを分けて別の段に描く。
+users: 使う人 {
   class: group
-  direction: down
-  d1: D1 {class: store}
-  r2: R2 {class: store}
+  browser: ブラウザ\n（画面・API） {class: actor; width: 150; height: 170; label.near: center-center}
+  browser_files: ブラウザ\n（CSS・\nJavaScript\nのファイル） {class: actor; width: 150; height: 90; label.near: center-center}
 }
 
-worker: Worker {
+runtime: Workers のランタイム（V8）。build/index.js と Wasm は、この上で動く {
   class: [group; cloudflare]
-  runtime: Workers の\nランタイム（V8）\n\nリクエスト・\nbinding・\n本文のストリーム {class: service}
-  index: build/index.js\n（worker-build が作る） {
-    class: group
-    direction: down
-    glue: wasm-bindgen の\n橋渡しのコード {class: actor}
-    photo_stream: src/photo-stream.js\n（手で書いた\nJavaScript） {class: app}
-  }
-  rust: Rust を Wasm にしたもの {
-    class: group
-    direction: down
-    entry: "#[event(fetch)]\n→ axum" {class: app}
-    workers_rs: workers-rs\n（D1・R2 を包む） {class: app}
-    metadata: metadata.rs\n（形式と\nメタデータ） {class: app}
-  }
+  entry: build/index.js\n\nfetch のハンドラー\n（wasm-bindgen が作る） {class: actor; width: 220; height: 170; label.near: center-center}
+  wasm: "Rust を Wasm にしたもの\n（index_bg.wasm）\n\n#[event(fetch)] → axum\naskama のテンプレート（HTML）\nmetadata.rs・workers-rs" {class: app; width: 310; height: 170; label.near: center-center}
+  glue: build/index.js\n\nwasm-bindgen の橋渡し・\nphoto-stream.js {class: actor; width: 240; height: 170; label.near: center-center}
+  bindings: D1・R2 の binding\n\nJavaScript の値。\n通信はランタイムが行う {class: service; width: 220; height: 170; label.near: center-center}
+  assets: 静的アセット（public/）\nWorker を通さずに返す {class: service; width: 220; height: 90; label.near: center-center}
 
-  runtime <-> index.glue: fetch・\nbinding
-  index.glue <-> rust: 値を参照\n（JsValue）で
-  runtime <-> index.photo_stream: 本文を読む・\npipeTo
-  index.photo_stream <-> rust: 頭を渡す・\n書き換えた頭
+  entry -> wasm: Request を渡す
+  wasm -> glue: workers-rs・crypto・\nphoto-stream.js を呼ぶ
+  glue -> bindings: binding を呼ぶ
 }
 
-stores <-> worker.runtime: 読み書き
+services: Cloudflare のサービス {
+  class: group
+  stores: D1・R2 {class: store; width: 120; height: 170; label.near: center-center}
+}
+
+users.browser -> runtime.entry: リクエスト
+runtime.bindings -> services.stores: 読み書き
+users.browser_files -> runtime.assets: ファイルのパス
