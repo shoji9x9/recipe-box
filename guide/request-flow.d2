@@ -1,24 +1,28 @@
 # リクエストが届いてから応答を返すまで。mise run guide が SVG にする（docs/development.md の「解説」）。
+# 形の使い分け（解説の本文の「図の見方」と合わせる）:
+#   楕円（terminal）: 始まりと終わり。ひし形（decision）: はい・いいえで先が分かれる確かめ。
+#   四角（app）: このアプリのコードの処理。赤の破線（reject）: 確かめを通らず、断る応答を返す流れ。
 ...@_style
 
 direction: down
 
-req: リクエスト {class: actor; shape: oval}
-assets: 静的アセットに当たるか {class: service; shape: diamond}
-file: ファイルを返す\n（Worker は動かない） {class: service; shape: page}
-fetch: "#[event(fetch)] の入口\n写真のバイト列なら、本文をストリームのまま分けておく" {class: app}
+req: リクエスト {class: terminal}
+assets: 静的アセットの\nファイルに当たるか {class: decision}
+file: ファイルを返す\n（Worker は動かない） {class: terminal}
+fetch: "Worker の入口（#[event(fetch)]）\n写真のバイト列なら、本文をストリームのまま分けておく" {class: app}
 router: axum の Router\nパスとメソッドでハンドラーを選ぶ {class: app}
-mw: middleware\n画面の応答のヘッダー（CSP など）・書き込みの回数・本文の大きさ {class: app}
-ext: extractor（Workspace）\nX-Workspace-Id か Cookie の ID を確かめ、最終利用日時を更新する {class: app}
-handler: ハンドラー\n入力を確かめ、Backend を通して読み書きする {class: app}
-backend: Backend（CloudflareBackend）\nD1・R2・Rate Limiting・乱数・時計 {class: service}
-res: 応答（HTML か JSON） {class: actor; shape: oval}
+mw: middleware の確かめを通るか\n（書き込みの回数・本文の大きさ） {class: decision}
+ext: ワークスペースの ID を\n確かめられるか（extractor） {class: decision}
+handler: ハンドラー\n入力を確かめ、Backend を通して D1・R2 を読み書きする {class: app}
+res: 応答を返す\n（HTML か JSON） {class: terminal}
+reject: 断る応答を返す {class: terminal}
 
 req -> assets
 assets -> file: はい
 assets -> fetch: いいえ
-fetch -> router -> mw -> ext -> handler
-handler -> backend: 読み書き
+fetch -> router -> mw
+mw -> ext: はい
+ext -> handler: はい
 handler -> res
-mw -> res: 断る（429・413） {class: reject}
-ext -> res: 断る（400・404） {class: reject}
+mw -> reject: いいえ（429・413） {class: reject}
+ext -> reject: いいえ（400・404） {class: reject}

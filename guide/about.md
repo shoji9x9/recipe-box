@@ -15,6 +15,8 @@ recipe-box は、料理のレシピを登録・検索できる Web アプリで�
 
 <!-- diagram: architecture | 全体の構成。ブラウザと API の利用者が Cloudflare の Worker と静的アセットにアクセスし、Worker が D1・R2・Rate Limiting を使う。Cron Trigger が毎日 Worker を呼ぶ。GitHub Actions がデプロイとデモの入れ直しをする -->
 
+図の見方: 枠は、まとまり（使う人・Cloudflare・GitHub Actions）です。円柱はデータを置くところ（D1・R2）で、四角はそれ以外の機能です。主色の四角が、このアプリのコード（Worker）です。
+
 - 画面（HTML）と API（JSON）を、同じ 1 つの Worker が返します。画面は API を呼ばず、Worker の中で同じ処理を使います。
 - CSS・JavaScript・このページなどのファイルは、Workers の静的アセットとして配ります。Worker は動きません。
 - データは D1（SQLite）に、写真のデータは R2（オブジェクトストレージ）に置きます。
@@ -190,8 +192,10 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 
 <!-- diagram: request-flow | リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口から axum の Router、middleware、extractor、ハンドラー、Backend の順に進み、途中で断るときはそこで応答を返す -->
 
+図の見方: 楕円は始まりと終わり、ひし形は「はい」と「いいえ」で先が分かれる確かめ、四角はこのアプリのコードの処理です。赤の破線は、確かめを通らずに断る応答を返す流れです。
+
 - 静的アセットに当たるパスは、Worker を通りません。
-- 画面の応答には、middleware が CSP などのヘッダーを付けます。
+- 画面の応答には、middleware が CSP などのヘッダーを付けます（図では省いています）。
 - 書き込む API と画面の書き込みには、middleware が IP アドレスごとの回数と本文の大きさを確かめます。
 - ID の要る API は、extractor がワークスペースを確かめます。画面は Cookie の ID を使い、無ければ共有のデモを見せます。
 - ハンドラーは、`Backend` トレイトを通して D1・R2 を使います。

@@ -14,6 +14,19 @@ vars: {
 
 # 色は、アプリの画面（apps/recipe-box-rs/public/assets/style.css）の文字の色と、役割ごとの淡い色に合わせる。
 classes: {
+  # 要素をまとめる枠の名前の大きさ。中の要素より少しだけ大きくする（既定は大きすぎる）。
+  # 枠の class（group・cloudflare・github）は、どれもこの大きさにする。
+  group: {
+    label.near: top-left
+    style: {
+      fill: "#f7f7f7"
+      stroke: "#6a6a6a"
+      font-color: "#222222"
+      font-size: 18
+      bold: true
+      border-radius: 12
+    }
+  }
   # 使う人・外から呼ぶもの
   actor: {
     style: {
@@ -31,6 +44,8 @@ classes: {
       fill: "#fff6ee"
       stroke: "#f38020"
       font-color: "#222222"
+      font-size: 18
+      bold: true
       border-radius: 12
     }
   }
@@ -41,6 +56,8 @@ classes: {
       fill: "#f3f5f8"
       stroke: "#57606a"
       font-color: "#222222"
+      font-size: 18
+      bold: true
       border-radius: 12
     }
   }
@@ -70,6 +87,24 @@ classes: {
     style: {
       fill: "#eef4ff"
       stroke: "#2b6cb0"
+      font-color: "#222222"
+    }
+  }
+  # フロー図の始まりと終わり（リクエストと応答）
+  terminal: {
+    shape: oval
+    style: {
+      fill: "#f7f7f7"
+      stroke: "#6a6a6a"
+      font-color: "#222222"
+    }
+  }
+  # フロー図の分かれ道（はい・いいえで先が分かれる確かめ）
+  decision: {
+    shape: diamond
+    style: {
+      fill: "#fff6ee"
+      stroke: "#f38020"
       font-color: "#222222"
     }
   }

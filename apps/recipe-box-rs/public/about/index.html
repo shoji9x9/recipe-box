@@ -62,6 +62,7 @@
 <p>このページは、元の文章（<a href="https://github.com/shoji9x9/recipe-box/blob/main/guide/about.md">guide/about.md</a>）から <code>mise run guide</code> で作ります。引用するコードは、作るたびにリポジトリのファイルから取り出すので、コードと食い違いません。</p>
 <h2 id="全体の構成">全体の構成</h2>
 <p><a href="/assets/guide/architecture.svg"><img src="/assets/guide/architecture.svg" alt="全体の構成。ブラウザと API の利用者が Cloudflare の Worker と静的アセットにアクセスし、Worker が D1・R2・Rate Limiting を使う。Cron Trigger が毎日 Worker を呼ぶ。GitHub Actions がデプロイとデモの入れ直しをする"></a></p>
+<p>図の見方: 枠は、まとまり（使う人・Cloudflare・GitHub Actions）です。円柱はデータを置くところ（D1・R2）で、四角はそれ以外の機能です。主色の四角が、このアプリのコード（Worker）です。</p>
 <ul>
 <li>画面（HTML）と API（JSON）を、同じ 1 つの Worker が返します。画面は API を呼ばず、Worker の中で同じ処理を使います。</li>
 <li>CSS・JavaScript・このページなどのファイルは、Workers の静的アセットとして配ります。Worker は動きません。</li>
@@ -333,9 +334,10 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> に、仕組みは <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a> と <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
 <h3 id="リクエストの流れ">リクエストの流れ</h3>
 <p><a href="/assets/guide/request-flow.svg"><img src="/assets/guide/request-flow.svg" alt="リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口から axum の Router、middleware、extractor、ハンドラー、Backend の順に進み、途中で断るときはそこで応答を返す"></a></p>
+<p>図の見方: 楕円は始まりと終わり、ひし形は「はい」と「いいえ」で先が分かれる確かめ、四角はこのアプリのコードの処理です。赤の破線は、確かめを通らずに断る応答を返す流れです。</p>
 <ul>
 <li>静的アセットに当たるパスは、Worker を通りません。</li>
-<li>画面の応答には、middleware が CSP などのヘッダーを付けます。</li>
+<li>画面の応答には、middleware が CSP などのヘッダーを付けます（図では省いています）。</li>
 <li>書き込む API と画面の書き込みには、middleware が IP アドレスごとの回数と本文の大きさを確かめます。</li>
 <li>ID の要る API は、extractor がワークスペースを確かめます。画面は Cookie の ID を使い、無ければ共有のデモを見せます。</li>
 <li>ハンドラーは、<code>Backend</code> トレイトを通して D1・R2 を使います。</li>
