@@ -27,7 +27,7 @@ use crate::{
     backend::{Backend, ListedRecipe},
     error::ApiError,
     limits::{check_body_size, check_write},
-    photo::{self, Photo, PhotoBody, PhotoId},
+    photo::{self, Photo, PhotoBody},
     recipe::{self, FieldError, MAX_PAGE, PAGE_SIZE, Recipe, RecipeId, RecipeInput},
     stream::RawPhotoBody,
     workspace::{self, WorkspaceId},
@@ -972,9 +972,22 @@ pub async fn create<B: Backend>(
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     let limited = limited.is_some();
+    let form = read_recipe_form(form, limited)?;
     save(&backend, &session, &viewer, FormKind::New, &form, limited).await
+}
+
+/// 登録・更新のフォームの本文を読む。書き込みの回数の制限に当たっていれば（[`WriteLimited`]）、
+/// 読めなかったとき（`Content-Length` の無い大きすぎる本文など）も、API と同じく回数の制限を先に答える。
+fn read_recipe_form(
+    form: Result<Form<RecipeForm>, FormRejection>,
+    limited: bool,
+) -> Result<RecipeForm, ScreenError> {
+    match form {
+        Ok(Form(form)) => Ok(form),
+        Err(_) if limited => Err(ApiError::TooManyRequests.into()),
+        Err(rejection) => Err(form_error(&rejection)),
+    }
 }
 
 /// `POST /recipes/check`: フォームを確かめるだけで、保存しない。欄から離れたときに htmx が呼ぶ。
@@ -1003,23 +1016,6 @@ fn parse_id(id: &str) -> Result<RecipeId, ScreenError> {
     RecipeId::parse(id).ok_or(ScreenError::Api(ApiError::RecipeNotFound))
 }
 
-/// パスの `{id}` からレシピの ID を読む。パーセントエンコーディングを外すと UTF-8 にならない ID（`%ff` など）も、
-/// axum の既定の 400 ではなく、API と同じく「見つからない」にする。
-fn path_id(path: Result<Path<String>, PathRejection>) -> Result<RecipeId, ScreenError> {
-    let Path(id) = path.map_err(|_| ApiError::RecipeNotFound)?;
-    parse_id(&id)
-}
-
-/// パスの `{id}` と `{photo_id}` から、レシピと写真の ID を読む。読めなければ [`path_id`] と同じく「見つからない」にする。
-fn path_ids(
-    path: Result<Path<(String, String)>, PathRejection>,
-) -> Result<(RecipeId, PhotoId), ScreenError> {
-    let Path((id, photo_id)) = path.map_err(|_| ApiError::RecipeNotFound)?;
-    let id = parse_id(&id)?;
-    let photo_id = PhotoId::parse(&photo_id).ok_or(ApiError::PhotoNotFound)?;
-    Ok((id, photo_id))
-}
-
 /// ワークスペースのレシピを読む。無ければ「見つからない」にする。
 async fn load<B: Backend>(
     backend: &B,
@@ -1040,7 +1036,7 @@ pub async fn detail<B: Backend>(
     id: Result<Path<String>, PathRejection>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let id = path_id(id)?;
+    let id = recipe::parse_recipe_id(id)?;
     detail_page(&backend, &viewer, &session, &id).await
 }
 
@@ -1153,7 +1149,7 @@ pub async fn photo_file<B: Backend>(
     ids: Result<Path<(String, String)>, PathRejection>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let (id, photo_id) = path_ids(ids)?;
+    let (id, photo_id) = photo::parse_ids(ids)?;
     Ok(photo::photo_response(&backend, viewer.id(), &id, &photo_id).await?)
 }
 
@@ -1171,7 +1167,7 @@ pub async fn add_photo<B: Backend>(
     request: Request,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let id = path_id(id)?;
+    let id = recipe::parse_recipe_id(id)?;
     let from_script = raw.is_some() || !photo::has_multipart_body(request.headers());
     let body = match read_photo_body(raw, request).await {
         Ok(Some(body)) => body,
@@ -1239,7 +1235,7 @@ pub async fn delete_photo<B: Backend>(
     ids: Result<Path<(String, String)>, PathRejection>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let (id, photo_id) = path_ids(ids)?;
+    let (id, photo_id) = photo::parse_ids(ids)?;
     match photo::remove(&backend, viewer.id(), &id, &photo_id).await {
         Ok(()) => Ok(see_other_with(&edit_path(&id), Flash::PhotoDeleted)),
         Err(error) => photo_failure(&backend, &viewer, &session, &id, error).await,
@@ -1253,7 +1249,7 @@ pub async fn edit_form<B: Backend>(
     id: Result<Path<String>, PathRejection>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let id = path_id(id)?;
+    let id = recipe::parse_recipe_id(id)?;
     edit_page(&backend, &viewer, &session, &id, StatusCode::OK, None).await
 }
 
@@ -1266,10 +1262,11 @@ pub async fn update<B: Backend>(
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let id = path_id(id)?;
-    let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
+    let id = recipe::parse_recipe_id(id)?;
+    let limited = limited.is_some();
+    let form = read_recipe_form(form, limited)?;
     let kind = FormKind::Edit(id.to_string());
-    save(&backend, &session, &viewer, kind, &form, limited.is_some()).await
+    save(&backend, &session, &viewer, kind, &form, limited).await
 }
 
 /// 削除のフォームの値。一覧から消したときは、同じ検索の条件とページに戻す。
@@ -1287,7 +1284,7 @@ pub async fn delete<B: Backend>(
     form: Result<Form<DeleteForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
     let viewer = require_viewer(&backend, &session).await?;
-    let id = path_id(id)?;
+    let id = recipe::parse_recipe_id(id)?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     recipe::remove(&backend, viewer.id(), &id).await?;
     // 戻り先は、検索の条件とページの番号から作り直す（送られた URL をそのまま使わない）。
@@ -1389,10 +1386,10 @@ pub async fn switch_workspace<B: Backend>(
 ) -> Result<Response, ScreenError> {
     // 書き込みの回数の制限に当たっていれば、切り替えずに、「ワークスペース」の画面に理由を出す。
     if limited.is_some() {
-        let error = ApiError::TooManyRequests;
+        let (status, _, message) = ApiError::TooManyRequests.parts();
         let mut page = workspace_view(&backend, &session, None).await?;
-        page.layout = page.layout.with_alert(error.parts().2);
-        return Ok(render(error.parts().0, &page));
+        page.layout = page.layout.with_alert(message);
+        return Ok(render(status, &page));
     }
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
     // 前後の空白は、コピーしたときに入りやすいので取り除く。
@@ -1519,11 +1516,13 @@ pub async fn guard_photo_writes<B: Backend>(
 /// - `POST /recipes`・`POST /recipes/{id}`: 書きかけの入力を保ったフォームに理由を出す。
 ///
 /// ほかの書き込み（削除・写真など）は、ここで断ってエラーの画面にする。
+/// `{id}` は、形の正しいレシピの ID だけにする。ほかのパスを `/recipes/` の下に足したときに、印を見ないハンドラーへ
+/// 渡して回数の制限を抜けさせないためである。ここに足すパスのハンドラーは、印を見て書き込まないこと（テストで確かめる）。
 fn shows_write_limit_itself(path: &str) -> bool {
     matches!(path, "/workspace" | "/workspace/switch" | "/recipes")
         || path
             .strip_prefix("/recipes/")
-            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            .is_some_and(|id| RecipeId::parse(id).is_some())
 }
 
 /// [`guard_writes`] の中身。`max_body_bytes` は本文の大きさの上限。
@@ -1543,34 +1542,40 @@ async fn guard<B: Backend>(
                 edit_href: None,
             },
         )
-    } else if let Err(error) =
-        check_write(backend, request.method(), request.headers(), max_body_bytes).await
-    {
-        if error == ApiError::TooManyRequests
-            && shows_write_limit_itself(request.uri().path())
-            // 回数の制限に当たると、check_write は本文の大きさを確かめないので、ここで確かめる。
-            // 大きすぎる本文は、ハンドラーに読ませずに、回数の制限のエラーの画面で断る（API と同じく回数を先に答える）。
-            && check_body_size(request.headers(), max_body_bytes).is_ok()
-        {
-            request.extensions_mut().insert(WriteLimited);
-            return add_push_url(is_post, next.run(request).await);
-        }
-        match (&error, photo::photo_recipe_path(request.uri().path())) {
-            // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
-            // よく起きるので、一般の説明ではなく写真の上限を出し、編集の画面に戻れるようにする。
-            (ApiError::PayloadTooLarge, Some(recipe_path)) => render(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                &ErrorPage {
-                    layout: Layout::default().with_alert(PHOTO_TOO_LARGE),
-                    edit_href: Some(edit_path_of(recipe_path)),
-                },
-            ),
-            _ => error_page(&error),
-        }
     } else {
-        next.run(request).await
+        let checked =
+            check_write(backend, request.method(), request.headers(), max_body_bytes).await;
+        match checked {
+            Ok(()) => next.run(request).await,
+            Err(ApiError::TooManyRequests)
+                if shows_write_limit_itself(request.uri().path())
+                    // 回数の制限に当たると、check_write は本文の大きさを確かめないので、ここで確かめる。
+                    // 大きすぎる本文は、ハンドラーに読ませずに、回数の制限のエラーの画面で断る（API と同じく回数を先に答える）。
+                    && check_body_size(request.headers(), max_body_bytes).is_ok() =>
+            {
+                request.extensions_mut().insert(WriteLimited);
+                next.run(request).await
+            }
+            Err(error) => limit_error_page(&error, request.uri().path()),
+        }
     };
     add_push_url(is_post, response)
+}
+
+/// [`guard`] が書き込みの前の確かめで断るときの画面。
+fn limit_error_page(error: &ApiError, path: &str) -> Response {
+    match (error, photo::photo_recipe_path(path)) {
+        // 写真のフォームの本文が大きすぎるときは、本文を読まずに断る。スマートフォンの写真（5 MB 以上）で
+        // よく起きるので、一般の説明ではなく写真の上限を出し、編集の画面に戻れるようにする。
+        (ApiError::PayloadTooLarge, Some(recipe_path)) => render(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &ErrorPage {
+                layout: Layout::default().with_alert(PHOTO_TOO_LARGE),
+                edit_href: Some(edit_path_of(recipe_path)),
+            },
+        ),
+        _ => error_page(error),
+    }
 }
 
 /// POST に移動（303）ではなく画面（入力の誤りやエラー）で答えたときは、htmx にアドレスバーの URL を変えさせない。

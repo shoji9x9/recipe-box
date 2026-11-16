@@ -2329,3 +2329,22 @@ async fn unreadable_form_is_answered_in_screen_words() {
         assert!(!response.body.contains("JSON"), "{target}");
     }
 }
+
+/// 回数の制限に当たっているときは、フォームを読めない（Content-Length の無い大きすぎる本文など）・ID の形が正しくないときも、
+/// 回数の制限を先に答える。ID の形が正しくないパスは、ハンドラーに渡さない。
+#[tokio::test]
+async fn write_limit_is_answered_before_unreadable_forms_and_bad_ids() {
+    let backend = FakeBackend {
+        write_limited: true,
+        ..backend_with_workspaces()
+    };
+    let a = cookie(WORKSPACE_A);
+    let response = screen_post(&backend, "/recipes", Some(&a), "name=x&steps=a&steps=b").await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(response.body.contains("<title>エラー"), "{}", response.body);
+    for target in ["/recipes/xyz", "/recipes/%ff"] {
+        let response = screen_post(&backend, target, Some(&a), "name=x&servings=1").await;
+        assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS, "{target}");
+        assert!(response.body.contains("<title>エラー"), "{}", response.body);
+    }
+}
