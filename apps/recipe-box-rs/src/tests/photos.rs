@@ -761,7 +761,7 @@ async fn failed_cleanup_is_reported_and_retried_next_time() {
     let summary = crate::workspace::delete_unused(&broken).await;
     assert_eq!(summary.pending_photos.failed, 1);
     assert!(summary.has_failure());
-    // R2 を消せなければ、行を残し、次の日にもう一度試す。
+    // R2 を消せなければ、行を残し、次の実行でもう一度試す。
     assert_eq!(backend.photos.lock().unwrap().len(), 1);
     let summary = crate::workspace::delete_unused(&backend).await;
     assert_eq!(summary.pending_photos.cleaned, 1);
@@ -843,7 +843,7 @@ async fn failed_row_deletion_in_cleanup_keeps_all_rows_for_the_next_run() {
     assert_eq!(summary.pending_photos.failed, 3);
     assert_eq!(summary.pending_photos.cleaned, 0);
     assert_eq!(backend.photos.lock().unwrap().len(), 3);
-    // 次の日に、もう一度試して片付ける。
+    // 次の実行で、もう一度試して片付ける。
     let summary = crate::workspace::delete_unused(&backend).await;
     assert_eq!(summary.pending_photos.cleaned, 3);
     assert!(backend.photos.lock().unwrap().is_empty());
