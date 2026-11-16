@@ -28,4 +28,4 @@ rust -> js: 書き換えた先頭だけを渡し、\nR2 へ流すストリーム
 js -> rust: R2 に渡すストリームを返す\n（まだ何も流れていない） {class: result}
 rust -> r2: ストリームを渡して書くよう指示（put）
 runtime -> r2: 本文の残りを pipeTo で流す\n（先頭を書き終えると自動で始まる。\nJavaScript の関数も Wasm も通らない） {class: key}
-r2 -> rust: 書けた {class: result}
+r2 -> rust: 完了通知\n（R2 への書き込みが終わった） {class: result}
