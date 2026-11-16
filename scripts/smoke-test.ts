@@ -11,6 +11,9 @@
 // アプリ全体の 1 日の上限（20 個）に当たることがある。そのときは 503 で止まり、作り直し方を示す。
 // 環境変数 SCHEDULED_LOG に wrangler dev --test-scheduled のログのファイルを渡したときだけ、定期の自動削除を動かして確かめる（CI で使う）。
 // この確認は、wrangler でローカルの D1 を直接書き換える（ワークスペースを古くし、写真の行に印を付ける）。
+// 環境変数 API_ONLY=1 のときは、API（docs/spec.md の「API」）だけを確かめ、今の作りに頼る画面と静的アセット
+// （/ の文字・/assets/ のファイル・/about の _headers）を確かめない。リライトの後の新しいアプリに当てるときに使う。
+// SCHEDULED_LOG の確認も、今の作り（wrangler・ローカルの D1 の表・ログの文）に頼るので、新しいアプリには付けない。
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { readFileSync, statSync } from "node:fs";
@@ -19,7 +22,7 @@ import { ID_PATTERN, wrangler } from "./wrangler.ts";
 
 // 応答の本文の形（docs/spec.md の API）。確かめに使う項目だけを書く。
 type Recipe = { id: string; name: string; servings: number; ingredients: string; steps: string };
-type RecipeList = { recipes: Recipe[]; total: number };
+type RecipeList = { recipes: Recipe[]; total: number; page: number; per_page: number };
 type ErrorBody = { error: string; field?: string };
 type Photo = { id: string; content_type: string };
 type PhotoList = { photos: Photo[] };
@@ -33,6 +36,13 @@ if (args.length > 1) {
   process.exit(2);
 }
 const baseUrl = args[0] ?? "http://localhost:8787";
+const apiOnly = process.env["API_ONLY"] === "1";
+const scheduledLog = process.env["SCHEDULED_LOG"] ?? "";
+if (apiOnly && scheduledLog !== "") {
+  // 定期の自動削除の確かめは、今の作りのローカルの D1 を書き換えるので、新しいアプリに当てる API_ONLY=1 とは一緒に使わない。
+  console.error("API_ONLY=1 と SCHEDULED_LOG は一緒に使えない（SCHEDULED_LOG は今の作りのローカルの D1 を書き換える）");
+  process.exit(2);
+}
 
 // 書き込む API が回数の制限（60 秒に 30 回）で 429 になったら、待ってからやり直すか。
 // 制限そのものを確かめるときだけ false にする。
@@ -244,11 +254,9 @@ async function checkScheduled(logPath: string, photo: Buffer, keptWorkspace: str
   if (keptRows.length !== 0) fail("印の残った写真の行が、自動削除で片付けられていない");
 }
 
-async function main(): Promise<void> {
-  console.log("ヘルスチェックと画面");
-  await request("GET", "/api/health");
-  expect(200, "GET /api/health");
-  if (text() !== '{"status":"ok"}') fail("/api/health の本文が違う");
+// 画面と静的アセット。今の作り（画面の文字・public/ のファイル・_headers）に頼るので、API_ONLY=1 のときは確かめない。
+async function checkScreens(): Promise<void> {
+  console.log("画面と静的アセット");
   await request("GET", "/");
   expect(200, "GET /");
   // デモ（.dev.vars の DEMO_WORKSPACE_ID）があればデモを、無ければ「はじめる」画面を返す。
@@ -273,6 +281,38 @@ async function main(): Promise<void> {
     if (responseHeaders.get("x-content-type-options") !== "nosniff") fail(`${path} に nosniff が付いていない`);
   }
   if (!text().includes("このアプリの作り")) fail("/about/ が解説でない");
+}
+
+// 無い API のパスと、受け付けないメソッドも、ほかの失敗と同じ JSON の形で答える（docs/spec.md の「API」）。
+async function checkApiFallbacks(workspace: string): Promise<void> {
+  console.log("無い API のパスと、受け付けないメソッド");
+  for (const path of ["/api", "/api/", "/api/nothing", "/api/recipes/x/y/z/w"]) {
+    await request("GET", path, { workspace });
+    expect(404, `GET ${path}`);
+    if (json<ErrorBody>().error !== "not_found") fail(`${path} のエラーが not_found でない`);
+  }
+  for (const [method, path] of [
+    ["PATCH", "/api/recipes"],
+    ["DELETE", "/api/recipes"],
+    ["GET", "/api/workspaces"],
+    ["POST", "/api/health"],
+  ] as const) {
+    await request(method, path, { workspace });
+    expect(405, `${method} ${path}`);
+    if (json<ErrorBody>().error !== "method_not_allowed") fail(`${method} ${path} のエラーが method_not_allowed でない`);
+  }
+}
+
+async function main(): Promise<void> {
+  console.log("ヘルスチェック");
+  await request("GET", "/api/health");
+  expect(200, "GET /api/health");
+  if (text() !== '{"status":"ok"}') fail("/api/health の本文が違う");
+  if (apiOnly) {
+    console.log("  画面と静的アセットは確かめない（API_ONLY=1）");
+  } else {
+    await checkScreens();
+  }
 
   console.log("ワークスペースを 2 つ作る");
   await request("POST", "/api/workspaces");
@@ -281,7 +321,9 @@ async function main(): Promise<void> {
   }
   if (status === 503) {
     fail(
-      "アプリ全体のワークスペースの上限（1 日 20 個）に当たった。ローカルの D1 を作り直す（apps/recipe-box-rs/.wrangler/state/v3/d1 を消す）か、UTC の翌日に実行する",
+      apiOnly
+        ? "アプリ全体のワークスペースの上限（1 日 20 個）に当たった。アプリのデータを作り直すか、UTC の翌日に実行する"
+        : "アプリ全体のワークスペースの上限（1 日 20 個）に当たった。ローカルの D1 を作り直す（apps/recipe-box-rs/.wrangler/state/v3/d1 を消す）か、UTC の翌日に実行する",
     );
   }
   expect(201, "POST /api/workspaces");
@@ -301,6 +343,7 @@ async function main(): Promise<void> {
   expect(201, "POST /api/recipes");
   const created = json<Recipe>();
   const recipeId = created.id;
+  if (responseHeaders.get("location") !== `/api/recipes/${recipeId}`) fail("POST /api/recipes の Location が違う");
   if (created.ingredients !== "牛肉\n玉ねぎ") fail("材料の改行が保たれていない");
   // 一覧の並び順（作った日時の新しい順）を確かめるため、作った日時が同じミリ秒にならないよう少し待つ。
   await sleep(10);
@@ -357,14 +400,23 @@ async function main(): Promise<void> {
   if (page1.recipes.length !== 20) fail("1 ページ目が 20 件でない");
   if (page1.total !== 80) fail("総数が 80 でない");
   if (page1.recipes[0]?.name !== "料理 80") fail("1 ページ目が新しい順でない");
+  if (page1.page !== 1 || page1.per_page !== 20) fail("1 ページ目の page と per_page が 1 と 20 でない");
   await request("GET", "/api/recipes?page=4", b);
   expect(200, "GET /api/recipes?page=4");
   const page4 = json<RecipeList>();
   if (page4.recipes.length !== 20) fail("4 ページ目が 20 件でない");
   if (page4.recipes[19]?.name !== "料理 1") fail("4 ページ目の最後が最も古いレシピでない");
+  if (page4.page !== 4 || page4.per_page !== 20) fail("4 ページ目の page と per_page が 4 と 20 でない");
   await request("GET", query("料理 1", 1), b);
   expect(200, "GET /api/recipes?q=料理 1");
   if (json<RecipeList>().total !== 11) fail("検索の総数が 11（料理 1・10〜19）でない");
+  // 最後のページより後ろの番号では、空の recipes と総数を返す。
+  await request("GET", query("料理 1", 2), b);
+  expect(200, "GET /api/recipes?q=料理 1&page=2");
+  const pastLast = json<RecipeList>();
+  if (pastLast.recipes.length !== 0 || pastLast.total !== 11 || pastLast.page !== 2) {
+    fail("最後のページより後ろで、空の一覧と総数が返らない");
+  }
   await request("GET", "/api/recipes?page=5", b);
   expect(400, "page が 5（上限の 4 を超える）");
   if (json<ErrorBody>().field !== "page") fail("page が 5 のエラーの項目が page でない");
@@ -435,20 +487,66 @@ async function main(): Promise<void> {
   await request("GET", `/api/recipes/${recipeId}/photos/${photoId}`, a);
   expect(200, "GET /api/recipes/{id}/photos/{photo_id}");
   if (!body.equals(photo)) fail("R2 から読んだ写真が、送ったものと違う");
+  // 写真を配るときのヘッダー（docs/spec.md の「写真の API」）。
+  for (const [name, value] of [
+    ["content-type", "image/png"],
+    ["cache-control", "private, max-age=86400"],
+    ["vary", "X-Workspace-Id, Cookie"],
+    ["x-content-type-options", "nosniff"],
+    ["content-security-policy", "default-src 'none'; frame-ancestors 'none'; sandbox"],
+  ] as const) {
+    if (responseHeaders.get(name) !== value) fail(`写真の ${name} が ${value} でない`);
+  }
   await request("GET", `/api/recipes/${recipeId}/photos/${photoId}`, b);
   expect(404, "GET /api/recipes/{id}/photos/{photo_id}（B から）");
   // 4,000,000 バイトを 1 バイト超える写真は、本文を読む前に Content-Length で断る。
   await requestWithDeclaredLength(`/api/recipes/${recipeId}/photos`, workspaceA, 4_000_001);
   expect(413, "Content-Length が 4,000,001 バイトの写真");
+  // JPEG・PNG・WebP のどれでもない中身は、415 で断る（形式は先頭のバイトで決める）。
+  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: Buffer.from("GIF89a smoke-test") });
+  expect(415, "JPEG・PNG・WebP でない写真");
+  if (json<ErrorBody>().error !== "unsupported_photo_type") fail("形式の誤りのエラーが unsupported_photo_type でない");
+  // 1 つのレシピの写真は 5 枚まで。6 枚目は 409 で断る。
+  for (let n = 2; n <= 5; n++) {
+    await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: photo });
+    expect(201, `POST /api/recipes/{id}/photos（${n} 枚目）`);
+  }
+  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: photo });
+  expect(409, "6 枚目の写真");
+  if (json<ErrorBody>().error !== "photo_limit_reached") fail("6 枚目の写真のエラーが photo_limit_reached でない");
+  // 写真を消すと、一覧から消え、データも読めなくなる。ほかのワークスペースからは消せない。
+  await request("DELETE", `/api/recipes/${recipeId}/photos/${photoId}`, b);
+  expect(404, "DELETE /api/recipes/{id}/photos/{photo_id}（B から）");
+  await request("DELETE", `/api/recipes/${recipeId}/photos/${photoId}`, a);
+  expect(204, "DELETE /api/recipes/{id}/photos/{photo_id}");
+  if (body.length !== 0) fail("写真の削除の応答に本文がある");
+  await request("GET", `/api/recipes/${recipeId}/photos/${photoId}`, a);
+  expect(404, "消した写真");
+  if (json<ErrorBody>().error !== "photo_not_found") fail("消した写真のエラーが photo_not_found でない");
+  await request("DELETE", `/api/recipes/${recipeId}/photos/${photoId}`, a);
+  expect(404, "消した写真をもう一度消す");
+  if (json<ErrorBody>().error !== "photo_not_found") fail("消した写真をもう一度消したエラーが photo_not_found でない");
+  await request("GET", `/api/recipes/${recipeId}/photos`, a);
+  expect(200, "GET /api/recipes/{id}/photos（削除の後）");
+  const remaining = json<PhotoList>().photos;
+  if (remaining.length !== 4 || remaining.some((p) => p.id === photoId)) fail("写真の削除の後の一覧が 4 件でない");
+  const keptPhotoId = remaining[0]?.id ?? fail("残った写真が無い");
+  // 枠が空いたので、もう 1 枚追加できる。
+  await request("POST", `/api/recipes/${recipeId}/photos`, { ...a, bytes: photo });
+  expect(201, "POST /api/recipes/{id}/photos（削除の後）");
+
+  await checkApiFallbacks(workspaceA);
 
   console.log("削除");
   await request("DELETE", `/api/recipes/${recipeId}`, a);
   expect(204, "DELETE /api/recipes/{id}");
   await request("GET", `/api/recipes/${recipeId}`, a);
   expect(404, "消したレシピ");
-  // レシピを消すと、写真の行も（D1 の ON DELETE CASCADE で）消える。
-  await request("GET", `/api/recipes/${recipeId}/photos/${photoId}`, a);
+  // 消したレシピの写真は読めない（写真の行を、ワークスペースとレシピと写真の ID で探すので photo_not_found になる）。
+  // 写真の行が D1 から消えたかは、API からは見分けられない（消す前に印を付けて隠すので、行が残っても同じ 404 になる）。
+  await request("GET", `/api/recipes/${recipeId}/photos/${keptPhotoId}`, a);
   expect(404, "消したレシピの写真");
+  if (json<ErrorBody>().error !== "photo_not_found") fail("消したレシピの写真のエラーが photo_not_found でない");
 
   console.log("ワークスペースの削除");
   // 写真の付いたレシピのあるワークスペースを、レシピ 80 件と写真ごと消す（D1 の ON DELETE CASCADE と R2 の削除）。
@@ -466,8 +564,7 @@ async function main(): Promise<void> {
   expect(404, "B を消した後も、A は使える（消したレシピは 404）");
   if (json<ErrorBody>().error !== "recipe_not_found") fail("B を消したら A まで消えた");
 
-  const scheduledLog = process.env["SCHEDULED_LOG"];
-  if (scheduledLog !== undefined && scheduledLog !== "") {
+  if (scheduledLog !== "") {
     await checkScheduled(scheduledLog, photo, workspaceA);
   }
 
