@@ -15,8 +15,12 @@
          hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true">
   {#- 入力を消すボタン。ブラウザが出す ×（Tab で選べない）の代わりに置く。文字があるときだけ出す（CSS）。
       JavaScript が動けば、search.js が欄を空にして検索し、欄にフォーカスを戻す。
-      動かなければ、下の空のフォーム（clear-search）を送り、絞り込まない一覧に戻る。 #}
-  <button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す">×</button>
+      動かなければ、下の空のフォーム（clear-search）を送り、絞り込まない一覧に戻る。
+      × は文字でなく SVG の図形で描く。文字の × はフォントによって上下の中央からずれるため。
+      名前はボタンの aria-label で付け、図形は読み上げない（aria-hidden）。 #}
+  <button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
   <button type="submit">探す</button>
 </form>
 <form id="clear-search" method="get" action="/" hidden></form>

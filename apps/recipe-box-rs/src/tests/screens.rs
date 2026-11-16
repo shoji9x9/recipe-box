@@ -1225,8 +1225,14 @@ async fn search_has_a_focusable_clear_button() {
     let a = cookie(WORKSPACE_A);
     let response = screen_get(&backend, "/?q=%E3%82%AB%E3%83%AC%E3%83%BC", Some(&a)).await;
     assert!(response.body.contains(
-        r#"<button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す">×</button>"#
+        r#"<button type="submit" form="clear-search" class="clear" data-search-clear aria-label="検索の文字を消す">"#
     ));
+    // × は SVG の図形で描き、読み上げない（名前はボタンの aria-label）。
+    assert!(
+        response
+            .body
+            .contains(r#"aria-hidden="true" focusable="false""#)
+    );
     assert!(
         response
             .body

@@ -364,13 +364,20 @@ button.primary.danger-fill {
 
   /* 入力を消すボタン。丸い枠の中で、探すボタンの手前に小さく置く */
   & .clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-width: var(--control-height);
     margin-right: var(--space-2);
     padding: 0;
-    font-size: 20px;
-    font-weight: 400;
     color: var(--muted);
     background: transparent;
+
+    /* 図形がクリックの的（event.target）にならないようにする。ボタンの大きさで縮ませない */
+    & svg {
+      flex: none;
+      pointer-events: none;
+    }
 
     &:hover {
       color: var(--ink);
