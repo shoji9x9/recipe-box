@@ -196,23 +196,24 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 
 1. ダッシュボードの左のメニューで Alerts > Monitors を開き、Create a Monitor を押す。
 2. 検出のしかた（detection method）で Threshold を選ぶ。
-3. クエリは custom SQL にし、下の表の番号の SQL を貼って、`<アカウント ID>` を置き換える。時間の範囲は SQL の中に書いてある（Manual）。最後に `;` を付けない。
+3. クエリは custom SQL にし、下の表の番号の SQL を貼って、`<アカウント ID>` を置き換える。最後に `;` を付けない。
+   時間の範囲は SQL に書かず、画面の時間の範囲（time range）の欄で、表の「時間の範囲」を選ぶ。SQL に `timestamp` の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」で断られる。
 4. 表の「間隔」を Execution interval に、「条件」の比べ方（`<`・`>`・`>=`）と値をしきい値に入れる。Repeat notification interval は 24 時間にする（続いている間に、1 日に 1 通だけ届く）。
 5. 保存する前に、プレビューでふだんの値を見て、条件に当たらないことを確かめる（表の「ふだんの値」）。
 6. 表の「名前」を付け、通知の先にメール（自分のアドレス）を足して、Create を押す。
 
-| 番号 | 名前 | 知らせるもの | 間隔 | 条件 | ふだんの値 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | `recipe-box: cron が動いていない` | 自動削除の cron が、2 時間に 1 回も成功しない | 1 時間 | `value` `<` `1` | 2 |
-| 2 | `recipe-box: cron が落ちた` | 自動削除の cron の、成功以外の status（直近 2 時間） | 1 時間 | `value` `>` `0` | 0 |
-| 3 | `recipe-box: D1 の保存量` | D1 の保存量が、無料の範囲（1 つのデータベースで 500 MB）の 50 %（250,000,000 バイト）を超えた | 1 時間 | `value` `>` `250000000` | それより十分に小さい |
-| 4 | `recipe-box: R2 の保存量` | R2 の写真のバケットの保存量が、無料の範囲（10 GB-月）の 50 %（5,000,000,000 バイト）を超えた | 1 時間 | `value` `>` `5000000000` | それより十分に小さい |
-| 5 | `recipe-box: Workers のリクエスト` | アカウントの Workers のリクエストが、直近の 24 時間で、1 日の無料の範囲（10 万回）の 80 % を超えた | 1 時間 | `value` `>` `80000` | それより十分に小さい |
-| 6 | `recipe-box: D1 の読んだ行` | D1 の読んだ行が、直近の 24 時間で、1 日の無料の範囲（500 万行）の 80 % を超えた | 1 時間 | `value` `>` `4000000` | それより十分に小さい |
-| 7 | `recipe-box: D1 の書いた行` | D1 の書いた行が、直近の 24 時間で、1 日の無料の範囲（10 万行）の 80 % を超えた | 1 時間 | `value` `>` `80000` | それより十分に小さい |
-| 8 | `recipe-box: Worker のエラーの割合` | Worker の成功以外の status（接続を切られたものを除く）が、直近 30 分に 3 回以上あり、割合が 10 % を超えた | 15 分 | `value` `>` `10` | 0 |
-| 9 | `recipe-box: リクエストが無い` | cron を除く Worker の起動が 26 時間 0 回 | 1 時間 | `value` `<` `1` | 1 以上 |
-| 10 | `recipe-box: 5xx の応答` | Worker が `500` 以上の状態コードを、直近 30 分に 3 回以上返した | 15 分 | `value` `>=` `3` | 0 |
+| 番号 | 名前 | 知らせるもの | 時間の範囲 | 間隔 | 条件 | ふだんの値 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `recipe-box: cron が動いていない` | 自動削除の cron が、2 時間に 1 回も成功しない | 2 時間 | 1 時間 | `value` `<` `1` | 2 |
+| 2 | `recipe-box: cron が落ちた` | 自動削除の cron の、成功以外の status（直近 2 時間） | 2 時間 | 1 時間 | `value` `>` `0` | 0 |
+| 3 | `recipe-box: D1 の保存量` | D1 の保存量が、無料の範囲（1 つのデータベースで 500 MB）の 50 %（250,000,000 バイト）を超えた | 24 時間 | 1 時間 | `value` `>` `250000000` | それより十分に小さい |
+| 4 | `recipe-box: R2 の保存量` | R2 の写真のバケットの保存量が、無料の範囲（10 GB-月）の 50 %（5,000,000,000 バイト）を超えた | 24 時間 | 1 時間 | `value` `>` `5000000000` | それより十分に小さい |
+| 5 | `recipe-box: Workers のリクエスト` | アカウントの Workers のリクエストが、直近の 24 時間で、1 日の無料の範囲（10 万回）の 80 % を超えた | 24 時間 | 1 時間 | `value` `>` `80000` | それより十分に小さい |
+| 6 | `recipe-box: D1 の読んだ行` | D1 の読んだ行が、直近の 24 時間で、1 日の無料の範囲（500 万行）の 80 % を超えた | 24 時間 | 1 時間 | `value` `>` `4000000` | それより十分に小さい |
+| 7 | `recipe-box: D1 の書いた行` | D1 の書いた行が、直近の 24 時間で、1 日の無料の範囲（10 万行）の 80 % を超えた | 24 時間 | 1 時間 | `value` `>` `80000` | それより十分に小さい |
+| 8 | `recipe-box: Worker のエラーの割合` | Worker の成功以外の status（接続を切られたものを除く）が、直近 30 分に 3 回以上あり、割合が 10 % を超えた | 30 分 | 15 分 | `value` `>` `10` | 0 |
+| 9 | `recipe-box: リクエストが無い` | cron を除く Worker の起動が 26 時間 0 回 | 26 時間 | 1 時間 | `value` `<` `1` | 1 以上 |
+| 10 | `recipe-box: 5xx の応答` | Worker が `500` 以上の状態コードを、直近 30 分に 3 回以上返した | 30 分 | 15 分 | `value` `>=` `3` | 0 |
 
 - どの Monitor も、時間の範囲を間隔より長くしている（2 は 2 時間を 1 時間ごと、8・10 は 30 分を 15 分ごと）。分析のデータが届くのが遅れても、境目の近くの記録を、次の実行の範囲で拾うためである（重なった分は、2 回知らせうる）。
   3・4 の保存量は、記録が出る間隔が分からないので、直近 24 時間の最大にする。
@@ -228,17 +229,17 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 
 ```sql
 -- 1. recipe-box: cron が動いていない
-SELECT countIf(status = 'success') AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType = 'cron' AND timestamp >= NOW() - INTERVAL '2' HOUR
+SELECT countIf(status = 'success') AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType = 'cron'
 ```
 
 ```sql
 -- 2. recipe-box: cron が落ちた
-SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType = 'cron' AND status <> 'success' AND timestamp >= NOW() - INTERVAL '2' HOUR
+SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType = 'cron' AND status <> 'success'
 ```
 
 ```sql
 -- 3. recipe-box: D1 の保存量
-SELECT MAX(databaseSizeBytes) AS value FROM states.d1Storage WHERE accountTag = '<アカウント ID>' AND timestamp >= NOW() - INTERVAL '24' HOUR
+SELECT MAX(databaseSizeBytes) AS value FROM states.d1Storage WHERE accountTag = '<アカウント ID>'
 ```
 
 ```sql
@@ -248,42 +249,42 @@ SELECT MAX(payloadSizeBytes + metadataSizeBytes) AS value FROM states.r2Combined
 
 ```sql
 -- 5. recipe-box: Workers のリクエスト
-SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND timestamp >= NOW() - INTERVAL '24' HOUR
+SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>'
 ```
 
 ```sql
 -- 6. recipe-box: D1 の読んだ行
-SELECT SUM(rowsRead) AS value FROM events.d1BackendRequest WHERE accountTag = '<アカウント ID>' AND timestamp >= NOW() - INTERVAL '24' HOUR
+SELECT SUM(rowsRead) AS value FROM events.d1BackendRequest WHERE accountTag = '<アカウント ID>'
 ```
 
 ```sql
 -- 7. recipe-box: D1 の書いた行
-SELECT SUM(rowsWritten) AS value FROM events.d1BackendRequest WHERE accountTag = '<アカウント ID>' AND timestamp >= NOW() - INTERVAL '24' HOUR
+SELECT SUM(rowsWritten) AS value FROM events.d1BackendRequest WHERE accountTag = '<アカウント ID>'
 ```
 
 ```sql
 -- 8. recipe-box: Worker のエラーの割合
-SELECT CASE WHEN countIf(status NOT IN ('success', 'clientDisconnected')) < 3 THEN 0.0 ELSE countIf(status NOT IN ('success', 'clientDisconnected')) * 100.0 / COUNT(*) END AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND timestamp >= NOW() - INTERVAL '30' MINUTE
+SELECT CASE WHEN countIf(status NOT IN ('success', 'clientDisconnected')) < 3 THEN 0.0 ELSE countIf(status NOT IN ('success', 'clientDisconnected')) * 100.0 / COUNT(*) END AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box'
 ```
 
 ```sql
 -- 9. recipe-box: リクエストが無い
-SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType <> 'cron' AND timestamp >= NOW() - INTERVAL '26' HOUR
+SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType <> 'cron'
 ```
 
 ```sql
 -- 10. recipe-box: 5xx の応答
-SELECT countIf(httpResponseStatus >= 500) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND timestamp >= NOW() - INTERVAL '30' MINUTE
+SELECT countIf(httpResponseStatus >= 500) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box'
 ```
 
 SQL について:
 
-- どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の範囲の下限を書く・最後に `;` を付けない）に合わせてある。
+- どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の範囲は画面で選ぶ・最後に `;` を付けない）に合わせてある。
 - 結果の行が無いと Monitors は何も知らせないが、`COUNT`・`SUM`・`MAX`・`countIf` の集計は、合う行が無くても 0 の 1 行を返す（確かめ済み）。
   そのため、dataset や列の名前が変わって合う行が無くなっても、3〜8・10 は 0 のままで、知らせも失敗も出ない。毎月の確認で、名前と、プレビューで 0 でない値が出ることを確かめる（1・9 は、行が無くなれば知らせが来る）。
-- 10 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
+- 10 個の SQL は、時間の条件を付けた形で、SQL API（`POST /client/v4/analytics/sql`）がどれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。Monitors の画面では、時間の条件を外し、時間の範囲の欄で選ぶ。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
 - **確かめていない**こと:
-  - 4 の R2 の時刻の列（`usageReportTimestamp`）を、Monitors の画面が時間の範囲として受け付けるか。保存するときの確かめとプレビューで分かるので、断られたら文書を直す。
+  - 4 の R2 の dataset には `timestamp` の列が無く、時刻の列は `usageReportTimestamp` なので、4 だけは時間の条件を SQL に残している。Monitors の画面がこれを受け付けるか（時間の範囲の欄をどう扱うか）は確かめていない。断られたら、時間の条件を外して試し、結果に合わせて文書を直す。
   - `events.` の dataset は、量に応じて間引かれる（adaptive sampling）と公式の文書にある。間引かれると、5〜7 の数を少なく数える。introspection で間引きの重みの列（sample interval など）があれば、`COUNT(*)` をその列の `SUM` に替える。間引かれるのは量の多いときなので、しきい値に近いときほど、知らせが遅れうる。
 - beta の間は、dataset と列の名前が変わりうる。毎月の確認（下の「最低限のメンテナンス」）で、名前を問い合わせて確かめる。
   `GET /client/v4/analytics/sql/introspection?account_tag=<アカウント ID>&dataset_name=<dataset の名前>&include_columns=true` を、Account Analytics Read の権限を持つトークンで呼ぶ（結果は公開の場所に貼らない）。
