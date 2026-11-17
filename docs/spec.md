@@ -185,6 +185,8 @@ recipe-box の画面・API・データの決まり。リライトの前後で同
 - 画面の応答には、CSP（スクリプトとスタイルは自分のドメインのファイルだけ、インラインは禁止）・`X-Content-Type-Options: nosniff`・`Referrer-Policy: same-origin`・`Cache-Control: no-store` を付ける。
   写真のデータの応答だけは、API と同じ `Cache-Control` と CSP にする（ハンドラーが付けたヘッダーを変えない）。
   htmx は、CSP に合わせて eval とインラインのスタイルを使わない設定にし、閲覧の履歴をブラウザに保存させない。
+  画面を移る前に、履歴に残すためにページを写すこともさせない（`hx-history="false"`）。写すと、まだ見える所に来ていない写真まで読みに行き、
+  ワークスペースを作った直後や切り替えた直後には、前のワークスペースの写真を新しいワークスペースで読んで `404` になるため。
 - CSS・htmx・写真の追加と削除の JavaScript・アイコンは、Workers の静的アセット（`apps/recipe-box-rs/public/`）として配る。Worker を起動しないので、Worker のリクエストの数に入らない。
   htmx は pnpm で版を固定して入れ（`package.json`）、ビルドのときに `public/assets/` にコピーする。外部の CDN からは読まない。
 - 解説（`/about/`）も静的アセットで、`mise run guide` が作る（docs/development.md）。Worker が動かないので、CSP（スタイルと画像は自分のドメインのファイルだけ、スクリプトは使わない）・`X-Content-Type-Options: nosniff`・`Referrer-Policy: same-origin` は `apps/recipe-box-rs/public/_headers` で付ける。

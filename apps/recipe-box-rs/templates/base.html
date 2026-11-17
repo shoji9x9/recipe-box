@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     {#- htmx の設定。CSP で禁じているインラインのスタイルと eval を使わせない。
         エラーの応答（400 など）も画面に出すため、すべての状態コードの本文を入れ替える。
-        閲覧の履歴をブラウザの localStorage に残さない（historyCacheSize）。 #}
+        閲覧の履歴をブラウザの sessionStorage に残さない（historyCacheSize）。 #}
     <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"responseHandling":[{"code":"...","swap":true}]}'>
     <title>{% block title %}{% endblock %} - recipe-box</title>
     {#- 検索の結果などに出る説明。どの画面でも同じにし、レシピの中身は書かない（ワークスペースの中身は、その ID を知る人だけが見るため）。 #}
@@ -22,7 +22,11 @@
     {#- hx-boost で画面が移った後のフォーカスと、Invoker Commands に対応していないブラウザでの削除のダイアログの開閉。ES モジュール。 #}
     <script src="/assets/page.js" type="module"></script>
   </head>
-  <body hx-boost="true">
+  {#- hx-history="false": 画面を移る前に、htmx が履歴に残すため body を写す処理（cloneNode）を止める。
+      保存はしない（historyCacheSize が 0）のに、写した img は文書の外にあるので loading="lazy" が効かず、
+      まだ読んでいない写真をすべて読みに行く。作成や切り替えで Cookie が変わった直後は、前のワークスペースの写真を
+      新しいワークスペースで読むことになり、404 になる。 #}
+  <body hx-boost="true" hx-history="false">
     <header>
       <a class="brand" href="/">recipe-box</a>
       <nav><a href="/workspace">ワークスペース</a></nav>
