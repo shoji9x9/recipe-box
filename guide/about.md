@@ -89,7 +89,7 @@ main に入った変更は、GitHub Actions の `deploy.yml` が本番にデプ�
 - `wrangler tail`: 本番のリクエストとログを、その場で流して見ます。残りません。リクエストごとの CPU 時間は、ここで見ます。
 - ダッシュボードの Metrics: リクエストの数・エラーの割合・CPU 時間の傾向を見ます。
 - 失敗の通知: 定期の自動削除が最近に成功し（D1 の `cleanup_runs`）、消し終えているはずのワークスペースや写真の行が残っていないかを、`seed-demo.yml` の job が毎日確かめ、そうでなければ job が失敗して GitHub がメールで知らせます。
-  cron が動いていないこと・1 日の量が無料の範囲に近づいたこと・Worker の失敗が続くことなどは、Cloudflare のダッシュボードの Monitors（ダッシュボードで設定し、リポジトリには残りません。1 つのアカウントで 5 個まで）で知らせます。手順と SQL は [docs/development.md の「失敗の通知」](repo:docs/development.md#失敗の通知)にあります。
+  cron が動いていないこと・1 日の量が無料の範囲に近づいたこと・Worker の失敗が続くことなどは、Cloudflare のダッシュボードの Monitors（ダッシュボードで設定し、リポジトリには残りません）で知らせます。手順と SQL は [docs/development.md の「失敗の通知」](repo:docs/development.md#失敗の通知)にあります。
 
 ワークスペースの ID は、知ればそのワークスペースを読み書きできる鍵なので、ログに残しません。アプリがエラーを出すときは、ID の形の文字の並びを伏せてから出します。
 理由は [docs/security.md の「ログ」](repo:docs/security.md#ログ)に、見方は [docs/development.md の「本番のログ」](repo:docs/development.md#本番のログ)にあります。

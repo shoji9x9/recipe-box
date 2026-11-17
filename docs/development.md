@@ -197,16 +197,16 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 1. ダッシュボードの左のメニューで Alerts > Monitors を開き、Create Monitor を押す。
 2. 検出のしかたで Threshold を選ぶ（Anomaly detection・Service-level objective は使わない）。
 3. クエリを Custom SQL にし、下の表の番号の SQL を貼って、`<アカウント ID>` を置き換える。最後に `;` を付けない。
-   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。時刻の列の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」のように断られる（R2 の dataset の `usageReportTimestamp` のような、ほかの時刻の列でも同じだった。2026-11）。
+   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。時刻の列の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」のように断られる（ほかの名前の時刻の列でも同じ）。
 4. 表のとおりに、次の欄を入れる。
-   - Run every: Custom を選び、表の値にする（Automatic や既定のままにしない。区間が短くなり、1・5 は知らせ続け、3・4 は少なく数えて知らせなくなる）。
+   - Run every: Custom を選び、表の値にする（Automatic や既定のままにしない。区間が短くなり、1・5 は知らせ続け、2〜4 は少なく数えて知らせなくなる）。
    - Average over: Custom を選び、Run every と同じ値にする。
    - Trigger when: Query result の比べ方（`<`・`>`・`>=`）と値を、表のとおりに入れる。
    - Repeat notification after: 24h（続いている間は、1 日に 1 通だけ届く）。
 5. 保存する前に、プレビューの範囲を Last 24 hours などの長いものにし、グラフの点が Run every ごとに並び、値が表の「ふだんの値」の近くで、条件に当たらないことを確かめる。
 6. 表の「名前」を付け、Description に下の表の文を入れ、通知の先にメール（自分のアドレス）を足して、作る。
 
-Monitors（custom analytics policies）は、1 つのアカウントで 5 個までしか作れない（6 個目は「this account can have at most 5 custom analytics policies」で断られる。2026-11）。そのため、知らせるものを次の 5 個にまとめている。
+Monitors（custom analytics policies）は、作れる数に上限がある。この手順は、上限に当たらないよう、知らせるものを次の 5 個にまとめている（2026-11）。
 
 | 番号 | 名前 | 知らせるもの | Run every と Average over | Trigger when | ふだんの値 |
 | --- | --- | --- | --- | --- | --- |
@@ -230,14 +230,14 @@ Description（知らせのメールに出る説明）は、何が起きたかと
   Average over の意味（複数の点の平均か、続いた時間か）は確かめていないので、Run every と同じ値にして、点を 1 つだけ比べるようにしている。
 - 区間は重ならないので、区間の終わり近くの記録が分析に遅れて届くと、どの実行にも数えられず、知らせないことがある。cron の失敗は、上の 1 の確かめ（GitHub Actions）でも見つかる。
 - 1 の cron は 1 時間ごとなので、2 時間に 1 回も成功しなければ、起動しなかったか、例外で落ちた。1 回だけの抜けは知らせない。
-  cron が 1 回だけ落ちたことと、自動削除の一部の失敗（`scheduled` は成功で終わる）は、Monitors では知らせず、上の 1 の確かめで知らせる（落ち続ければ 1 も知らせる）。
+  cron が 1 回だけ落ちて次の回で成功したときは、どこからも知らせない（次の回で片付くので、害が残らない）。落ち続ければ、1 と、上の 1 の確かめ（GitHub Actions）が知らせる。自動削除の一部の失敗（`scheduled` は成功で終わる）は、上の 1 の確かめで知らせる。
 - 2 は、例外などの成功以外の status と、アプリが自分で返す `500` などの応答（status では成功に数えられうる）を、合わせて数える。`clientDisconnected`（送り手が接続を切った）は、アプリの失敗ではないので除く。
-  リクエストが少ないアプリなので、1 回の失敗で知らせないよう 15 分に 3 回以上とした。区間をまたいでゆっくり続く失敗（例: 7 分ごと）は、どの区間も 3 回に届かず知らせない。
+  リクエストが少ないアプリなので、1 回の失敗で知らせないよう 15 分に 3 回以上とした。割合では見ないので、リクエストがとても多いときは、まれな失敗でも 3 回に届いて知らせうる（回数の制限で断る 429 は数えない）。区間をまたいでゆっくり続く失敗（例: 7 分ごと）は、どの区間も 3 回に届かず知らせない。
 - 3 は、読んだ行と書いた行を、それぞれの 1 日の無料の範囲に対する % にし、大きいほうを比べる（SQL は `greatest` を使えないので `CASE` で選ぶ）。
 - 3・4 は 1 日に 1 回、直近 24 時間の量を比べるので、知らせが最大 1 日遅れる。無料の範囲は 1 日ごとに数え直されるので、これで足りるとした。4 は、無料の範囲がアカウントの全体で数えられるので、Worker で絞らない。1 日の量は、Cloudflare が UTC の 0 時で数え直すが、ここでは直近の 24 時間で近似する。
 - 5 は、cron の起動を除いて数える（cron は 1 で見る）。毎日のデモの入れ直し（`seed-demo.yml`）が API を呼ぶので、ふだんは 0 にならない。seed の時刻のずれを見込んで 26 時間にする。
 - 5 個に収めるため、次のものは Monitors では知らせない。
-  - D1 と R2 の保存量: アプリの上限で、無料の範囲の内側に抑えている（docs/security.md の「費用の対策」。R2 はアプリ全体で 5 GB まで）。毎月、ダッシュボードの D1 と R2 の画面で見る（下の「最低限のメンテナンス」）。
+  - D1 と R2 の保存量: アプリの上限で、無料の範囲の内側に抑えている（docs/security.md の「費用の対策」。R2 はアプリ全体で 5 GB まで）。毎月、ダッシュボードの D1 と R2 の画面で見る（下の「最低限のメンテナンス」）。R2 がアプリの上限（5 GB）を超えていれば、どの行からもたどれないデータが残っている。
   - cron が 1 回だけ落ちたこと: 上のとおり。
 - 無料の範囲の値は 2026-11 時点のもの（docs/security.md の「費用の対策」）。
 
@@ -248,7 +248,7 @@ SELECT countIf(status = 'success') AS value FROM events.workersInvocations WHERE
 
 ```sql
 -- 2. recipe-box: Worker の失敗
-SELECT countIf(status NOT IN ('success', 'clientDisconnected') OR httpResponseStatus >= 500) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box'
+SELECT countIf(status <> 'clientDisconnected' AND (status <> 'success' OR httpResponseStatus >= 500)) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box'
 ```
 
 ```sql
@@ -269,9 +269,9 @@ SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<ア
 SQL について:
 
 - どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の条件は書かない・最後に `;` を付けない）に合わせてある。
-- 結果の行が無いと Monitors は何も知らせないが、`COUNT`・`SUM`・`MAX`・`countIf` の集計は、合う行が無くても 0 の 1 行を返す（確かめ済み）。
+- 結果の行が無いと Monitors は何も知らせないが、`COUNT`・`SUM`・`countIf` の集計は、合う行が無くても 0 の 1 行を返す（確かめ済み。3 の `CASE` も、どちらの `SUM` も 0 なので 0 になる）。
   そのため、dataset や列の名前が変わって合う行が無くなっても、2〜4 は 0 のままで、知らせも失敗も出ない。毎月の確認で、名前と、プレビューで 0 でない値が出ることを確かめる（1・5 は、行が無くなれば知らせが来る）。
-- 5 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`）を足した形で確かめた。Monitors に貼る、時刻の条件の無い形は、SQL API では保存してある期間の全体を数えるので、そのままでは確かめていない。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
+- 5 個の SQL は、今の形（2 の `status <> 'clientDisconnected' AND (...)` と、3 の `CASE` を含む）で、SQL API（`POST /client/v4/analytics/sql`）がどれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`）を足した形で確かめた。Monitors に貼る、時刻の条件の無い形は、SQL API では保存してある期間の全体を数えるので、そのままでは確かめていない。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
 - **確かめていない**こと:
   - Average over の意味（上の説明）。Run every と同じ値にしているので、判定には効かない見込みである。
   - `events.` の dataset は、量に応じて間引かれる（adaptive sampling）と公式の文書にある。間引かれると、3・4 の数を少なく数える。introspection で間引きの重みの列（sample interval など）があれば、`COUNT(*)` をその列の `SUM` に替える。間引かれるのは量の多いときなので、しきい値に近いときほど、知らせが遅れうる。
@@ -332,7 +332,7 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
 - `dependabot-alert-issue` スキルで、Dependabot の alert から Issue を作る。`mise run audit` も実行する。
 - Cloudflare の Monitors の設定が残っているか（上の「失敗の通知」の 1〜5 があり、Run every・Average over・Trigger when が表のとおりで、通知の先が今のメールか）を、ダッシュボードの Alerts > Monitors で見る。beta の機能で、設定はリポジトリに残らない。
   SQL が使う dataset と列の名前が変わっていないかも、introspection（上の「Monitors の作り方」）で確かめる。
-- D1 と R2 の保存量を、ダッシュボードの D1 と R2 の画面で見る。無料の範囲（D1 は 1 つのデータベースで 500 MB、R2 は 10 GB-月）の 50 % を超えていれば、原因を調べる（Monitors の数の上限のため、保存量は知らせない。上の「Monitors の作り方」）。
+- D1 と R2 の保存量を、ダッシュボードの D1 と R2 の画面で見る。D1 が無料の範囲（1 つのデータベースで 500 MB）の 50 % を超えているか、R2 がアプリの上限（5 GB。無料の範囲の 10 GB-月の 50 %）を超えていれば、原因を調べる（Monitors の数の上限のため、保存量は知らせない。上の「Monitors の作り方」）。
 - `outdated.yml` の Issue にある mise のツールを、まとめて上げる（`mise install` の後に `mise lock`。AGENTS.md の「ツールの版」）。Node は、使っているメジャーの版のサポートの終わり（EOL）が近くないかも見る。
 
 ### schedule が止まらないようにする
