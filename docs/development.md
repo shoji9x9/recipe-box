@@ -164,6 +164,8 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
 
 - アプリが出したログ（`src/error.rs` の、エラーを出す `log_error` と、定期の自動削除が終わったことなどを出す `log_info`）は、Workers のログ（`wrangler.toml` の `[observability]`）に残る。無料のプランでは、2026-11-30 までは 3 日残り、1 日 200,000 件までである。2026-12-01 からは 7 日残り、1 日 0.5 GB までに変わる（docs/security.md の「ログ」）。
   Cloudflare のダッシュボードで、Worker（`recipe-box`）の Observability を開いて見る。ワークスペースの ID は、ログに出す前に伏せている（アプリが自分で出すログは、この 2 つの関数だけから出す。panic の文は伏せない。docs/security.md の「ログ」）。
+- リクエストの中で出したログの行には、Workers Logs が、そのリクエストのメソッド・パス・URL（クエリを含む）を付けるので、どの画面や API の失敗かが分かる（ヘッダー・Cookie・本文は付かない。確かめた範囲は docs/security.md の「ログ」）。
+  定期の自動削除で出した行には、cron の式と予定の時刻が付く（本番の行で確かめた）。
 - リクエストごとの記録（invocation logs）は残さない（docs/security.md の「ログ」）。リクエストごとの状態コードや CPU 時間は、その場で `wrangler tail` で見る。
   `apps/recipe-box-rs` で `pnpm exec wrangler tail recipe-box --format pretty` を実行する（`wrangler login` が要る）。流れている間だけ見え、残らない。
   `--format json` は、リクエストのヘッダー（API の `X-Workspace-Id` を含みうる）も出すので、その出力を人に見せたり、ファイルに残したりしない。

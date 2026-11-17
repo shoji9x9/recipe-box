@@ -86,6 +86,8 @@ main に入った変更は、GitHub Actions の `deploy.yml` が本番にデプ�
 
 - Workers のログ（`[observability]`）: アプリが `console` に出したもの（エラーなど）を、後からダッシュボードで見られます。
   リクエストごとの記録（invocation logs）は残しません。API の `X-Workspace-Id`（ワークスペースの ID）が残るかもしれないためです。
+  それでも、ログの行には Cloudflare がリクエストのメソッドと URL（検索の語などのクエリを含む）を付けるので、どの画面や API の失敗かが分かります。
+  URL はログに残るので、ID は URL に入れず、ログに付かないヘッダー・Cookie・フォームの本文で送ります（[docs/security.md の「ログ」](repo:docs/security.md#ログ)）。
 - `wrangler tail`: 本番のリクエストとログを、その場で流して見ます。残りません。リクエストごとの CPU 時間は、ここで見ます。
 - ダッシュボードの Metrics: リクエストの数・エラーの割合・CPU 時間の傾向を見ます。
 - 失敗の通知: 定期の自動削除が最近に成功し（D1 の `cleanup_runs`）、消し終えているはずのワークスペースや写真の行が残っていないかを、`seed-demo.yml` の job が毎日確かめ、そうでなければ job が失敗して GitHub がメールで知らせます。
