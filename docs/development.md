@@ -197,9 +197,9 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 1. ダッシュボードの左のメニューで Alerts > Monitors を開き、Create Monitor を押す。
 2. 検出のしかたで Threshold を選ぶ（Anomaly detection・Service-level objective は使わない）。
 3. クエリを Custom SQL にし、下の表の番号の SQL を貼って、`<アカウント ID>` を置き換える。最後に `;` を付けない。
-   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。時刻の列の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」のように断られる（4 の R2 の `usageReportTimestamp` も同じ）。
+   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。時刻の列の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」のように断られる。4 の R2 の `usageReportTimestamp` も、「query already contains time predicates on `usageReportTimestamp`; remove them to use time_range」で断られた（2026-11、画面で確かめた）。Monitors は、この列にも時間の範囲を当てる。
 4. 表のとおりに、次の欄を入れる。
-   - Run every: Custom を選び、表の値にする（Automatic や既定のままにしない。区間が短くなり、1・9 は知らせ続け、5〜7 は少なく数えて知らせなくなる）。
+   - Run every: Custom を選び、表の値にする（Automatic や既定のままにしない。区間が短くなり、1・9 は知らせ続け、5〜7 は少なく数えて知らせなくなり、3・4 は記録が区間に入らずに 0 になって知らせなくなる）。
    - Average over: Custom を選び、Run every と同じ値にする。
    - Trigger when: Query result の比べ方（`<`・`>`・`>=`）と値を、表のとおりに入れる。
    - Repeat notification after: 24h（続いている間は、1 日に 1 通だけ届く）。
@@ -303,9 +303,11 @@ SQL について:
 - どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の条件は書かない・最後に `;` を付けない）に合わせてある。
 - 結果の行が無いと Monitors は何も知らせないが、`COUNT`・`SUM`・`MAX`・`countIf` の集計は、合う行が無くても 0 の 1 行を返す（確かめ済み）。
   そのため、dataset や列の名前が変わって合う行が無くなっても、3〜8・10 は 0 のままで、知らせも失敗も出ない。毎月の確認で、名前と、プレビューで 0 でない値が出ることを確かめる（1・9 は、行が無くなれば知らせが来る）。
-- 10 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`。4 は `usageReportTimestamp`）を足した形で確かめた。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
+- 10 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`。4 は `usageReportTimestamp`）を足した形で確かめた。Monitors に貼る、時刻の条件の無い形は、SQL API では保存してある期間の全体を数えるので、そのままでは確かめていない。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
 - **確かめていない**こと:
   - Average over の意味（上の説明）。Run every と同じ値にしているので、判定には効かない見込みである。
+  - 区間が Run every になることは、`timestamp` の列を持つ 1 で確かめた。3・4（`states.` の dataset）でも同じに区間を当てることは、断られたときの文（時間の範囲をその列に当てる）から推しているが、値で確かめてはいない。保存量は日ごとにほとんど変わらないので、プレビューでも見分けにくい。
+    4 が区間を当てずに保存期間の全体の最大を数えていると、一度 5 GB を超えた後は、片付けても記録が古くなって消えるまで知らせ続けうる。そのときは、知らせが続いても R2 の今の保存量（ダッシュボードの R2 の画面）を見て判断する。
   - `events.` の dataset は、量に応じて間引かれる（adaptive sampling）と公式の文書にある。間引かれると、5〜7 の数を少なく数える。introspection で間引きの重みの列（sample interval など）があれば、`COUNT(*)` をその列の `SUM` に替える。間引かれるのは量の多いときなので、しきい値に近いときほど、知らせが遅れうる。
 - beta の間は、dataset と列の名前が変わりうる。毎月の確認（下の「最低限のメンテナンス」）で、名前を問い合わせて確かめる。
   `GET /client/v4/analytics/sql/introspection?account_tag=<アカウント ID>&dataset_name=<dataset の名前>&include_columns=true` を、Account Analytics Read の権限を持つトークンで呼ぶ（結果は公開の場所に貼らない）。
