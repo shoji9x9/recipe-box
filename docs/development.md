@@ -197,8 +197,7 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 1. ダッシュボードの左のメニューで Alerts > Monitors を開き、Create Monitor を押す。
 2. 検出のしかたで Threshold を選ぶ（Anomaly detection・Service-level objective は使わない）。
 3. クエリを Custom SQL にし、下の表の番号の SQL を貼って、`<アカウント ID>` を置き換える。最後に `;` を付けない。
-   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。`timestamp` の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」で断られる。
-   例外は 4（R2）で、この dataset には `timestamp` の列が無いので、時間の条件（`usageReportTimestamp`）を SQL に書いてある（下の「確かめていない」）。
+   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。時刻の列の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」のように断られる（4 の R2 の `usageReportTimestamp` も同じ）。
 4. 表のとおりに、次の欄を入れる。
    - Run every: Custom を選び、表の値にする（Automatic や既定のままにしない。区間が短くなり、1・9 は知らせ続け、5〜7 は少なく数えて知らせなくなる）。
    - Average over: Custom を選び、Run every と同じ値にする。
@@ -240,7 +239,7 @@ Description（知らせのメールに出る説明）は、何が起きたかと
 - 区間は重ならないので、区間の終わり近くの記録が分析に遅れて届くと、どの実行にも数えられず、知らせないことがある。cron の失敗は、上の 1 の確かめ（GitHub Actions）でも見つかる。
 - 1・2 の cron は 1 時間ごとなので、2 時間に 1 回も成功しなければ、起動しなかったか、例外で落ちた。1 回だけの抜けは 1 では知らせない。2 は、1 回でも落ちれば知らせる。
   自動削除の一部の失敗（`scheduled` は成功で終わる）は、ここでは分からず、上の 1 の確かめで知らせる。
-- 3・4 の保存量は、記録が出る間隔が分からないので、24 時間の最大を比べる（4 は SQL にも 24 時間の条件を書いてある）。プレビューで 0 になるなら、記録が無いので、Run every を見直す。
+- 3・4 の保存量は、記録が出る間隔が分からないので、24 時間の最大を比べる。プレビューで 0 になるなら、記録が無いので、Run every を見直す。
 - 4 の R2 は、アプリの上限でアプリ全体の写真の合計を 5 GB（無料の範囲のちょうど 50 %）までにしている（docs/security.md の「費用の対策」）。超えるのは、どの行からもたどれないデータが残ったときなどで、それを知らせる。
 - 5〜7 は 1 日に 1 回、直近 24 時間の量を比べるので、知らせが最大 1 日遅れる。無料の範囲は 1 日ごとに数え直されるので、これで足りるとした。5 は、無料の範囲がアカウントの全体で数えられるので、Worker で絞らない。1 日の量は、Cloudflare が UTC の 0 時で数え直すが、ここでは直近の 24 時間で近似する。
 - 8・10 は、15 分の区間ごとに比べる。区間をまたいでゆっくり続く失敗（例: 7 分ごとの 5xx）は、どの区間も 3 回に届かず知らせない。リクエストが少ないアプリなので、1 回の失敗で振れないよう、15 分に 3 回以上とした。
@@ -266,7 +265,7 @@ SELECT MAX(databaseSizeBytes) AS value FROM states.d1Storage WHERE accountTag = 
 
 ```sql
 -- 4. recipe-box: R2 の保存量
-SELECT MAX(payloadSizeBytes + metadataSizeBytes) AS value FROM states.r2CombinedStorage WHERE accountTag = '<アカウント ID>' AND bucketName = 'recipe-box-photos' AND usageReportTimestamp >= NOW() - INTERVAL '24' HOUR
+SELECT MAX(payloadSizeBytes + metadataSizeBytes) AS value FROM states.r2CombinedStorage WHERE accountTag = '<アカウント ID>' AND bucketName = 'recipe-box-photos'
 ```
 
 ```sql
@@ -301,13 +300,11 @@ SELECT countIf(httpResponseStatus >= 500) AS value FROM events.workersInvocation
 
 SQL について:
 
-- どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の条件は書かない（4 を除く）・最後に `;` を付けない）に合わせてある。
+- どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の条件は書かない・最後に `;` を付けない）に合わせてある。
 - 結果の行が無いと Monitors は何も知らせないが、`COUNT`・`SUM`・`MAX`・`countIf` の集計は、合う行が無くても 0 の 1 行を返す（確かめ済み）。
   そのため、dataset や列の名前が変わって合う行が無くなっても、3〜8・10 は 0 のままで、知らせも失敗も出ない。毎月の確認で、名前と、プレビューで 0 でない値が出ることを確かめる（1・9 は、行が無くなれば知らせが来る）。
-- 10 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、4 以外は末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`）を足した形で確かめた。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
+- 10 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`。4 は `usageReportTimestamp`）を足した形で確かめた。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
 - **確かめていない**こと:
-  - 4 の R2 の dataset には `timestamp` の列が無く、時刻の列は `usageReportTimestamp` なので、4 だけは時間の条件を SQL に残している。Monitors の画面がこれを受け付けるかは確かめていない。
-    断られたら、時間の条件を外さない（外すと、画面の範囲が効かずに保存してある期間の全体の最大を数え、一度 5 GB を超えると減っても知らせ続けうる）。4 は作らずにおき、その結果をこの文書に書く。R2 の保存量は、アプリの上限で 5 GB までに抑えている（docs/security.md の「費用の対策」）。
   - Average over の意味（上の説明）。Run every と同じ値にしているので、判定には効かない見込みである。
   - `events.` の dataset は、量に応じて間引かれる（adaptive sampling）と公式の文書にある。間引かれると、5〜7 の数を少なく数える。introspection で間引きの重みの列（sample interval など）があれば、`COUNT(*)` をその列の `SUM` に替える。間引かれるのは量の多いときなので、しきい値に近いときほど、知らせが遅れうる。
 - beta の間は、dataset と列の名前が変わりうる。毎月の確認（下の「最低限のメンテナンス」）で、名前を問い合わせて確かめる。
