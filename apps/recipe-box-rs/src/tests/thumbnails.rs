@@ -47,11 +47,15 @@ async fn post_thumbnail(
     bytes: Vec<u8>,
     workspace: &str,
 ) -> TestResponse {
-    let request = Request::post(format!("{recipe_path}/photos/{photo}/thumbnail{query}"))
+    let mut request = Request::post(format!("{recipe_path}/photos/{photo}/thumbnail{query}"))
         .header(header::HOST, HOST)
         .header(header::ORIGIN, format!("https://{HOST}"))
-        .header("cf-connecting-ip", "192.0.2.1")
-        .header(header::COOKIE, cookie(workspace))
+        .header("cf-connecting-ip", "192.0.2.1");
+    // 共有のデモには、Cookie の無い人として送る（デモの ID の Cookie は、無い ID と同じく書き込みを断るため）。
+    if workspace != DEMO {
+        request = request.header(header::COOKIE, cookie(workspace));
+    }
+    let request = request
         .header(header::CONTENT_TYPE, "image/jpeg")
         .header(header::CONTENT_LENGTH, bytes.len())
         .body(Body::from(bytes))

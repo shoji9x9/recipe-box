@@ -30,7 +30,7 @@
     {#- 共有のデモを見ている間は、どの画面にも出す。 #}
     {%- if layout.demo_shared %}
     <section class="demo-banner" aria-label="共有のデモ">
-      <p>誰でも見て編集できる、共有のデモです。個人情報や、人に見られて困ることを書かないでください。デモは毎日リセットします。</p>
+      <p>誰でも見て編集できる、共有のデモです。個人情報や、人に見られて困ることを書かないでください。デモは毎日 4 時（日本時間）に元に戻り、登録したレシピも消えます。</p>
       <form method="post" action="/workspace">
         <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
       </form>
@@ -58,6 +58,7 @@
           {%- if let Some(message) = layout.flash %}<p class="message success">{{ message }}</p>{% endif -%}
         </div>
         <div id="messages-alert" role="alert">
+          {%- if let Some(message) = layout.gone %}<p class="message error" data-workspace-gone>{{ message }}</p>{% endif -%}
           {%- if let Some(message) = layout.alert %}<p class="message error">{{ message }}</p>{% endif -%}
         </div>
       </div>

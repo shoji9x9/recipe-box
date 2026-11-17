@@ -91,10 +91,16 @@ enum Flash {
     WorkspaceDeleted,
     PhotoAdded,
     PhotoDeleted,
+    /// 一時的にデモを見ている間に、自分のワークスペースに出したフォームから登録・保存した（[`save_form`]）。
+    RecipeCreatedToOwn,
+    RecipeSavedToOwn,
+    /// Cookie の ID のワークスペースが無くなっていた（自動削除など）。
+    /// ほかと違い、誤りの知らせ（赤）として出す（[`Layout::gone`]）。
+    WorkspaceGone,
 }
 
 impl Flash {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 13] = [
         Self::RecipeCreated,
         Self::RecipeSaved,
         Self::RecipeDeleted,
@@ -105,6 +111,9 @@ impl Flash {
         Self::WorkspaceDeleted,
         Self::PhotoAdded,
         Self::PhotoDeleted,
+        Self::RecipeCreatedToOwn,
+        Self::RecipeSavedToOwn,
+        Self::WorkspaceGone,
     ];
 
     /// Cookie に入れるコード。
@@ -120,6 +129,9 @@ impl Flash {
             Self::WorkspaceDeleted => "workspace-deleted",
             Self::PhotoAdded => "photo-added",
             Self::PhotoDeleted => "photo-deleted",
+            Self::RecipeCreatedToOwn => "recipe-created-to-own",
+            Self::RecipeSavedToOwn => "recipe-saved-to-own",
+            Self::WorkspaceGone => "workspace-gone",
         }
     }
 
@@ -129,7 +141,8 @@ impl Flash {
             Self::RecipeSaved => "レシピを保存しました",
             Self::RecipeDeleted => "レシピを削除しました",
             Self::WorkspaceCreated => {
-                "あなた専用のレシピ帳を作りました。ID は「ワークスペース」の画面で確かめられます"
+                "あなた専用のレシピ帳を作りました。14 日アクセスが無いと、レシピと写真ごと自動で消えます。\
+                 ID は「ワークスペース」の画面で確かめられるので、控えておいてください"
             }
             Self::WorkspaceSwitched => "ワークスペースを切り替えました",
             Self::DemoViewStarted => {
@@ -139,6 +152,16 @@ impl Flash {
             Self::WorkspaceDeleted => "ワークスペースを削除しました",
             Self::PhotoAdded => "写真を追加しました",
             Self::PhotoDeleted => "写真を削除しました",
+            Self::RecipeCreatedToOwn => {
+                "レシピを、共有のデモではなく自分のレシピ帳に登録しました。デモの表示を終えて、自分のレシピ帳に戻りました"
+            }
+            Self::RecipeSavedToOwn => {
+                "レシピを、共有のデモではなく自分のレシピ帳に保存しました。デモの表示を終えて、自分のレシピ帳に戻りました"
+            }
+            Self::WorkspaceGone => {
+                "このブラウザが覚えていたワークスペースは見つかりませんでした。\
+                 14 日アクセスが無くて消えたか、削除されたためです"
+            }
         }
     }
 
@@ -155,8 +178,14 @@ pub struct Session {
     own: Option<WorkspaceId>,
     /// 自分のワークスペースを持ちながら、一時的に共有のデモを見ているか。
     viewing_demo: bool,
-    /// 前の操作から渡された、一度だけ出すメッセージ。
+    /// 前の操作から渡された、一度だけ出すメッセージ（[`Flash::WorkspaceGone`] は入らない。`workspace_gone` にする）。
     flash: Option<Flash>,
+    /// 覚えていたワークスペースが無くなっていたことを、画面に知らせるか。
+    /// この要求で分かった（[`identify`] が Cookie を消す）か、前の応答から一度だけ出すメッセージで回されてきた。
+    workspace_gone: bool,
+    /// この要求の Cookie の ID のワークスペースが無くなっていて、一時的にデモを見ている印も無い。
+    /// 画面の書き込みを断る（[`refuse_write_if_gone`]）。自分のレシピ帳に書くつもりの入力を、共有のデモに書かないため。
+    own_gone: bool,
 }
 
 /// 書き込みの回数の制限に当たったことを、ハンドラーに渡す印。[`guard`] が付ける。
@@ -196,6 +225,9 @@ struct Layout {
     flash: Option<&'static str>,
     /// ページ全体への誤りの知らせ（赤）。
     alert: Option<&'static str>,
+    /// 覚えていたワークスペースが無くなっていたことの知らせ（赤。[`Flash::WorkspaceGone`]）。
+    /// `alert` とは別に持ち、ほかの誤りと一緒でも出す。出した画面の応答には [`GoneNoticeShown`] を付ける。
+    gone: Option<&'static str>,
 }
 
 impl Layout {
@@ -209,6 +241,17 @@ impl Layout {
             demo_visiting,
             flash: session.flash.map(Flash::message),
             alert: None,
+            gone: session
+                .workspace_gone
+                .then(|| Flash::WorkspaceGone.message()),
+        }
+    }
+
+    /// 覚えていたワークスペースが無くなったことの知らせだけを出す（書き込みを断った画面）。デモの帯は出さない。
+    fn gone_only() -> Self {
+        Self {
+            gone: Some(Flash::WorkspaceGone.message()),
+            ..Self::default()
         }
     }
 
@@ -226,6 +269,9 @@ pub enum ScreenError {
     NoWorkspace,
     /// 画面だけの失敗。エラーの画面に、状態コードと説明を出す（API の説明が画面に合わないとき）。
     Page(StatusCode, &'static str),
+    /// 覚えていたワークスペースが無くなっていたので、書き込みを断った（[`refuse_write_if_gone`]）。
+    /// エラーの画面（`404`）に、無くなったことの知らせ（[`Layout::gone`]）だけを出す。
+    WorkspaceGone,
 }
 
 impl From<ApiError> for ScreenError {
@@ -240,6 +286,13 @@ impl IntoResponse for ScreenError {
             Self::Api(error) => error_page(&error),
             Self::NoWorkspace => see_other("/"),
             Self::Page(status, message) => message_page(status, message),
+            Self::WorkspaceGone => render(
+                StatusCode::NOT_FOUND,
+                &ErrorPage {
+                    layout: Layout::gone_only(),
+                    edit_href: None,
+                },
+            ),
         }
     }
 }
@@ -337,6 +390,8 @@ struct PageLink {
 #[template(path = "list.html")]
 struct ListPage {
     layout: Layout,
+    /// 自分のワークスペースを見ているか（共有のデモでないか）。自動で消えることを一覧の下に書く。
+    own_workspace: bool,
     /// 検索の条件の誤り。あれば一覧の代わりに出す（検索欄の htmx が入れ替える #results の中に出すため）。
     query_error: Option<&'static str>,
     q: String,
@@ -412,6 +467,8 @@ struct FormPage {
     /// 誤りの一覧にフォーカスを移すか（送信したときだけ。欄から離れたときに移すと、入力の邪魔になる）。
     focus_summary: bool,
     photo_area: PhotoArea,
+    /// 自分のワークスペースに出したフォームか（[`RecipeForm::workspace`] を隠した欄で送る）。
+    for_own: bool,
 }
 
 /// フォームを確かめた段階。
@@ -440,10 +497,44 @@ struct WorkspacePage {
     switch_error: Option<&'static str>,
 }
 
+/// 画面のテンプレート。どれも base.html を継いで、見出しの上下に [`Layout`] を出す。
+trait Page: Template {
+    fn layout(&self) -> &Layout;
+}
+
+macro_rules! impl_page {
+    ($($page:ty),*) => {
+        $(impl Page for $page {
+            fn layout(&self) -> &Layout {
+                &self.layout
+            }
+        })*
+    };
+}
+
+impl_page!(
+    ErrorPage,
+    LandingPage,
+    ListPage,
+    DetailPage,
+    FormPage,
+    WorkspacePage
+);
+
+/// 応答の画面に [`Layout::gone`] を出したことの印。[`identify`] が、知らせを次の画面に回すかを決めるのに使う。
+#[derive(Debug, Clone, Copy)]
+struct GoneNoticeShown;
+
 /// テンプレートを HTML にして返す。テンプレートの失敗は、中身を出さずに 500 にする。
-fn render<T: Template>(status: StatusCode, template: &T) -> Response {
+fn render<T: Page>(status: StatusCode, template: &T) -> Response {
     match template.render() {
-        Ok(html) => (status, Html(html)).into_response(),
+        Ok(html) => {
+            let mut response = (status, Html(html)).into_response();
+            if template.layout().gone.is_some() {
+                response.extensions_mut().insert(GoneNoticeShown);
+            }
+            response
+        }
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
@@ -479,17 +570,36 @@ fn remove_cookie(response: &mut Response, name: &str) {
     add_cookie(response, name, "", 0);
 }
 
+/// 応答から、`name` の Cookie を付ける・消す `Set-Cookie` を取り除く。
+fn remove_set_cookie(response: &mut Response, name: &str) {
+    let kept: Vec<HeaderValue> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter(|value| !is_cookie_named(value, name))
+        .cloned()
+        .collect();
+    response.headers_mut().remove(header::SET_COOKIE);
+    for value in kept {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+}
+
+/// `Set-Cookie` の値が、`name` の Cookie のものか。
+fn is_cookie_named(value: &HeaderValue, name: &str) -> bool {
+    value.to_str().is_ok_and(|text| {
+        text.strip_prefix(name)
+            .is_some_and(|rest| rest.starts_with('='))
+    })
+}
+
 /// 応答が、`name` の Cookie を付けるか消すか（`Set-Cookie` にあるか）。
 fn sets_cookie(response: &Response, name: &str) -> bool {
     response
         .headers()
         .get_all(header::SET_COOKIE)
         .iter()
-        .filter_map(|value| value.to_str().ok())
-        .any(|text| {
-            text.strip_prefix(name)
-                .is_some_and(|rest| rest.starts_with('='))
-        })
+        .any(|value| is_cookie_named(value, name))
 }
 
 /// Cookie の値を読む。無いか、同じ名前が 2 つ以上あれば `None`（どちらを使うか決められないため）。
@@ -522,9 +632,16 @@ fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
 /// Cookie から、画面を見ている人の状態を読む middleware。すべての画面の前に動く。
 ///
 /// - ワークスペースの Cookie があれば、在ることを確かめて最終利用日時を更新する。
-///   無くなっていれば（自動削除など）か、共有のデモの ID なら、どの画面でも Cookie を消す。
-///   ハンドラーが同じ応答で付けた・消した Cookie（ワークスペースを作った・切り替えたときなど）は、そのままにする。
-///   後ろに削除を足すと新しい Cookie を打ち消し、同じ名前の `Set-Cookie` が 2 つ並ぶため。
+///   無くなっていれば（自動削除など）か、共有のデモの ID なら、どの画面でも Cookie を消し、そのことを一度だけ知らせる
+///   （[`Flash::WorkspaceGone`]）。
+///   知らせは、その応答の画面に出す。出せない応答（移動・エラーの画面・写真など）なら、
+///   一度だけ出すメッセージの Cookie で、次の画面に回す（ハンドラーが付けたメッセージより優先する）。
+///   Cookie を消した後は、ワークスペースが無いことが分からなくなり、知らせられないため。
+///   htmx が一部だけを入れ替える要求（一覧の検索）なら、画面の全体を読み直させる（`HX-Refresh`）。
+///   入れ替えた一覧だけがデモのレシピになり、自分のレシピ帳のように見えたまま、知らせも出ないのを避けるため。
+///   回した知らせは、出せる画面まで残す。出せない応答では Cookie に触れない（並んで走る写真の要求などが付け直さないように）。
+///   ハンドラーが同じ応答でワークスペースの Cookie を付けた・消したとき（作った・切り替えたときなど）は、
+///   Cookie をそのままにし、知らせも出さない。後ろに削除を足すと新しい Cookie を打ち消し、同じ名前の `Set-Cookie` が 2 つ並ぶため。
 /// - 一度だけ出すメッセージがあれば読み、画面を返すときに消す（移動のときは、移動先で読むので残す）。
 pub async fn identify<B: Backend>(
     State(backend): State<B>,
@@ -548,20 +665,52 @@ pub async fn identify<B: Backend>(
         },
         None => (None, false),
     };
+    let gone_forwarded = flash == Some(Flash::WorkspaceGone);
     request.extensions_mut().insert(Session {
         own,
         viewing_demo,
-        flash,
+        flash: flash.filter(|flash| *flash != Flash::WorkspaceGone),
+        workspace_gone: stale || gone_forwarded,
+        own_gone: stale && !viewing_demo,
     });
+    // htmx が画面の一部だけを入れ替える要求（一覧の検索）。画面を返しても、見出しの下の知らせは入れ替わらない。
+    // hx-boost の移動（HX-Boosted）と、戻るでの履歴の復元（HX-History-Restore-Request）は、body の全体を入れ替える。
+    let partial = request.headers().contains_key("hx-request")
+        && !request.headers().contains_key("hx-boosted")
+        && !request.headers().contains_key("hx-history-restore-request");
     let mut response = next.run(request).await;
-    if stale {
+    // ハンドラーがワークスペースの Cookie を付けた・消したときは、新しいワークスペースを使い始めたので、知らせない。
+    let switched = sets_cookie(&response, WORKSPACE_COOKIE);
+    let gone_shown = !partial && response.extensions().get::<GoneNoticeShown>().is_some();
+    if stale && !switched {
         for name in [WORKSPACE_COOKIE, DEMO_VIEW_COOKIE] {
             if !sets_cookie(&response, name) {
                 remove_cookie(&mut response, name);
             }
         }
+        if partial {
+            response
+                .headers_mut()
+                .insert("hx-refresh", HeaderValue::from_static("true"));
+        }
     }
-    if flash.is_some() && !response.status().is_redirection() {
+    let forward_gone = !switched
+        && !gone_shown
+        // 回されてきた知らせは、ハンドラーがメッセージを付けたとき（移動）だけ付け直し、ほかは Cookie を残す。
+        && (stale || (gone_forwarded && sets_cookie(&response, FLASH_COOKIE)));
+    if forward_gone {
+        // 出せなかった知らせを、次の画面に回す。ハンドラーが付けたメッセージの Cookie は、置き換える。
+        remove_set_cookie(&mut response, FLASH_COOKIE);
+        add_cookie(
+            &mut response,
+            FLASH_COOKIE,
+            Flash::WorkspaceGone.code(),
+            FLASH_MAX_AGE,
+        );
+    } else if flash.is_some()
+        && !response.status().is_redirection()
+        && (!gone_forwarded || gone_shown)
+    {
         remove_cookie(&mut response, FLASH_COOKIE);
     }
     response
@@ -589,6 +738,19 @@ async fn resolve<B: Backend>(backend: &B, session: &Session) -> Result<Option<Vi
         }));
     }
     Ok(session.own.clone().map(Viewer::Own))
+}
+
+/// 覚えていたワークスペースが無くなっていれば、画面の書き込みを断る（[`Session::own_gone`]）。
+///
+/// Cookie の ID が無ければ、画面は共有のデモを使う。そのまま書き込むと、自分のレシピ帳に書くつもりの入力
+/// （レシピや写真）が、誰でも見られるデモに入る。断った応答には、無くなったことの知らせを出すので、
+/// 送り直せば、Cookie の無い人としてデモに書き込める。
+fn refuse_write_if_gone(session: &Session) -> Result<(), ScreenError> {
+    if session.own_gone {
+        Err(ScreenError::WorkspaceGone)
+    } else {
+        Ok(())
+    }
 }
 
 /// ワークスペースが要る画面で、使うワークスペースを決める。無ければ「はじめる」画面へ移す。
@@ -658,6 +820,7 @@ pub async fn index<B: Backend>(
                 StatusCode::BAD_REQUEST,
                 &ListPage {
                     layout: Layout::new(Some(&viewer), &session),
+                    own_workspace: matches!(viewer, Viewer::Own(_)),
                     query_error: Some(message),
                     first_page_href: "/".to_owned(),
                     q,
@@ -685,6 +848,7 @@ pub async fn index<B: Backend>(
         StatusCode::OK,
         &ListPage {
             layout: Layout::new(Some(&viewer), &session),
+            own_workspace: matches!(viewer, Viewer::Own(_)),
             query_error: None,
             first_page_href: list_href(&q, 1),
             q,
@@ -711,9 +875,30 @@ pub struct RecipeForm {
     ingredients: String,
     #[serde(default)]
     steps: String,
+    /// フォームを出したときに使っていたワークスペース。自分のワークスペースなら `own`（共有のデモなら空）。
+    /// 送られたときに自分のワークスペースが無くなっていれば、デモに書かずに断る（[`form_if_gone`]）。
+    /// Cookie は、ほかのタブの画面などが先に消していることがあり、それだけでは分からないため。
+    #[serde(default)]
+    workspace: String,
 }
 
+/// [`RecipeForm::workspace`] で、自分のワークスペースに出したフォームを示す値。
+const FORM_FOR_OWN: &str = "own";
+
 impl RecipeForm {
+    /// 自分のワークスペースに出したフォームか。
+    fn for_own(&self) -> bool {
+        self.workspace == FORM_FOR_OWN
+    }
+
+    /// `viewer` に出す、空のフォーム。
+    fn empty_for(viewer: &Viewer) -> Self {
+        Self {
+            workspace: workspace_of(viewer),
+            ..Self::default()
+        }
+    }
+
     /// API の本文と同じ形にする。
     ///
     /// - ブラウザは textarea の改行を CRLF で送るので、API と同じ LF にそろえる（長さの数え方もそろう）。
@@ -783,6 +968,7 @@ fn form_page(
         revalidate: validation != Validation::NotSubmitted,
         focus_summary: validation == Validation::Submitted,
         photo_area,
+        for_own: form.for_own(),
     }
 }
 
@@ -906,6 +1092,91 @@ async fn form_with_alert<B: Backend>(
     render(status, &page)
 }
 
+/// 登録・更新のフォームを、使うワークスペースに保存する。
+///
+/// 1. 覚えていたワークスペースが無くなっていれば、デモに書かずに断る（[`form_if_gone`]）。
+/// 2. 自分のワークスペースに出したフォーム（[`RecipeForm::for_own`]）が、一時的にデモを見ている間に送られたら
+///    （デモに切り替える前に開いたタブなど）、デモではなく自分のワークスペースに保存し、デモの表示を終える。
+///    自分のレシピ帳に書くつもりの入力を、誰でも見られるデモに入れないため。
+///    出し直したフォームのリンクや写真の欄も自分のワークスペースのものなので、保存できずに出し直すときも、デモの表示を終える。
+///    保存できたら、どこに保存したかを知らせ（[`Flash::RecipeCreatedToOwn`] など）、出し直すときは、自分のレシピ帳に戻ったことを知らせる。
+/// 3. ほか（印の無いフォーム。デモに出したもの）は、これまでどおり、使うワークスペース（[`resolve`]）に保存する。
+async fn save_form<B: Backend>(
+    backend: &B,
+    session: &Session,
+    kind: FormKind,
+    form: &RecipeForm,
+    limited: bool,
+) -> Result<Response, ScreenError> {
+    if let Some(response) = form_if_gone(session, &kind, form, limited) {
+        return Ok(response);
+    }
+    let own_from_demo = session
+        .own
+        .clone()
+        .filter(|_| session.viewing_demo && form.for_own());
+    let Some(own) = own_from_demo else {
+        let viewer = require_viewer(backend, session).await?;
+        return save(backend, session, &viewer, kind, form, limited).await;
+    };
+    let session = Session {
+        viewing_demo: false,
+        flash: Some(Flash::DemoViewEnded),
+        ..session.clone()
+    };
+    let to_own = match kind {
+        FormKind::New => Flash::RecipeCreatedToOwn,
+        FormKind::Edit(_) => Flash::RecipeSavedToOwn,
+    };
+    let mut response = save(backend, &session, &Viewer::Own(own), kind, form, limited).await?;
+    if response.status().is_redirection() {
+        remove_set_cookie(&mut response, FLASH_COOKIE);
+        add_cookie(&mut response, FLASH_COOKIE, to_own.code(), FLASH_MAX_AGE);
+    }
+    remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+    Ok(response)
+}
+
+/// [`RecipeForm::workspace`] に入れる値。
+fn workspace_of(viewer: &Viewer) -> String {
+    match viewer {
+        Viewer::Own(_) => FORM_FOR_OWN.to_owned(),
+        Viewer::Demo { .. } => String::new(),
+    }
+}
+
+/// 覚えていたワークスペースが無くなっていれば、保存せずに、入力を保ったフォームを出し直す（`404`）。
+///
+/// 無くなったと分かるのは、Cookie の ID のワークスペースが無い（[`Session::own_gone`]）か、
+/// 自分のワークスペースに出したフォーム（[`RecipeForm::for_own`]）なのに、自分のワークスペースが無いときである。
+/// 後者は、ほかのタブの画面が先に Cookie を消した後や、断った後に送り直したときにも、デモに書かないため。
+/// 出し直すフォームも自分のワークスペースのものとして出すので、送り直しても、また断る。
+///
+/// 知らせは見出しの下に出す（[`Layout::gone`]）。書き込みの回数の制限（`429`）と同じく、書きかけの入力（最大 7,100 文字）を消さないため。
+/// 回数の制限に当たっていれば、そちらを先に答える（[`save`]。出し直すフォームにも印が残るので、次に送ったときに断る）。
+/// このときは、自分のワークスペースが無いので、使うワークスペース（デモ）のフォームとして出し直すが、書き込みはしない。
+/// 使うワークスペースが無いので、デモの帯と写真の欄は出さない。
+fn form_if_gone(
+    session: &Session,
+    kind: &FormKind,
+    form: &RecipeForm,
+    limited: bool,
+) -> Option<Response> {
+    let gone = session.own_gone || (form.for_own() && session.own.is_none());
+    if limited || !gone {
+        return None;
+    }
+    let page = form_page(
+        Layout::gone_only(),
+        kind,
+        form,
+        Vec::new(),
+        Validation::NotSubmitted,
+        PhotoArea::None,
+    );
+    Some(render(StatusCode::NOT_FOUND, &page))
+}
+
 /// 登録と更新で共通の処理。入力の誤りと、[`keeps_form`] の失敗は、フォームに出し直す。
 ///
 /// `limited` は、書き込みの回数の制限に当たったか（[`WriteLimited`]）。当たっていれば、入力を確かめる前に
@@ -962,7 +1233,7 @@ pub async fn new_form<B: Backend>(
     let page = form_page(
         Layout::new(Some(&viewer), &session),
         &FormKind::New,
-        &RecipeForm::default(),
+        &RecipeForm::empty_for(&viewer),
         Vec::new(),
         Validation::NotSubmitted,
         new_photo_area(&viewer),
@@ -977,10 +1248,9 @@ pub async fn create<B: Backend>(
     limited: Option<Extension<WriteLimited>>,
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &session).await?;
     let limited = limited.is_some();
     let form = read_recipe_form(form, limited)?;
-    save(&backend, &session, &viewer, FormKind::New, &form, limited).await
+    save_form(&backend, &session, FormKind::New, &form, limited).await
 }
 
 /// 登録・更新のフォームの本文を読む。書き込みの回数の制限に当たっていれば（[`WriteLimited`]）、
@@ -1091,6 +1361,7 @@ async fn edit_page<B: Backend>(
         name: recipe.name,
         ingredients: recipe.ingredients,
         steps: recipe.steps,
+        workspace: workspace_of(viewer),
     };
     let page = form_page(
         layout,
@@ -1188,6 +1459,7 @@ pub async fn add_thumbnail<B: Backend>(
     query: Result<Query<ThumbnailQuery>, QueryRejection>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let (id, photo_id) = photo::parse_ids(ids)?;
     // クエリと本文の誤りは、デモかを確かめた後に返す（[`photo::add_thumbnail`] の確かめる順）。
@@ -1215,6 +1487,7 @@ pub async fn add_photo<B: Backend>(
     raw: Option<Extension<RawPhotoBody>>,
     request: Request,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let id = recipe::parse_recipe_id(id)?;
     let from_script = raw.is_some() || !photo::has_multipart_body(request.headers());
@@ -1286,6 +1559,7 @@ pub async fn delete_photo<B: Backend>(
     Extension(session): Extension<Session>,
     ids: Result<Path<(String, String)>, PathRejection>,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let (id, photo_id) = photo::parse_ids(ids)?;
     match photo::remove(&backend, viewer.id(), &id, &photo_id).await {
@@ -1313,12 +1587,11 @@ pub async fn update<B: Backend>(
     id: Result<Path<String>, PathRejection>,
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &session).await?;
     let id = recipe::parse_recipe_id(id)?;
     let limited = limited.is_some();
     let form = read_recipe_form(form, limited)?;
     let kind = FormKind::Edit(id.to_string());
-    save(&backend, &session, &viewer, kind, &form, limited).await
+    save_form(&backend, &session, kind, &form, limited).await
 }
 
 /// 削除のフォームの値。一覧から消したときは、同じ検索の条件とページに戻す。
@@ -1335,6 +1608,7 @@ pub async fn delete<B: Backend>(
     id: Result<Path<String>, PathRejection>,
     form: Result<Form<DeleteForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let id = recipe::parse_recipe_id(id)?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;
@@ -1459,7 +1733,7 @@ pub async fn switch_workspace<B: Backend>(
                 return Ok(use_workspace(&id, Flash::WorkspaceSwitched));
             }
             _ => {
-                "その ID のワークスペースは見つかりません。ID が正しいか、14 日使わずに消えていないかを確かめてください"
+                "その ID のワークスペースは見つかりません。ID が正しいか、14 日アクセスが無くて消えていないかを確かめてください"
             }
         }
     };

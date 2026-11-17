@@ -8,8 +8,10 @@
   <p>このブラウザで使っている、あなたのワークスペースの ID です。ほかの端末で同じレシピ帳を使うときは、この ID を入れてください。</p>
   <p>ID を知っている人は、誰でもこのレシピ帳を読み書きできます。人に教えないでください。</p>
   <label for="current-id">ワークスペースの ID</label>
-  <input id="current-id" value="{{ id }}" readonly autocomplete="off">
-  <p>14 日使わないと、ワークスペースは自動で消えます。</p>
+  {#- 説明は欄の上に置き、aria-describedby で欄に結び付ける。 #}
+  <p id="current-id-hint" class="note">Cookie を消したり、プライベートブラウズのウィンドウを閉じたりすると、このブラウザは ID を忘れます。ID を控えておいてください。</p>
+  <input id="current-id" value="{{ id }}" readonly autocomplete="off" aria-describedby="current-id-hint">
+  <p>14 日アクセスが無いと、レシピと写真ごと自動で消えます（どの端末からのアクセスでも数えます）。</p>
   <div class="actions">
     {%- if viewing_demo %}
     <form method="post" action="/workspace/own">
@@ -31,10 +33,13 @@
   {%- else %}
   <p>まだワークスペースがありません。</p>
   {%- endif %}
+  <p>自分だけのレシピ帳は、14 日アクセスが無いと、レシピと写真ごと自動で消えます（どの端末からのアクセスでも数えます）。</p>
   <form method="post" action="/workspace">
     <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
   </form>
   {%- endif %}
+  {#- 切り替えると、今のワークスペースの ID をこのブラウザが忘れるので、自分のワークスペースがあれば、控えるよう書く。 #}
+  {%- let switch_replaces = own_id.is_some() %}
   {% include "switch_form.html" %}
 </section>
 {% endblock %}

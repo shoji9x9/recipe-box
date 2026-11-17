@@ -102,7 +102,9 @@ fn set_cookie_named(response: &TestResponse, name: &str) -> Option<String> {
 /// レシピを画面から登録し、詳細の画面のパスを返す。
 pub(super) async fn create_recipe(backend: &FakeBackend, workspace: &str, name: &str) -> String {
     let form = format!("name={}&servings=2&ingredients=&steps=", urlencode(name));
-    let response = screen_post(backend, "/recipes", Some(&cookie(workspace)), &form).await;
+    // 共有のデモには、Cookie の無い人として書き込む（デモの ID の Cookie は、無い ID と同じく書き込みを断るため）。
+    let cookie = (workspace != DEMO).then(|| cookie(workspace));
+    let response = screen_post(backend, "/recipes", cookie.as_deref(), &form).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     response.location
 }
@@ -580,6 +582,10 @@ async fn stale_cookie_is_cleared() {
         set_cookie_named(&response, "__Host-workspace").unwrap(),
         "__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
     );
+    // 黙って「はじめる」画面にせず、覚えていたワークスペースが無いことを、誤りの知らせとして出す。
+    assert!(response.body.contains(&gone_alert()), "{}", response.body);
+    // この画面で出したので、次の画面に回さない。
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
 }
 
 #[tokio::test]
@@ -1611,7 +1617,9 @@ async fn demo_id_is_never_treated_as_own_workspace() {
         "",
     )
     .await;
-    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    // 無い ID の Cookie と同じく、書き込みを断る。
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(response.body.contains("見つかりませんでした"));
     assert_eq!(backend.photos.lock().unwrap().len(), 1);
     // ワークスペースの画面にも、デモの ID を自分の ID として出さない。デモへの一時的な切り替えもさせない。
     let response = screen_get(&backend, "/workspace", Some(&demo_cookie)).await;
@@ -1626,6 +1634,7 @@ async fn demo_id_is_never_treated_as_own_workspace() {
         cookies,
         [
             "__Host-demo-view=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+            "__Host-flash=workspace-gone; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax",
             "__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
         ]
     );
@@ -1677,6 +1686,12 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
     // ハンドラーが付けた Cookie には、消えた ID の削除を足さない（新しい Cookie を打ち消さず、同じ名前を 2 つ並べない）。
     assert_eq!(cookies.len(), 1, "{cookies:?}");
     assert!(cookies[0].starts_with(&cookie(WORKSPACE_B)), "{cookies:?}");
+    // 新しいワークスペースを使い始めたので、消えたことは知らせない。
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .unwrap()
+            .starts_with("__Host-flash=workspace-switched;")
+    );
 
     let response = screen_post(&backend, "/workspace", Some(&gone), "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
@@ -2442,4 +2457,569 @@ async fn posts_from_other_sites_are_rejected_before_the_write_limit() {
             .load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+}
+
+/// 覚えていたワークスペースが無くなっていたことの知らせ（赤）の HTML。
+fn gone_alert() -> String {
+    "<p class=\"message error\" data-workspace-gone>このブラウザが覚えていたワークスペースは見つかりませんでした。\
+     14 日アクセスが無くて消えたか、削除されたためです</p>"
+        .to_owned()
+}
+
+#[tokio::test]
+async fn stale_cookie_is_told_once_on_the_demo() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let stale = cookie(WORKSPACE_A);
+    // 黙ってデモにせず、デモの画面に誤りの知らせとして出す（読み上げの入れ物の中に）。
+    let response = screen_get(&backend, "/", Some(&stale)).await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert!(response.body.contains("共有のデモです"));
+    assert!(
+        response.body.contains(&format!(
+            r#"<div id="messages-alert" role="alert">{}</div>"#,
+            gone_alert()
+        )),
+        "{}",
+        response.body
+    );
+    assert!(
+        set_cookie_named(&response, "__Host-workspace")
+            .is_some_and(|cookie| cookie.contains("Max-Age=0"))
+    );
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    // Cookie が消えた後は、もう出さない。
+    let response = screen_get(&backend, "/", None).await;
+    assert!(!response.body.contains("見つかりませんでした"));
+    // ほかの誤りの知らせと一緒でも出す（切り替えの欄の誤り）。
+    let response = screen_post(&backend, "/workspace/switch", Some(&stale), "id=xyz").await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(response.body.contains(&gone_alert()), "{}", response.body);
+    assert!(response.body.contains("workspace-id-error"));
+}
+
+#[tokio::test]
+async fn stale_cookie_is_told_on_the_next_page_when_the_response_cannot_show_it() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let stale = cookie(WORKSPACE_A);
+    let gone_flash =
+        "__Host-flash=workspace-gone; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax";
+
+    // 移動の応答。次の画面に回す（ハンドラーが付けた知らせより優先することは、下の回された知らせで確かめる）。
+    let response = screen_post(&backend, "/workspace/demo", Some(&stale), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let flashes: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-flash="))
+        .collect();
+    assert_eq!(flashes, [gone_flash]);
+
+    // エラーの画面（消えたワークスペースのレシピのブックマークなど）。
+    let response = screen_get(
+        &backend,
+        "/recipes/00000000000000000000000000000000",
+        Some(&stale),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(!response.body.contains("見つかりませんでした"));
+    assert_eq!(
+        set_cookie_named(&response, "__Host-flash").unwrap(),
+        gone_flash
+    );
+
+    // htmx が一覧の部分だけを入れ替える検索。見出しの下の知らせは入れ替わらないので、次の画面に回し、
+    // 画面の全体を読み直させる（一覧だけが黙ってデモに変わらないように）。
+    let request = Request::get("/?q=x")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &stale)
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(
+        set_cookie_named(&response, "__Host-flash").unwrap(),
+        gone_flash
+    );
+    assert_eq!(response.headers.get("hx-refresh").unwrap(), "true");
+    // 戻るでの履歴の復元は body の全体を入れ替えるので、その画面で出す（次の画面に回して 2 回出さない）。
+    let request = Request::get("/")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &stale)
+        .header("hx-request", "true")
+        .header("hx-history-restore-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert!(response.body.contains(&gone_alert()));
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    assert!(!response.headers.contains_key("hx-refresh"));
+    // hx-boost の移動は body の全体を入れ替えるので、その画面で出す。
+    let request = Request::get("/")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &stale)
+        .header("hx-request", "true")
+        .header("hx-boosted", "true")
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert!(response.body.contains(&gone_alert()));
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+
+    // 回した知らせは、次に画面を出したときに一度だけ出す。エラーの画面と写真では出せないので、Cookie に触れずに残す
+    // （付け直さないので、知らせを出した後に届いた、並んで走る要求が、また付けることもない）。
+    let with_flash = "__Host-flash=workspace-gone";
+    for path in [
+        "/recipes/00000000000000000000000000000000",
+        "/recipes/00000000000000000000000000000000/photos/11111111111111111111111111111111",
+    ] {
+        let response = screen_get(&backend, path, Some(with_flash)).await;
+        assert_eq!(set_cookie_named(&response, "__Host-flash"), None, "{path}");
+    }
+    // 移動の応答では、ハンドラーが付けたメッセージより優先して、付け直す。
+    let response = screen_post(&backend, "/recipes", Some(with_flash), "name=x&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        set_cookie_named(&response, "__Host-flash").unwrap(),
+        gone_flash
+    );
+    let response = screen_get(&backend, "/", Some(with_flash)).await;
+    assert!(response.body.contains(&gone_alert()), "{}", response.body);
+    assert!(!response.body.contains("message success"));
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .is_some_and(|cookie| cookie.contains("Max-Age=0"))
+    );
+}
+
+#[tokio::test]
+async fn creating_a_workspace_from_a_stale_cookie_does_not_tell_it_is_gone() {
+    let backend = FakeBackend::default();
+    let response = screen_post(&backend, "/workspace", Some(&cookie(WORKSPACE_A)), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let flashes: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-flash="))
+        .collect();
+    assert_eq!(
+        flashes,
+        ["__Host-flash=workspace-created; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax"]
+    );
+}
+
+#[tokio::test]
+async fn auto_deletion_is_told_where_workspaces_are_made_and_used() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..backend_with_workspaces()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let a = cookie(WORKSPACE_A);
+    let note = "このレシピ帳は、14 日アクセスが無いと、レシピと写真ごと自動で消えます。";
+
+    // 作った直後の知らせ。
+    let response = screen_get(
+        &backend,
+        "/",
+        Some(&format!("{a}; __Host-flash=workspace-created")),
+    )
+    .await;
+    assert!(
+        response.body.contains("14 日アクセスが無いと"),
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains("控えておいてください"));
+
+    // 自分の一覧には出し、デモの一覧には出さない。
+    let response = screen_get(&backend, "/", Some(&a)).await;
+    assert!(response.body.contains(note), "{}", response.body);
+    let response = screen_get(&backend, "/", None).await;
+    assert!(!response.body.contains(note));
+    // デモの帯に、元に戻る時刻を書く。
+    assert!(response.body.contains("毎日 4 時（日本時間）に元に戻り"));
+
+    // ワークスペースの画面: ID の欄の説明と、切り替えると今の ID を忘れること。
+    let response = screen_get(&backend, "/workspace", Some(&a)).await;
+    assert!(response.body.contains(
+        r#"<input id="current-id" value="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" readonly autocomplete="off" aria-describedby="current-id-hint">"#
+    ), "{}", response.body);
+    assert!(
+        response
+            .body
+            .contains(r#"<p id="current-id-hint" class="note">Cookie を消したり"#)
+    );
+    assert!(
+        response
+            .body
+            .contains(r#"<p id="workspace-id-hint" class="note">切り替えると"#)
+    );
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="workspace-id-hint">"#)
+    );
+    // 誤りがあれば、説明と誤りの両方を結び付ける。
+    let response = screen_post(&backend, "/workspace/switch", Some(&a), "id=").await;
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="workspace-id-hint workspace-id-error""#),
+        "{}",
+        response.body
+    );
+
+    // 自分のワークスペースが無ければ、切り替えの説明は出さず、作る前に自動で消えることを書く。
+    let response = screen_get(&backend, "/workspace", None).await;
+    assert!(!response.body.contains("workspace-id-hint"));
+    assert!(
+        response
+            .body
+            .contains("自分だけのレシピ帳は、14 日アクセスが無いと")
+    );
+    let response = screen_post(&backend, "/workspace/switch", None, "id=").await;
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="workspace-id-error""#),
+        "{}",
+        response.body
+    );
+}
+
+/// 共有のデモと、そのレシピ（写真 1 枚付き）を用意し、デモのレシピの詳細のパスと写真の ID を返す。
+async fn backend_with_demo_recipe() -> (FakeBackend, String, String) {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let response = screen_post(&backend, "/recipes", None, "name=demo&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let path = response.location;
+    let recipe = path.rsplit('/').next().unwrap().to_owned();
+    let photo = "11111111111111111111111111111111".to_owned();
+    backend.add_photo_row(DEMO, &recipe, &photo, 3);
+    (backend, path, photo)
+}
+
+#[tokio::test]
+async fn recipe_forms_from_a_vanished_workspace_do_not_write_to_the_demo() {
+    let (backend, path, _) = backend_with_demo_recipe().await;
+    let stale = cookie(WORKSPACE_A);
+    let form =
+        "name=%E7%A7%81%E3%81%AE%E3%82%AB%E3%83%AC%E3%83%BC&servings=3&steps=%E7%85%AE%E3%82%8B";
+    for target in ["/recipes", path.as_str()] {
+        let response = screen_post(&backend, target, Some(&stale), form).await;
+        // 書き込まずに、入力を保ったフォームを出し直し、無くなったことを赤で知らせる。
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{target}");
+        assert!(response.body.contains(&gone_alert()), "{}", response.body);
+        assert!(response.body.contains("私のカレー"), "{}", response.body);
+        assert!(response.body.contains("煮る"));
+        // 使うワークスペースが無いので、デモの帯は出さない。Cookie は消し、知らせは次の画面に回さない。
+        assert!(!response.body.contains("demo-banner"));
+        assert!(
+            set_cookie_named(&response, "__Host-workspace")
+                .is_some_and(|cookie| cookie.contains("Max-Age=0"))
+        );
+        assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    }
+    // デモのレシピは 1 件のままで、名前も変わらない。
+    let recipes = backend.recipes.lock().unwrap();
+    assert_eq!(recipes.len(), 1);
+    assert!(recipes.values().all(|recipe| recipe.name == "demo"));
+}
+
+#[tokio::test]
+async fn other_writes_from_a_vanished_workspace_are_refused() {
+    let (backend, path, photo) = backend_with_demo_recipe().await;
+    let stale = cookie(WORKSPACE_A);
+    let (content_type, body) = photo_form(Some(&jpeg(100)));
+    let photo_request = Request::post(format!("{path}/photos"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("https://{HOST}"))
+        .header(header::COOKIE, &stale)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap();
+    for response in [
+        screen_post(&backend, &format!("{path}/delete"), Some(&stale), "").await,
+        screen_post(
+            &backend,
+            &format!("{path}/photos/{photo}/delete"),
+            Some(&stale),
+            "",
+        )
+        .await,
+        send(router(backend.clone()), photo_request).await,
+        screen_post(
+            &backend,
+            &format!("{path}/photos/{photo}/thumbnail?width=2000"),
+            Some(&stale),
+            "x",
+        )
+        .await,
+    ] {
+        // エラーの画面に、無くなったことの知らせだけを出す（写真の JavaScript は、これを理由にする）。
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{}", response.body);
+        assert!(
+            response.body.contains(&format!(
+                r#"<div id="messages-alert" role="alert">{}</div>"#,
+                gone_alert()
+            )),
+            "{}",
+            response.body
+        );
+        assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    }
+    assert_eq!(backend.recipes.lock().unwrap().len(), 1);
+    assert_eq!(backend.photos.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn writes_to_the_demo_are_kept_for_those_who_chose_the_demo() {
+    let (backend, _, _) = backend_with_demo_recipe().await;
+    // 一時的にデモを見ている間に、自分のワークスペースが無くなっていた。デモを見るつもりなので、デモに書き込む。
+    let visiting = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A));
+    let response = screen_post(&backend, "/recipes", Some(&visiting), "name=x&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    // 移動の応答なので、無くなったことの知らせを次の画面に回す。ハンドラーの知らせ（登録しました）は置き換え、2 つ並べない。
+    let flashes: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-flash="))
+        .collect();
+    assert_eq!(
+        flashes,
+        ["__Host-flash=workspace-gone; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax"]
+    );
+    // Cookie の無い人も、これまでどおりデモに書き込む。
+    let response = screen_post(&backend, "/recipes", None, "name=y&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(backend.recipes.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn vanished_workspace_keeps_the_form_without_a_demo_and_answers_the_write_limit_first() {
+    let backend = FakeBackend::default();
+    let stale = cookie(WORKSPACE_A);
+    // デモが無くても、「はじめる」画面に移さずに、入力を保ったフォームを出す。
+    let response = screen_post(&backend, "/recipes", Some(&stale), "name=abc&servings=1").await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(
+        response.body.contains(r#"value="abc""#),
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains(&gone_alert()));
+    // 書き込みの回数の制限に当たっていれば、そちらを先に答える（書き込まない）。
+    let (limited, path, _) = backend_with_demo_recipe().await;
+    let limited = FakeBackend {
+        write_limited: true,
+        ..limited
+    };
+    for target in ["/recipes", path.as_str()] {
+        let response = screen_post(&limited, target, Some(&stale), "name=abc&servings=1").await;
+        assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS, "{target}");
+    }
+    assert_eq!(limited.recipes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn forms_for_own_workspace_are_refused_after_the_cookie_is_gone() {
+    let (backend, path, _) = backend_with_demo_recipe().await;
+    backend.add_workspace(WORKSPACE_A, NOW);
+    let a = cookie(WORKSPACE_A);
+    let hidden = r#"<input type="hidden" name="workspace" value="own">"#;
+    // 自分のワークスペースに出したフォームには印を付け、デモのフォームには付けない。
+    let own_path = create_recipe(&backend, WORKSPACE_A, "私の").await;
+    for target in ["/recipes/new".to_owned(), format!("{own_path}/edit")] {
+        let response = screen_get(&backend, &target, Some(&a)).await;
+        assert!(response.body.contains(hidden), "{target}");
+    }
+    let response = screen_get(&backend, "/recipes/new", None).await;
+    assert!(!response.body.contains(hidden));
+
+    // ほかのタブの画面が先に Cookie を消していた（Cookie が無い）。自分のフォームから送っても、デモに書かない。
+    let form = "name=%E7%A7%81%E3%81%AE%E3%82%AB%E3%83%AC%E3%83%BC&servings=3&workspace=own";
+    for target in ["/recipes", path.as_str()] {
+        let response = screen_post(&backend, target, None, form).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{target}");
+        assert!(response.body.contains(&gone_alert()), "{}", response.body);
+        assert!(response.body.contains("私のカレー"));
+        // 出し直すフォームにも印を付けるので、送り直しても、また断る。
+        assert!(response.body.contains(hidden));
+    }
+    // 回数の制限で出し直したフォームにも印が残り、制限が解けた後に送り直しても、デモに書かない。
+    let limited = FakeBackend {
+        write_limited: true,
+        ..backend.clone()
+    };
+    let response = screen_post(&limited, "/recipes", Some(&cookie(WORKSPACE_B)), form).await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(response.body.contains(hidden), "{}", response.body);
+    let demo_recipes = |backend: &FakeBackend| {
+        backend
+            .recipes
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|recipe| recipe.name != "私の")
+            .count()
+    };
+    assert_eq!(demo_recipes(&backend), 1);
+    // 印の無いフォーム（デモに出したフォーム）は、これまでどおりデモに書き込む。
+    let response = screen_post(&backend, "/recipes", None, "name=x&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(demo_recipes(&backend), 2);
+}
+
+#[tokio::test]
+async fn own_forms_sent_while_visiting_the_demo_are_saved_to_own_workspace() {
+    let (backend, _, _) = backend_with_demo_recipe().await;
+    backend.add_workspace(WORKSPACE_A, NOW);
+    let own_path = create_recipe(&backend, WORKSPACE_A, "私の").await;
+    // デモに切り替える前に開いたタブのフォーム（印あり）を、別のタブでデモを見ている間に送る。
+    let visiting = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A));
+    let in_workspace = |workspace: &str, name: &str| {
+        backend
+            .recipes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(key, recipe)| key.0 == workspace && recipe.name == name)
+    };
+    for (target, flash) in [
+        ("/recipes", "recipe-created-to-own"),
+        (own_path.as_str(), "recipe-saved-to-own"),
+    ] {
+        let name = format!("新しい{flash}");
+        let form = format!("name={}&servings=2&workspace=own", urlencode(&name));
+        let response = screen_post(&backend, target, Some(&visiting), &form).await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+        // 自分のレシピの詳細に移り、デモの表示を終え、どこに保存したかを知らせる。
+        assert!(response.location.starts_with("/recipes/"));
+        assert!(
+            set_cookie_named(&response, "__Host-flash")
+                .unwrap()
+                .starts_with(&format!("__Host-flash={flash};"))
+        );
+        assert!(
+            set_cookie_named(&response, "__Host-demo-view")
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        assert!(in_workspace(WORKSPACE_A, &name), "{target}");
+        assert!(!in_workspace(DEMO, &name), "{target}");
+        let response = screen_get(
+            &backend,
+            &response.location,
+            Some(&format!("{}; __Host-flash={flash}", cookie(WORKSPACE_A))),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK);
+        assert!(
+            response.body.contains("自分のレシピ帳に"),
+            "{}",
+            response.body
+        );
+        assert!(!response.body.contains("demo-banner"));
+    }
+
+    // 印の無いフォーム（デモに出したもの）は、これまでどおりデモに書き、デモの表示も続ける。
+    let response = screen_post(
+        &backend,
+        "/recipes",
+        Some(&visiting),
+        "name=demo2&servings=1",
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(in_workspace(DEMO, "demo2"));
+    assert_eq!(set_cookie_named(&response, "__Host-demo-view"), None);
+
+    // デモを見ている間に、自分のワークスペースが無くなっていたら、これまでどおり断る。
+    let gone = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_B));
+    let response = screen_post(
+        &backend,
+        "/recipes",
+        Some(&gone),
+        "name=x&servings=1&workspace=own",
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(response.body.contains(&gone_alert()));
+}
+
+#[tokio::test]
+async fn own_forms_sent_while_visiting_the_demo_are_shown_again_as_own_forms() {
+    let (backend, _, _) = backend_with_demo_recipe().await;
+    backend.add_workspace(WORKSPACE_A, NOW);
+    let own_path = create_recipe(&backend, WORKSPACE_A, "私の").await;
+    let visiting = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A));
+    // 入力の誤りは、自分のワークスペースのフォームとして出し直す（印を保ち、デモの帯は出さない）。何も書かない。
+    let count = backend.recipes.lock().unwrap().len();
+    let response = screen_post(
+        &backend,
+        "/recipes",
+        Some(&visiting),
+        "name=&servings=2&workspace=own",
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains(r#"<input type="hidden" name="workspace" value="own">"#)
+    );
+    assert!(!response.body.contains("demo-banner"));
+    assert_eq!(backend.recipes.lock().unwrap().len(), count);
+    // 出し直したフォームのリンクと写真の欄は自分のワークスペースのものなので、デモの表示を終え、そのことを知らせる。
+    // 編集のフォームも同じで、写真の欄は自分のレシピのものを出す。
+    for target in ["/recipes", own_path.as_str()] {
+        let response = screen_post(
+            &backend,
+            target,
+            Some(&visiting),
+            "name=&servings=2&workspace=own",
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{target}");
+        assert!(
+            response
+                .body
+                .contains("<p class=\"message success\">自分のレシピ帳に戻りました</p>"),
+            "{}",
+            response.body
+        );
+        assert!(
+            set_cookie_named(&response, "__Host-demo-view")
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    }
+    let response = screen_post(
+        &backend,
+        &own_path,
+        Some(&visiting),
+        "name=&servings=2&workspace=own",
+    )
+    .await;
+    assert!(
+        response
+            .body
+            .contains(&format!(r#"action="{own_path}/photos""#)),
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains(&format!(r#"href="{own_path}""#)));
+    assert_eq!(backend.recipes.lock().unwrap().len(), count);
 }

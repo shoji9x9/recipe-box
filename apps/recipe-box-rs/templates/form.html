@@ -18,6 +18,10 @@
 </div>
 {%- endif %}
 <form method="post" action="{{ action }}" class="recipe-form" novalidate>
+  {#- 自分のワークスペースに出したフォームか。送ったときに無くなっていれば、共有のデモに書かずに断る。 #}
+  {%- if for_own %}
+  <input type="hidden" name="workspace" value="own">
+  {%- endif %}
   <div class="field" id="field-name">
     <label for="name">料理名（必須・100 文字まで）</label>
     {%- let field = "name" %}

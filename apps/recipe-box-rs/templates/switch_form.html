@@ -1,7 +1,14 @@
+{#- switch_error: 入力の誤り。switch_replaces: 切り替えると、今のワークスペースの ID をこのブラウザが忘れるか（説明を出す）。
+    説明は欄の上に置き、誤りと一緒に aria-describedby で欄に結び付ける。 #}
 <form method="post" action="/workspace/switch" class="switch" novalidate>
   <label for="workspace-id">ほかの端末で作ったワークスペースの ID を使う</label>
+  {%- if switch_replaces %}
+  <p id="workspace-id-hint" class="note">切り替えると、今のワークスペースの ID はこのブラウザから消えます。戻るときのために、控えておいてください。</p>
+  {%- endif %}
   <div class="row">
-    <input id="workspace-id" name="id" autocomplete="off" spellcheck="false"{% if let Some(error) = switch_error %} aria-invalid="true" aria-describedby="workspace-id-error" autofocus{% endif %}>
+    {%- let has_error = switch_error.is_some() %}
+    <input id="workspace-id" name="id" autocomplete="off" spellcheck="false"{% if has_error %} aria-invalid="true"{% endif %}
+           {%- if switch_replaces || has_error %} aria-describedby="{% if switch_replaces %}workspace-id-hint{% endif %}{% if switch_replaces && has_error %} {% endif %}{% if has_error %}workspace-id-error{% endif %}"{% endif %}{% if has_error %} autofocus{% endif %}>
     <button type="submit">使う</button>
   </div>
   {%- if let Some(error) = switch_error %}
