@@ -91,10 +91,13 @@ enum Flash {
     WorkspaceDeleted,
     PhotoAdded,
     PhotoDeleted,
+    /// Cookie の ID のワークスペースが無くなっていた（自動削除など）。
+    /// ほかと違い、誤りの知らせ（赤）として出す（[`Layout::gone`]）。
+    WorkspaceGone,
 }
 
 impl Flash {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::RecipeCreated,
         Self::RecipeSaved,
         Self::RecipeDeleted,
@@ -105,6 +108,7 @@ impl Flash {
         Self::WorkspaceDeleted,
         Self::PhotoAdded,
         Self::PhotoDeleted,
+        Self::WorkspaceGone,
     ];
 
     /// Cookie に入れるコード。
@@ -120,6 +124,7 @@ impl Flash {
             Self::WorkspaceDeleted => "workspace-deleted",
             Self::PhotoAdded => "photo-added",
             Self::PhotoDeleted => "photo-deleted",
+            Self::WorkspaceGone => "workspace-gone",
         }
     }
 
@@ -129,7 +134,8 @@ impl Flash {
             Self::RecipeSaved => "レシピを保存しました",
             Self::RecipeDeleted => "レシピを削除しました",
             Self::WorkspaceCreated => {
-                "あなた専用のレシピ帳を作りました。ID は「ワークスペース」の画面で確かめられます"
+                "あなた専用のレシピ帳を作りました。14 日アクセスが無いと、レシピと写真ごと自動で消えます。\
+                 ID は「ワークスペース」の画面で確かめられるので、控えておいてください"
             }
             Self::WorkspaceSwitched => "ワークスペースを切り替えました",
             Self::DemoViewStarted => {
@@ -139,6 +145,10 @@ impl Flash {
             Self::WorkspaceDeleted => "ワークスペースを削除しました",
             Self::PhotoAdded => "写真を追加しました",
             Self::PhotoDeleted => "写真を削除しました",
+            Self::WorkspaceGone => {
+                "このブラウザが覚えていたワークスペースは見つかりませんでした。\
+                 14 日アクセスが無くて消えたか、削除されたためです"
+            }
         }
     }
 
@@ -157,6 +167,8 @@ pub struct Session {
     viewing_demo: bool,
     /// 前の操作から渡された、一度だけ出すメッセージ。
     flash: Option<Flash>,
+    /// Cookie の ID のワークスペースが無くなっていた（[`identify`] が Cookie を消す）。画面に一度だけ知らせる。
+    workspace_gone: bool,
 }
 
 /// 書き込みの回数の制限に当たったことを、ハンドラーに渡す印。[`guard`] が付ける。
@@ -196,6 +208,9 @@ struct Layout {
     flash: Option<&'static str>,
     /// ページ全体への誤りの知らせ（赤）。
     alert: Option<&'static str>,
+    /// 覚えていたワークスペースが無くなっていたことの知らせ（赤。[`Flash::WorkspaceGone`]）。
+    /// `alert` とは別に持ち、ほかの誤りと一緒でも出す。出した画面の応答には [`GoneNoticeShown`] を付ける。
+    gone: Option<&'static str>,
 }
 
 impl Layout {
@@ -207,8 +222,13 @@ impl Layout {
         Self {
             demo_shared,
             demo_visiting,
-            flash: session.flash.map(Flash::message),
+            flash: session
+                .flash
+                .filter(|flash| *flash != Flash::WorkspaceGone)
+                .map(Flash::message),
             alert: None,
+            gone: (session.workspace_gone || session.flash == Some(Flash::WorkspaceGone))
+                .then(|| Flash::WorkspaceGone.message()),
         }
     }
 
@@ -337,6 +357,8 @@ struct PageLink {
 #[template(path = "list.html")]
 struct ListPage {
     layout: Layout,
+    /// 自分のワークスペースを見ているか（共有のデモでないか）。自動で消えることを一覧の下に書く。
+    own_workspace: bool,
     /// 検索の条件の誤り。あれば一覧の代わりに出す（検索欄の htmx が入れ替える #results の中に出すため）。
     query_error: Option<&'static str>,
     q: String,
@@ -440,10 +462,44 @@ struct WorkspacePage {
     switch_error: Option<&'static str>,
 }
 
+/// 画面のテンプレート。どれも base.html を継いで、見出しの上下に [`Layout`] を出す。
+trait Page: Template {
+    fn layout(&self) -> &Layout;
+}
+
+macro_rules! impl_page {
+    ($($page:ty),*) => {
+        $(impl Page for $page {
+            fn layout(&self) -> &Layout {
+                &self.layout
+            }
+        })*
+    };
+}
+
+impl_page!(
+    ErrorPage,
+    LandingPage,
+    ListPage,
+    DetailPage,
+    FormPage,
+    WorkspacePage
+);
+
+/// 応答の画面に [`Layout::gone`] を出したことの印。[`identify`] が、知らせを次の画面に回すかを決めるのに使う。
+#[derive(Debug, Clone, Copy)]
+struct GoneNoticeShown;
+
 /// テンプレートを HTML にして返す。テンプレートの失敗は、中身を出さずに 500 にする。
-fn render<T: Template>(status: StatusCode, template: &T) -> Response {
+fn render<T: Page>(status: StatusCode, template: &T) -> Response {
     match template.render() {
-        Ok(html) => (status, Html(html)).into_response(),
+        Ok(html) => {
+            let mut response = (status, Html(html)).into_response();
+            if template.layout().gone.is_some() {
+                response.extensions_mut().insert(GoneNoticeShown);
+            }
+            response
+        }
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
@@ -479,17 +535,36 @@ fn remove_cookie(response: &mut Response, name: &str) {
     add_cookie(response, name, "", 0);
 }
 
+/// 応答から、`name` の Cookie を付ける・消す `Set-Cookie` を取り除く。
+fn remove_set_cookie(response: &mut Response, name: &str) {
+    let kept: Vec<HeaderValue> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter(|value| !is_cookie_named(value, name))
+        .cloned()
+        .collect();
+    response.headers_mut().remove(header::SET_COOKIE);
+    for value in kept {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+}
+
+/// `Set-Cookie` の値が、`name` の Cookie のものか。
+fn is_cookie_named(value: &HeaderValue, name: &str) -> bool {
+    value.to_str().is_ok_and(|text| {
+        text.strip_prefix(name)
+            .is_some_and(|rest| rest.starts_with('='))
+    })
+}
+
 /// 応答が、`name` の Cookie を付けるか消すか（`Set-Cookie` にあるか）。
 fn sets_cookie(response: &Response, name: &str) -> bool {
     response
         .headers()
         .get_all(header::SET_COOKIE)
         .iter()
-        .filter_map(|value| value.to_str().ok())
-        .any(|text| {
-            text.strip_prefix(name)
-                .is_some_and(|rest| rest.starts_with('='))
-        })
+        .any(|value| is_cookie_named(value, name))
 }
 
 /// Cookie の値を読む。無いか、同じ名前が 2 つ以上あれば `None`（どちらを使うか決められないため）。
@@ -522,9 +597,13 @@ fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
 /// Cookie から、画面を見ている人の状態を読む middleware。すべての画面の前に動く。
 ///
 /// - ワークスペースの Cookie があれば、在ることを確かめて最終利用日時を更新する。
-///   無くなっていれば（自動削除など）か、共有のデモの ID なら、どの画面でも Cookie を消す。
-///   ハンドラーが同じ応答で付けた・消した Cookie（ワークスペースを作った・切り替えたときなど）は、そのままにする。
-///   後ろに削除を足すと新しい Cookie を打ち消し、同じ名前の `Set-Cookie` が 2 つ並ぶため。
+///   無くなっていれば（自動削除など）か、共有のデモの ID なら、どの画面でも Cookie を消し、そのことを一度だけ知らせる
+///   （[`Flash::WorkspaceGone`]）。
+///   知らせは、その応答の画面に出す。出せない応答（移動・エラーの画面・写真・一覧の部分だけの入れ替えなど）なら、
+///   一度だけ出すメッセージの Cookie で、次の画面に回す（ハンドラーが付けたメッセージより優先する）。
+///   Cookie を消した後は、ワークスペースが無いことが分からなくなり、知らせられないため。
+///   ハンドラーが同じ応答でワークスペースの Cookie を付けた・消したとき（作った・切り替えたときなど）は、
+///   Cookie をそのままにし、知らせも出さない。後ろに削除を足すと新しい Cookie を打ち消し、同じ名前の `Set-Cookie` が 2 つ並ぶため。
 /// - 一度だけ出すメッセージがあれば読み、画面を返すときに消す（移動のときは、移動先で読むので残す）。
 pub async fn identify<B: Backend>(
     State(backend): State<B>,
@@ -552,16 +631,34 @@ pub async fn identify<B: Backend>(
         own,
         viewing_demo,
         flash,
+        workspace_gone: stale,
     });
+    // htmx が画面の一部だけを入れ替える要求（一覧の検索など）。画面を返しても、見出しの下の知らせは入れ替わらない。
+    // hx-boost の移動（HX-Boosted）は body の全体を入れ替えるので、知らせも出る。
+    let partial = request.headers().contains_key("hx-request")
+        && !request.headers().contains_key("hx-boosted");
     let mut response = next.run(request).await;
-    if stale {
+    // ハンドラーがワークスペースの Cookie を付けた・消したときは、新しいワークスペースを使い始めたので、知らせない。
+    let switched = sets_cookie(&response, WORKSPACE_COOKIE);
+    if stale && !switched {
         for name in [WORKSPACE_COOKIE, DEMO_VIEW_COOKIE] {
             if !sets_cookie(&response, name) {
                 remove_cookie(&mut response, name);
             }
         }
     }
-    if flash.is_some() && !response.status().is_redirection() {
+    let gone_pending = !switched && (stale || flash == Some(Flash::WorkspaceGone));
+    let gone_shown = !partial && response.extensions().get::<GoneNoticeShown>().is_some();
+    if gone_pending && !gone_shown {
+        // 出せなかった知らせを、次の画面に回す。ハンドラーが付けたメッセージの Cookie は、置き換える。
+        remove_set_cookie(&mut response, FLASH_COOKIE);
+        add_cookie(
+            &mut response,
+            FLASH_COOKIE,
+            Flash::WorkspaceGone.code(),
+            FLASH_MAX_AGE,
+        );
+    } else if flash.is_some() && !response.status().is_redirection() {
         remove_cookie(&mut response, FLASH_COOKIE);
     }
     response
@@ -658,6 +755,7 @@ pub async fn index<B: Backend>(
                 StatusCode::BAD_REQUEST,
                 &ListPage {
                     layout: Layout::new(Some(&viewer), &session),
+                    own_workspace: matches!(viewer, Viewer::Own(_)),
                     query_error: Some(message),
                     first_page_href: "/".to_owned(),
                     q,
@@ -685,6 +783,7 @@ pub async fn index<B: Backend>(
         StatusCode::OK,
         &ListPage {
             layout: Layout::new(Some(&viewer), &session),
+            own_workspace: matches!(viewer, Viewer::Own(_)),
             query_error: None,
             first_page_href: list_href(&q, 1),
             q,
@@ -1459,7 +1558,7 @@ pub async fn switch_workspace<B: Backend>(
                 return Ok(use_workspace(&id, Flash::WorkspaceSwitched));
             }
             _ => {
-                "その ID のワークスペースは見つかりません。ID が正しいか、14 日使わずに消えていないかを確かめてください"
+                "その ID のワークスペースは見つかりません。ID が正しいか、14 日アクセスが無くて消えていないかを確かめてください"
             }
         }
     };

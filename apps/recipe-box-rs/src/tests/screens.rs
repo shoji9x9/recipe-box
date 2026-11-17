@@ -580,6 +580,10 @@ async fn stale_cookie_is_cleared() {
         set_cookie_named(&response, "__Host-workspace").unwrap(),
         "__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
     );
+    // 黙って「はじめる」画面にせず、覚えていたワークスペースが無いことを、誤りの知らせとして出す。
+    assert!(response.body.contains(&gone_alert()), "{}", response.body);
+    // この画面で出したので、次の画面に回さない。
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
 }
 
 #[tokio::test]
@@ -1626,6 +1630,7 @@ async fn demo_id_is_never_treated_as_own_workspace() {
         cookies,
         [
             "__Host-demo-view=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+            "__Host-flash=workspace-gone; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax",
             "__Host-workspace=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
         ]
     );
@@ -1677,6 +1682,12 @@ async fn switching_from_a_deleted_workspace_keeps_the_new_cookie() {
     // ハンドラーが付けた Cookie には、消えた ID の削除を足さない（新しい Cookie を打ち消さず、同じ名前を 2 つ並べない）。
     assert_eq!(cookies.len(), 1, "{cookies:?}");
     assert!(cookies[0].starts_with(&cookie(WORKSPACE_B)), "{cookies:?}");
+    // 新しいワークスペースを使い始めたので、消えたことは知らせない。
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .unwrap()
+            .starts_with("__Host-flash=workspace-switched;")
+    );
 
     let response = screen_post(&backend, "/workspace", Some(&gone), "").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
@@ -2441,5 +2452,222 @@ async fn posts_from_other_sites_are_rejected_before_the_write_limit() {
             .last_used_writes
             .load(std::sync::atomic::Ordering::Relaxed),
         0
+    );
+}
+
+/// 覚えていたワークスペースが無くなっていたことの知らせ（赤）の HTML。
+fn gone_alert() -> String {
+    "<p class=\"message error\">このブラウザが覚えていたワークスペースは見つかりませんでした。\
+     14 日アクセスが無くて消えたか、削除されたためです</p>"
+        .to_owned()
+}
+
+#[tokio::test]
+async fn stale_cookie_is_told_once_on_the_demo() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let stale = cookie(WORKSPACE_A);
+    // 黙ってデモにせず、デモの画面に誤りの知らせとして出す（読み上げの入れ物の中に）。
+    let response = screen_get(&backend, "/", Some(&stale)).await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert!(response.body.contains("共有のデモです"));
+    assert!(
+        response.body.contains(&format!(
+            r#"<div id="messages-alert" role="alert">{}</div>"#,
+            gone_alert()
+        )),
+        "{}",
+        response.body
+    );
+    assert!(
+        set_cookie_named(&response, "__Host-workspace")
+            .is_some_and(|cookie| cookie.contains("Max-Age=0"))
+    );
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    // Cookie が消えた後は、もう出さない。
+    let response = screen_get(&backend, "/", None).await;
+    assert!(!response.body.contains("見つかりませんでした"));
+    // ほかの誤りの知らせと一緒でも出す（切り替えの欄の誤り）。
+    let response = screen_post(&backend, "/workspace/switch", Some(&stale), "id=xyz").await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(response.body.contains(&gone_alert()), "{}", response.body);
+    assert!(response.body.contains("workspace-id-error"));
+}
+
+#[tokio::test]
+async fn stale_cookie_is_told_on_the_next_page_when_the_response_cannot_show_it() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..FakeBackend::default()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let stale = cookie(WORKSPACE_A);
+    let gone_flash =
+        "__Host-flash=workspace-gone; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax";
+
+    // 移動の応答。ハンドラーが付けた知らせ（登録しました）より、消えたことを優先して次の画面に回す。
+    let response = screen_post(&backend, "/recipes", Some(&stale), "name=x&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let flashes: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-flash="))
+        .collect();
+    assert_eq!(flashes, [gone_flash]);
+
+    // エラーの画面（消えたワークスペースのレシピのブックマークなど）。
+    let response = screen_get(
+        &backend,
+        "/recipes/00000000000000000000000000000000",
+        Some(&stale),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(!response.body.contains("見つかりませんでした"));
+    assert_eq!(
+        set_cookie_named(&response, "__Host-flash").unwrap(),
+        gone_flash
+    );
+
+    // htmx が一覧の部分だけを入れ替える検索。見出しの下の知らせは入れ替わらないので、次の画面に回す。
+    let request = Request::get("/?q=x")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &stale)
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(
+        set_cookie_named(&response, "__Host-flash").unwrap(),
+        gone_flash
+    );
+    // hx-boost の移動は body の全体を入れ替えるので、その画面で出す。
+    let request = Request::get("/")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &stale)
+        .header("hx-request", "true")
+        .header("hx-boosted", "true")
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert!(response.body.contains(&gone_alert()));
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+
+    // 回した知らせは、次に画面を出したときに一度だけ出す。エラーの画面では出せないので、残す。
+    let with_flash = "__Host-flash=workspace-gone";
+    let response = screen_get(
+        &backend,
+        "/recipes/00000000000000000000000000000000",
+        Some(with_flash),
+    )
+    .await;
+    assert_eq!(
+        set_cookie_named(&response, "__Host-flash").unwrap(),
+        gone_flash
+    );
+    let response = screen_get(&backend, "/", Some(with_flash)).await;
+    assert!(response.body.contains(&gone_alert()), "{}", response.body);
+    assert!(!response.body.contains("message success"));
+    assert!(
+        set_cookie_named(&response, "__Host-flash")
+            .is_some_and(|cookie| cookie.contains("Max-Age=0"))
+    );
+}
+
+#[tokio::test]
+async fn creating_a_workspace_from_a_stale_cookie_does_not_tell_it_is_gone() {
+    let backend = FakeBackend::default();
+    let response = screen_post(&backend, "/workspace", Some(&cookie(WORKSPACE_A)), "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let flashes: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-flash="))
+        .collect();
+    assert_eq!(
+        flashes,
+        ["__Host-flash=workspace-created; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax"]
+    );
+}
+
+#[tokio::test]
+async fn auto_deletion_is_told_where_workspaces_are_made_and_used() {
+    let backend = FakeBackend {
+        demo: Some(DEMO.to_owned()),
+        ..backend_with_workspaces()
+    };
+    backend.add_workspace(DEMO, NOW);
+    let a = cookie(WORKSPACE_A);
+    let note = "このレシピ帳は、14 日アクセスが無いと、レシピと写真ごと自動で消えます。";
+
+    // 作った直後の知らせ。
+    let response = screen_get(
+        &backend,
+        "/",
+        Some(&format!("{a}; __Host-flash=workspace-created")),
+    )
+    .await;
+    assert!(
+        response.body.contains("14 日アクセスが無いと"),
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains("控えておいてください"));
+
+    // 自分の一覧には出し、デモの一覧には出さない。
+    let response = screen_get(&backend, "/", Some(&a)).await;
+    assert!(response.body.contains(note), "{}", response.body);
+    let response = screen_get(&backend, "/", None).await;
+    assert!(!response.body.contains(note));
+    // デモの帯に、元に戻る時刻を書く。
+    assert!(response.body.contains("毎日 4 時（日本時間）に元に戻り"));
+
+    // ワークスペースの画面: ID の欄の説明と、切り替えると今の ID を忘れること。
+    let response = screen_get(&backend, "/workspace", Some(&a)).await;
+    assert!(response.body.contains(
+        r#"<input id="current-id" value="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" readonly autocomplete="off" aria-describedby="current-id-hint">"#
+    ), "{}", response.body);
+    assert!(
+        response
+            .body
+            .contains(r#"<p id="current-id-hint" class="note">Cookie を消したり"#)
+    );
+    assert!(
+        response
+            .body
+            .contains(r#"<p id="workspace-id-hint" class="note">切り替えると"#)
+    );
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="workspace-id-hint">"#)
+    );
+    // 誤りがあれば、説明と誤りの両方を結び付ける。
+    let response = screen_post(&backend, "/workspace/switch", Some(&a), "id=").await;
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="workspace-id-hint workspace-id-error""#),
+        "{}",
+        response.body
+    );
+
+    // 自分のワークスペースが無ければ、切り替えの説明は出さず、作る前に自動で消えることを書く。
+    let response = screen_get(&backend, "/workspace", None).await;
+    assert!(!response.body.contains("workspace-id-hint"));
+    assert!(
+        response
+            .body
+            .contains("自分だけのレシピ帳は、14 日アクセスが無いと")
+    );
+    let response = screen_post(&backend, "/workspace/switch", None, "id=").await;
+    assert!(
+        response
+            .body
+            .contains(r#"aria-describedby="workspace-id-error""#),
+        "{}",
+        response.body
     );
 }

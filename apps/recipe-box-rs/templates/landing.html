@@ -4,11 +4,12 @@
 {% block content %}
 <section class="panel">
   <p>ログインは要りません。ボタンを押すと、あなた専用のレシピ帳（ワークスペース）を作ります。</p>
-  <p>ワークスペースは、14 日使わないと自動で消えます。</p>
+  <p>14 日アクセスが無いと、レシピと写真ごと自動で消えます（どの端末からのアクセスでも数えます）。</p>
   <form method="post" action="/workspace">
     <button type="submit" class="primary">はじめる</button>
   </form>
   {%- let switch_error = None::<&str> %}
+  {%- let switch_replaces = false %}
   {% include "switch_form.html" %}
 </section>
 {% endblock %}
