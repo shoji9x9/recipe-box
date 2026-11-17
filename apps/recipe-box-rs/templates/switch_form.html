@@ -7,7 +7,7 @@
   {%- endif %}
   <div class="row">
     {%- let has_error = switch_error.is_some() %}
-    <input id="workspace-id" name="id" autocomplete="off" spellcheck="false"{% if has_error %} aria-invalid="true"{% endif %}
+    <input id="workspace-id" class="workspace-id" name="id" autocomplete="off" spellcheck="false"{% if has_error %} aria-invalid="true"{% endif %}
            {%- if switch_replaces || has_error %} aria-describedby="{% if switch_replaces %}workspace-id-hint{% endif %}{% if switch_replaces && has_error %} {% endif %}{% if has_error %}workspace-id-error{% endif %}"{% endif %}{% if has_error %} autofocus{% endif %}>
     <button type="submit">使う</button>
   </div>

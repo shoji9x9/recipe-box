@@ -176,7 +176,7 @@ p {
 /* 入力: 白地、細い線、角 8px。フォーカスは、欄の外に 2px の黒い線（outline）を出す（光彩は付けない）。
    線を枠（border）と別にするので、誤りのある欄（赤い枠）でもフォーカスが分かる。
    outline は、強制カラーモード（Windows のハイコントラスト）でも、システムの色で残る（box-shadow は消える）。 */
-/* 欄の名前は、補足（.note。灰色の細字）と見分けるため、本文の色の太字にする（docs/design.md の「文字」） */
+/* 欄の名前は、補足（.note。灰色・標準の太さ）と見分けるため、見出しと同じ濃い色（--ink）の太字にする（docs/design.md の「文字」） */
 label {
   display: block;
   margin: var(--space-6) 0 var(--space-2);
@@ -627,7 +627,7 @@ label + .note {
   margin: 0 0 var(--space-2);
 }
 
-/* ワークスペースの ID は、切り替えの欄と同じ等幅の字で出す */
+/* ワークスペースの ID は、出す欄も入れる欄も等幅の字にする（docs/design.md の「ID の表示」） */
 .workspace-id {
   font-family: var(--font-mono);
 }
@@ -667,7 +667,7 @@ label + .note {
   border-bottom: 1px solid var(--hairline-soft);
   background: var(--surface-soft);
 
-  /* 文ごとに 1 つの p にして、広い画面では文の途中で折り返さない。
+  /* 文のまとまりごとに 1 つの p にして、広い画面では途中で折り返さない（1 つの p は 45 文字ほどまで。docs/design.md）。
      狭い画面で折り返すときは、日本語の文節の切れ目で折り返す（word-break: auto-phrase。対応していないブラウザは、ふつうの折り返し） */
   & .demo-text {
     flex: 1 1 320px;
@@ -801,7 +801,6 @@ dialog.confirm {
 
     & input {
       flex: 1;
-      font-family: var(--font-mono);
     }
   }
 }
