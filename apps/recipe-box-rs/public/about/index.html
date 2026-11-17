@@ -165,7 +165,9 @@ Cloudflare のアカウントは要りません。データは <code>apps/recipe
 <h3 id="運用ログwrangler-tailmetrics">運用（ログ・wrangler tail・Metrics）</h3>
 <ul>
 <li>Workers のログ（<code>[observability]</code>）: アプリが <code>console</code> に出したもの（エラーなど）を、後からダッシュボードで見られます。
-リクエストごとの記録（invocation logs）は残しません。API の <code>X-Workspace-Id</code>（ワークスペースの ID）が残るかもしれないためです。</li>
+リクエストごとの記録（invocation logs）は残しません。API の <code>X-Workspace-Id</code>（ワークスペースの ID）が残るかもしれないためです。
+それでも、ログの行には Cloudflare がリクエストのメソッドと URL（検索の語などのクエリを含む）を付けるので、どの画面や API の失敗かが分かります。
+URL はログに残るので、ID は URL に入れず、ログに付かないヘッダー・Cookie・フォームの本文で送ります（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/security.md#%E3%83%AD%E3%82%B0">docs/security.md の「ログ」</a>）。</li>
 <li><code>wrangler tail</code>: 本番のリクエストとログを、その場で流して見ます。残りません。リクエストごとの CPU 時間は、ここで見ます。</li>
 <li>ダッシュボードの Metrics: リクエストの数・エラーの割合・CPU 時間の傾向を見ます。</li>
 <li>失敗の通知: 定期の自動削除が最近に成功し（D1 の <code>cleanup_runs</code>）、消し終えているはずのワークスペースや写真の行が残っていないかを、<code>seed-demo.yml</code> の job が毎日確かめ、そうでなければ job が失敗して GitHub がメールで知らせます。
