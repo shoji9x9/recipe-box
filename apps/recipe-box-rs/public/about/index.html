@@ -396,7 +396,9 @@ Hono と同じく、ミドルウェア（middleware）で前後の処理を足�
        hx-target=&quot;#results&quot; hx-select=&quot;#results&quot; hx-swap=&quot;outerHTML&quot; hx-select-oob=&quot;#results-count:innerHTML&quot; hx-push-url=&quot;true&quot;&gt;
 </code></pre>
 <p>React で同じことをすると、API から JSON を取り、ブラウザで HTML を組み立てます。htmx では、HTML を作るのはいつもサーバーで、画面の状態をブラウザに持ちません。
-CSP でインラインのスクリプトと <code>eval</code> を禁じているので、htmx もそれらを使わない設定にしています（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/base.html">apps/recipe-box-rs/templates/base.html</a> の <code>htmx-config</code>）。</p>
+CSP でインラインのスクリプトと <code>eval</code> を禁じているので、htmx もそれらを使わない設定にしています（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/templates/base.html">apps/recipe-box-rs/templates/base.html</a> の <code>htmx-config</code>）。
+htmx は、画面を移る前に、戻るときのためにページを写して残せます。このアプリは閲覧の履歴をブラウザに残さないので、写すこともさせていません（<code>&lt;body&gt;</code> の <code>hx-history=&quot;false&quot;</code>）。
+写すと、まだ見える所に来ていない写真（<code>loading=&quot;lazy&quot;</code>）まで読みに行くためです。ワークスペースを作った直後には、前のワークスペースの写真を新しいワークスペースで読み、<code>404</code> になっていました。</p>
 <h3 id="使って分かった難しい点">使って分かった難しい点</h3>
 <h4 id="send-の扱い"><code>Send</code> の扱い</h4>
 <p>axum は、ハンドラーの <code>Future</code> に <code>Send</code>（別のスレッドに渡せること）を求めます。ところが、Workers の値（D1 のデータベースなど）は JavaScript の値なので <code>Send</code> ではありません。
@@ -485,7 +487,7 @@ export function joinPhoto(body, state, head, length) {
 <h3 id="javascript-が動かなくても使える作り">JavaScript が動かなくても使える作り</h3>
 <p>画面は、JavaScript が動かなくても、すべての操作ができます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E7%94%BB%E9%9D%A2">docs/spec.md の「画面」</a>）。JavaScript は、使い心地を良くするためだけに使います。</p>
 <ul>
-<li>画面の移動とフォームは、ふつうのリンクとフォーム（<code>&lt;a&gt;</code>・<code>&lt;form method=&quot;post&quot;&gt;</code>）です。<code>&lt;body hx-boost=&quot;true&quot;&gt;</code> で、htmx が動けば、ページの全体を読み直さずに中身を入れ替えます。htmx が動かなければ、ふつうに移動します。</li>
+<li>画面の移動とフォームは、ふつうのリンクとフォーム（<code>&lt;a&gt;</code>・<code>&lt;form method=&quot;post&quot;&gt;</code>）です。<code>&lt;body hx-boost=&quot;true&quot;&gt;</code>（<code>hx-boost</code> の属性）で、htmx が動けば、ページの全体を読み直さずに中身を入れ替えます。htmx が動かなければ、ふつうに移動します。</li>
 <li>書き込みは、POST の後に別の画面へ移す（リダイレクトする）ので、再読み込みで二重に送りません。</li>
 <li>削除の確認のダイアログは、Invoker Commands（<code>commandfor</code>・<code>command</code> 属性）で開閉します。ボタンの属性だけで <code>&lt;dialog&gt;</code> を開けるので、スクリプトが要りません。
 Invoker Commands に対応していない少し古いブラウザでは、小さなスクリプト（<code>page.js</code>）が同じ属性を読んで、同じダイアログを開きます。</li>
