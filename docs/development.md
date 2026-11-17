@@ -33,6 +33,7 @@ pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-
 | `mise run seed -- (--local \| --remote) < <ID のファイル>` | 共有のデモを、サンプルのレシピと写真（`seed/`）の状態に戻す。ローカル（`--local`）では先に別の端末で `mise run dev` を起動しておく。本番（`--remote`）には wrangler の認証が要る。印（`mise run pin`）の付いたワークスペースにだけ入れる。ID は標準入力で渡す |
 | `mise run check-cleanup -- (--local \| --remote)` | 定期の自動削除が 3 時間以内に成功し（D1 の `cleanup_runs`）、消し終えているはずのものが D1 に残っていないかを確かめる。そうでなければ終了コード 1 で止まる（下の「失敗の通知」）。本番（`--remote`）には wrangler の認証が要る |
 | `mise run guide` | アプリの解説（`/about/`）を、`guide/` の元の文章と図から作り直す（下の「解説」）。`mise run lint` は、作り直したものが commit したものと同じかを確かめる |
+| `mise run size [-- --ref <commit>]` | アプリの規模（ファイル数と行数）を、git の commit（既定は `HEAD`）で数え、解説の元（`guide/about.md`）の「アプリの規模」の表を書き換える（下の「解説」） |
 | `mise run mwg -- (search \| list \| retrieve) ...` | Web の作り方の指針（modern-web-guidance）を引く。画面の HTML・CSS・JavaScript を書く前に使う（AGENTS.md の「スキル」）。利用統計を送らず、読むだけのサブコマンドに限る |
 | `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
 
@@ -84,6 +85,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `scripts/seed-lib.ts` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
 | `guide/` | アプリの解説（`/about/`）の元の文章（`about.md`）と図の元（`*.d2`。`_style.d2` は図に共通する設定） |
 | `scripts/guide.ts` | 解説を作るスクリプト（`mise run guide`）。印からコードを取り出す部分などは `scripts/guide-lib.ts`、単体テストは `scripts/guide-lib.test.ts` |
+| `scripts/size.ts` | アプリの規模を数えて、解説の表を書き換えるスクリプト（`mise run size`）。分類と数え方は `scripts/size-lib.ts` にあり、単体テストは `scripts/size-lib.test.ts` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
 | `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |
@@ -113,6 +115,13 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 - リポジトリのファイルへのリンクは `[文字](repo:<パス>)` と書く。公開リポジトリの main のファイルへのリンクになり、ファイルが無ければ生成が失敗する。
 - 上限などの値は、解説に書かずに、原本（docs/spec.md・docs/security.md）へのリンクにする。
 - コードや文書を変えて引用の元が変わったら、`mise run guide` で作り直して一緒に commit する。CI（`mise run lint`）は、作り直したものが commit したものと違えば失敗する。
+- 「アプリの規模」の表（`<!-- size:start ... -->` と `<!-- size:end -->` の間）は、`mise run size` が書く。手で直さない。
+  - 数え直すときは、`git fetch` の後に `mise run size -- --ref origin/main` を実行し、`mise run guide` で作り直して commit する。数え直す PR そのものも数を変えるので、作業中のブランチではなく、その時の main の commit で数え、表にその commit を書く。
+  - git で管理しているファイルの一覧と中身を、git から読む（作業中のファイルは見ない）。行数は改行の数（最後の行に改行が無ければ 1 を足す）で、バイナリ（NUL のバイトを含むか、写真などの拡張子）は行数に数えない。
+  - 分類の決まりは `scripts/size-lib.ts` の `RULES` にある。どの決まりにも当たらないファイルがあると失敗するので、ファイルを足したら、どこに数えるかを決めて足す。スキル（`.claude/skills/<名前>/`）は、AGENTS.md の「スキル」に書いた入手元で分ける。
+  - 「画面の CSS とアイコン」には `style.css` と `favicon.svg` を、「CI と設定」には Workers の静的アセットのヘッダー（`public/_headers`）を数える。「その他」は `LICENSE` と `THIRD_PARTY_NOTICES.md` だけである。
+  - Rust の本番のファイルの末尾のテストのモジュール（`#[cfg(test)]` の次の行が `mod tests {`）は、行をテストに、ファイルを本番に数える。モジュールがファイルの最後の項目でなければ失敗する。
+  - 数は commit のたびに変わるので、`mise run lint` は表が最新かを確かめない。
 
 ## CI と CD
 

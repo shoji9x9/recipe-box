@@ -412,3 +412,51 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 | ログと監視 | Workers のログ・`wrangler tail`・自動削除の結果を確かめる GitHub Actions の job・Cloudflare の Monitors | [ログ](repo:docs/security.md#ログ)・[失敗の通知](repo:docs/development.md#失敗の通知) | ワークスペースの ID をログに残さない。公開の Actions のログに、成功か失敗かと時間のほかを出さない。移した先で、定期実行の失敗と無料の範囲への接近をどう知らせるか |
 | テスト | `Backend` トレイトの偽物・スモークテスト | [API](repo:docs/spec.md#api) | 同じ API に当てるスモークテストは、`API_ONLY=1` を付けて新しいアプリにも使える |
 | 開発のツールと依存の管理 | mise・pnpm・cargo-deny・7 日の待ち | [サプライチェーン攻撃の対策](repo:docs/security.md#サプライチェーン攻撃の対策) | TypeScript の側の監査の道具 |
+
+## アプリの規模
+
+git で管理しているファイルを、1 つの commit で数えたファイルの数と行数です。行数は改行で数えた行で、空の行とコメントも数えます。写真などのバイナリは、ファイルの数にだけ数えます。
+Rust の本番のファイルの末尾にあるテストのモジュール（`#[cfg(test)] mod tests`）は、行をテストに、ファイルを本番に数えます。生成物とスキルは別枠にし、合計に入れません。
+
+<!-- size:start mise run size が書く。手で直さない -->
+commit [8b9a033](https://github.com/shoji9x9/recipe-box/commit/8b9a03382f1230d21dbcbfabeb3d9c5464bf8034)（2026-11-17）で数えました。数え直すには `mise run size -- --ref origin/main` を実行します。
+
+| 分類 | ファイル数 | 行数 |
+| --- | ---: | ---: |
+| **アプリ** | | |
+| バックエンド（Rust）の本番 | 13 | 7,070 |
+| バックエンド（Rust）のテスト | 9 | 8,753 |
+| バックエンド（JavaScript）の本番 | 2 | 130 |
+| バックエンド（JavaScript）のテスト | 1 | 146 |
+| 画面のテンプレート（HTML） | 11 | 467 |
+| 画面の JavaScript の本番 | 3 | 866 |
+| 画面の JavaScript のテスト | 3 | 1,015 |
+| 画面の CSS とアイコン | 2 | 842 |
+| DB のマイグレーション（SQL） | 8 | 127 |
+| アプリの小計 | 52 | 19,416 |
+| **開発・運用** | | |
+| スクリプトの本番 | 13 | 2,501 |
+| スクリプトのテスト | 6 | 1,025 |
+| CI と設定 | 31 | 1,544 |
+| 開発の文書 | 9 | 1,439 |
+| 解説の元 | 9 | 1,028 |
+| seed（共有のデモの元のデータ） | 78 | 653 |
+| その他 | 2 | 280 |
+| 開発・運用の小計 | 148 | 8,470 |
+| **合計** | **200** | **27,886** |
+
+別枠（合計に入れないもの）:
+
+| 分類 | ファイル数 | 行数 |
+| --- | ---: | ---: |
+| 生成物 | 11 | 5,437 |
+| pr-finalize-loop（shoji9x9/skills） | 20 | 5,980 |
+| dependabot-merge（shoji9x9/skills） | 8 | 4,190 |
+| dependabot-alert-issue（shoji9x9/skills） | 11 | 4,471 |
+| browser-test（shoji9x9/skills） | 9 | 4,212 |
+| security-audit（cloudflare/security-audit-skill） | 20 | 5,281 |
+| modern-web-guidance（GoogleChrome/modern-web-guidance） | 1 | 77 |
+| スキルの小計 | 69 | 24,211 |
+
+Claude Code のプラグイン（`rust-analyzer-lsp@claude-plugins-official`）は、コードがリポジトリに無いので数えません。
+<!-- size:end -->

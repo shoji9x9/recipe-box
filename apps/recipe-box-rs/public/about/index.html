@@ -46,6 +46,7 @@
           <li class="toc-3"><a href="#共有のデモと-seed">共有のデモと seed</a></li>
           <li class="toc-3"><a href="#ciセキュリティサプライチェーン攻撃への対策">CI・セキュリティ・サプライチェーン攻撃への対策</a></li>
           <li class="toc-2"><a href="#リライトで選ぶもの">リライトで選ぶもの</a></li>
+          <li class="toc-2"><a href="#アプリの規模">アプリの規模</a></li>
         </ol>
       </nav>
       <main>
@@ -872,6 +873,183 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 </tbody>
 </table>
 </div>
+<h2 id="アプリの規模">アプリの規模</h2>
+<p>git で管理しているファイルを、1 つの commit で数えたファイルの数と行数です。行数は改行で数えた行で、空の行とコメントも数えます。写真などのバイナリは、ファイルの数にだけ数えます。
+Rust の本番のファイルの末尾にあるテストのモジュール（<code>#[cfg(test)] mod tests</code>）は、行をテストに、ファイルを本番に数えます。生成物とスキルは別枠にし、合計に入れません。</p>
+<p>commit <a href="https://github.com/shoji9x9/recipe-box/commit/8b9a03382f1230d21dbcbfabeb3d9c5464bf8034">8b9a033</a>（2026-11-17）で数えました。数え直すには <code>mise run size -- --ref origin/main</code> を実行します。</p>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>分類</th>
+<th style="text-align:right">ファイル数</th>
+<th style="text-align:right">行数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>アプリ</strong></td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+</tr>
+<tr>
+<td>バックエンド（Rust）の本番</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">7,070</td>
+</tr>
+<tr>
+<td>バックエンド（Rust）のテスト</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">8,753</td>
+</tr>
+<tr>
+<td>バックエンド（JavaScript）の本番</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">130</td>
+</tr>
+<tr>
+<td>バックエンド（JavaScript）のテスト</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">146</td>
+</tr>
+<tr>
+<td>画面のテンプレート（HTML）</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">467</td>
+</tr>
+<tr>
+<td>画面の JavaScript の本番</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">866</td>
+</tr>
+<tr>
+<td>画面の JavaScript のテスト</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">1,015</td>
+</tr>
+<tr>
+<td>画面の CSS とアイコン</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">842</td>
+</tr>
+<tr>
+<td>DB のマイグレーション（SQL）</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">127</td>
+</tr>
+<tr>
+<td>アプリの小計</td>
+<td style="text-align:right">52</td>
+<td style="text-align:right">19,416</td>
+</tr>
+<tr>
+<td><strong>開発・運用</strong></td>
+<td style="text-align:right"></td>
+<td style="text-align:right"></td>
+</tr>
+<tr>
+<td>スクリプトの本番</td>
+<td style="text-align:right">13</td>
+<td style="text-align:right">2,501</td>
+</tr>
+<tr>
+<td>スクリプトのテスト</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">1,025</td>
+</tr>
+<tr>
+<td>CI と設定</td>
+<td style="text-align:right">31</td>
+<td style="text-align:right">1,544</td>
+</tr>
+<tr>
+<td>開発の文書</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">1,439</td>
+</tr>
+<tr>
+<td>解説の元</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">1,028</td>
+</tr>
+<tr>
+<td>seed（共有のデモの元のデータ）</td>
+<td style="text-align:right">78</td>
+<td style="text-align:right">653</td>
+</tr>
+<tr>
+<td>その他</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">280</td>
+</tr>
+<tr>
+<td>開発・運用の小計</td>
+<td style="text-align:right">148</td>
+<td style="text-align:right">8,470</td>
+</tr>
+<tr>
+<td><strong>合計</strong></td>
+<td style="text-align:right"><strong>200</strong></td>
+<td style="text-align:right"><strong>27,886</strong></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>別枠（合計に入れないもの）:</p>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>分類</th>
+<th style="text-align:right">ファイル数</th>
+<th style="text-align:right">行数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>生成物</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">5,437</td>
+</tr>
+<tr>
+<td>pr-finalize-loop（shoji9x9/skills）</td>
+<td style="text-align:right">20</td>
+<td style="text-align:right">5,980</td>
+</tr>
+<tr>
+<td>dependabot-merge（shoji9x9/skills）</td>
+<td style="text-align:right">8</td>
+<td style="text-align:right">4,190</td>
+</tr>
+<tr>
+<td>dependabot-alert-issue（shoji9x9/skills）</td>
+<td style="text-align:right">11</td>
+<td style="text-align:right">4,471</td>
+</tr>
+<tr>
+<td>browser-test（shoji9x9/skills）</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">4,212</td>
+</tr>
+<tr>
+<td>security-audit（cloudflare/security-audit-skill）</td>
+<td style="text-align:right">20</td>
+<td style="text-align:right">5,281</td>
+</tr>
+<tr>
+<td>modern-web-guidance（GoogleChrome/modern-web-guidance）</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">77</td>
+</tr>
+<tr>
+<td>スキルの小計</td>
+<td style="text-align:right">69</td>
+<td style="text-align:right">24,211</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Claude Code のプラグイン（<code>rust-analyzer-lsp@claude-plugins-official</code>）は、コードがリポジトリに無いので数えません。</p>
         </article>
       </main>
     </div>
