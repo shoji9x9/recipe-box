@@ -234,6 +234,14 @@ impl Layout {
         }
     }
 
+    /// 覚えていたワークスペースが無くなったことの知らせだけを出す（書き込みを断った画面）。デモの帯は出さない。
+    fn gone_only() -> Self {
+        Self {
+            gone: Some(Flash::WorkspaceGone.message()),
+            ..Self::default()
+        }
+    }
+
     fn with_alert(mut self, alert: &'static str) -> Self {
         self.alert = Some(alert);
         self
@@ -268,10 +276,7 @@ impl IntoResponse for ScreenError {
             Self::WorkspaceGone => render(
                 StatusCode::NOT_FOUND,
                 &ErrorPage {
-                    layout: Layout {
-                        gone: Some(Flash::WorkspaceGone.message()),
-                        ..Layout::default()
-                    },
+                    layout: Layout::gone_only(),
                     edit_href: None,
                 },
             ),
@@ -449,6 +454,8 @@ struct FormPage {
     /// 誤りの一覧にフォーカスを移すか（送信したときだけ。欄から離れたときに移すと、入力の邪魔になる）。
     focus_summary: bool,
     photo_area: PhotoArea,
+    /// 自分のワークスペースに出したフォームか（[`RecipeForm::workspace`] を隠した欄で送る）。
+    for_own: bool,
 }
 
 /// フォームを確かめた段階。
@@ -855,9 +862,30 @@ pub struct RecipeForm {
     ingredients: String,
     #[serde(default)]
     steps: String,
+    /// フォームを出したときに使っていたワークスペース。自分のワークスペースなら `own`（共有のデモなら空）。
+    /// 送られたときに自分のワークスペースが無くなっていれば、デモに書かずに断る（[`form_if_gone`]）。
+    /// Cookie は、ほかのタブの画面などが先に消していることがあり、それだけでは分からないため。
+    #[serde(default)]
+    workspace: String,
 }
 
+/// [`RecipeForm::workspace`] で、自分のワークスペースに出したフォームを示す値。
+const FORM_FOR_OWN: &str = "own";
+
 impl RecipeForm {
+    /// 自分のワークスペースに出したフォームか。
+    fn for_own(&self) -> bool {
+        self.workspace == FORM_FOR_OWN
+    }
+
+    /// `viewer` に出す、空のフォーム。
+    fn empty_for(viewer: &Viewer) -> Self {
+        Self {
+            workspace: workspace_of(viewer),
+            ..Self::default()
+        }
+    }
+
     /// API の本文と同じ形にする。
     ///
     /// - ブラウザは textarea の改行を CRLF で送るので、API と同じ LF にそろえる（長さの数え方もそろう）。
@@ -927,6 +955,7 @@ fn form_page(
         revalidate: validation != Validation::NotSubmitted,
         focus_summary: validation == Validation::Submitted,
         photo_area,
+        for_own: form.for_own(),
     }
 }
 
@@ -1050,9 +1079,23 @@ async fn form_with_alert<B: Backend>(
     render(status, &page)
 }
 
-/// 覚えていたワークスペースが無くなっていれば（[`refuse_write_if_gone`]）、保存せずに、入力を保ったフォームを出し直す（`404`）。
+/// [`RecipeForm::workspace`] に入れる値。
+fn workspace_of(viewer: &Viewer) -> String {
+    match viewer {
+        Viewer::Own(_) => FORM_FOR_OWN.to_owned(),
+        Viewer::Demo { .. } => String::new(),
+    }
+}
+
+/// 覚えていたワークスペースが無くなっていれば、保存せずに、入力を保ったフォームを出し直す（`404`）。
+///
+/// 無くなったと分かるのは、Cookie の ID のワークスペースが無い（[`Session::own_gone`]）か、
+/// 自分のワークスペースに出したフォーム（[`RecipeForm::for_own`]）なのに、自分のワークスペースが無いときである。
+/// 後者は、ほかのタブの画面が先に Cookie を消した後や、断った後に送り直したときにも、デモに書かないため。
+/// 出し直すフォームも自分のワークスペースのものとして出すので、送り直しても、また断る。
+///
 /// 知らせは見出しの下に出す（[`Layout::gone`]）。書き込みの回数の制限（`429`）と同じく、書きかけの入力（最大 7,100 文字）を消さないため。
-/// 回数の制限に当たっていれば、そちらを先に答える（[`save`]）。
+/// 回数の制限に当たっていれば、そちらを先に答える（[`save`]。出し直すフォームは、同じく自分のワークスペースのものなので、次に送ったときに断る）。
 /// 使うワークスペースが無いので、デモの帯と写真の欄は出さない。
 fn form_if_gone(
     session: &Session,
@@ -1060,11 +1103,12 @@ fn form_if_gone(
     form: &RecipeForm,
     limited: bool,
 ) -> Option<Response> {
-    if limited || refuse_write_if_gone(session).is_ok() {
+    let gone = session.own_gone || (form.for_own() && session.own.is_none());
+    if limited || !gone {
         return None;
     }
     let page = form_page(
-        Layout::new(None, session),
+        Layout::gone_only(),
         kind,
         form,
         Vec::new(),
@@ -1130,7 +1174,7 @@ pub async fn new_form<B: Backend>(
     let page = form_page(
         Layout::new(Some(&viewer), &session),
         &FormKind::New,
-        &RecipeForm::default(),
+        &RecipeForm::empty_for(&viewer),
         Vec::new(),
         Validation::NotSubmitted,
         new_photo_area(&viewer),
@@ -1262,6 +1306,7 @@ async fn edit_page<B: Backend>(
         name: recipe.name,
         ingredients: recipe.ingredients,
         steps: recipe.steps,
+        workspace: workspace_of(viewer),
     };
     let page = form_page(
         layout,

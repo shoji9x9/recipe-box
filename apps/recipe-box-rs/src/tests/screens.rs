@@ -2791,6 +2791,15 @@ async fn writes_to_the_demo_are_kept_for_those_who_chose_the_demo() {
     let visiting = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A));
     let response = screen_post(&backend, "/recipes", Some(&visiting), "name=x&servings=1").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    // 移動の応答なので、無くなったことの知らせを次の画面に回す。ハンドラーの知らせ（登録しました）は置き換え、2 つ並べない。
+    let flashes: Vec<String> = set_cookies(&response)
+        .into_iter()
+        .filter(|cookie| cookie.starts_with("__Host-flash="))
+        .collect();
+    assert_eq!(
+        flashes,
+        ["__Host-flash=workspace-gone; Path=/; Max-Age=60; Secure; HttpOnly; SameSite=Lax"]
+    );
     // Cookie の無い人も、これまでどおりデモに書き込む。
     let response = screen_post(&backend, "/recipes", None, "name=y&servings=1").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
@@ -2821,4 +2830,53 @@ async fn vanished_workspace_keeps_the_form_without_a_demo_and_answers_the_write_
         assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS, "{target}");
     }
     assert_eq!(limited.recipes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn forms_for_own_workspace_are_refused_after_the_cookie_is_gone() {
+    let (backend, path, _) = backend_with_demo_recipe().await;
+    backend.add_workspace(WORKSPACE_A, NOW);
+    let a = cookie(WORKSPACE_A);
+    let hidden = r#"<input type="hidden" name="workspace" value="own">"#;
+    // 自分のワークスペースに出したフォームには印を付け、デモのフォームには付けない。
+    let own_path = create_recipe(&backend, WORKSPACE_A, "私の").await;
+    for target in ["/recipes/new".to_owned(), format!("{own_path}/edit")] {
+        let response = screen_get(&backend, &target, Some(&a)).await;
+        assert!(response.body.contains(hidden), "{target}");
+    }
+    let response = screen_get(&backend, "/recipes/new", None).await;
+    assert!(!response.body.contains(hidden));
+
+    // ほかのタブの画面が先に Cookie を消していた（Cookie が無い）。自分のフォームから送っても、デモに書かない。
+    let form = "name=%E7%A7%81%E3%81%AE%E3%82%AB%E3%83%AC%E3%83%BC&servings=3&workspace=own";
+    for target in ["/recipes", path.as_str()] {
+        let response = screen_post(&backend, target, None, form).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{target}");
+        assert!(response.body.contains(&gone_alert()), "{}", response.body);
+        assert!(response.body.contains("私のカレー"));
+        // 出し直すフォームにも印を付けるので、送り直しても、また断る。
+        assert!(response.body.contains(hidden));
+    }
+    // 回数の制限で出し直したフォームにも印が残り、制限が解けた後に送り直しても、デモに書かない。
+    let limited = FakeBackend {
+        write_limited: true,
+        ..backend.clone()
+    };
+    let response = screen_post(&limited, "/recipes", Some(&cookie(WORKSPACE_B)), form).await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(response.body.contains(hidden), "{}", response.body);
+    let demo_recipes = |backend: &FakeBackend| {
+        backend
+            .recipes
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|recipe| recipe.name != "私の")
+            .count()
+    };
+    assert_eq!(demo_recipes(&backend), 1);
+    // 印の無いフォーム（デモに出したフォーム）は、これまでどおりデモに書き込む。
+    let response = screen_post(&backend, "/recipes", None, "name=x&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(demo_recipes(&backend), 2);
 }
