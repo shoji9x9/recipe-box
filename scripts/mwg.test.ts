@@ -107,7 +107,10 @@ describe("check-mwg-version.sh", () => {
   });
 
   test("SKILL.md が CRLF で、版のファイルに改行が付いていても、そろっていれば通る", () => {
-    const result = check(skillWith("2026_10_30-58d055df").replace("\n", "\r\n"), "2026_10_30-58d055df\n");
+    // 版の行の前後にも行を置き、すべての行を CRLF にする（本物の SKILL.md と同じく、版の行の後にも行が続く形）。
+    const skill = `---\nname: modern-web-guidance\n---\n${skillWith("2026_10_30-58d055df")}after\n`.replaceAll("\n", "\r\n");
+    // 末尾の LF だけなら $(...) が取り除くので、CR も付けて、版のファイルの空白を除く処理を確かめる。
+    const result = check(skill, "2026_10_30-58d055df\r\n");
     assert.equal(result.status, 0, result.stderr);
   });
 
