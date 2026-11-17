@@ -2644,13 +2644,24 @@ async fn auto_deletion_is_told_where_workspaces_are_made_and_used() {
     assert!(response.body.contains(note), "{}", response.body);
     let response = screen_get(&backend, "/", None).await;
     assert!(!response.body.contains(note));
-    // デモの帯に、元に戻る時刻を書く。
+    // デモの帯に、元に戻る時刻を書く。文のまとまりごとに p を分ける（docs/design.md）。
     assert!(response.body.contains("毎日 4 時（日本時間）に元に戻り"));
+    assert!(
+        response
+            .body
+            .contains("書かないでください。</p>\n        <p>デモは毎日 4 時（日本時間）に元に戻り"),
+        "{}",
+        response.body
+    );
 
     // ワークスペースの画面: ID の欄の説明と、切り替えると今の ID を忘れること。
     let response = screen_get(&backend, "/workspace", Some(&a)).await;
     assert!(response.body.contains(
-        r#"<input id="current-id" value="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" readonly autocomplete="off" aria-describedby="current-id-hint">"#
+        r#"<input id="current-id" class="workspace-id" value="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" readonly autocomplete="off" aria-describedby="current-id-hint">"#
+    ), "{}", response.body);
+    // ID の欄の下の 14 日の文は、補足の見た目にする（docs/design.md）。
+    assert!(response.body.contains(
+        r#"<p class="note">14 日アクセスが無いと、レシピと写真ごと自動で消えます（どの端末からのアクセスでも数えます）。</p>"#
     ), "{}", response.body);
     assert!(
         response
