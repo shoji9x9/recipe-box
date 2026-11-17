@@ -10,6 +10,7 @@ import {
   expandDirectives,
   extractSnippet,
   GuideError,
+  assertNoStyleAttributes,
   REPOSITORY_BLOB,
   renderMarkdown,
   renderPage,
@@ -198,6 +199,25 @@ describe("renderMarkdown", () => {
   const exists = (path: string) => path === "docs/spec.md" || path === "src/a.rs";
   const read = () => "# 仕様\n\n## 画面\n\n### 写真の API\n\n```\n## コードの中\n```";
 
+  test("表の列の揃えを、style 属性ではなくクラスで出す（CSP がインラインのスタイルを禁じるため）", () => {
+    const { html } = renderMarkdown("# 題\n\n| 名前 | 中 | 数 |\n| :--- | :---: | ---: |\n| a | b | 1 |\n", exists, read);
+    expect(html).toContain('<th class="align-left">名前</th>');
+    expect(html).toContain('<th class="align-center">中</th>');
+    expect(html).toContain('<td class="align-right">1</td>');
+    expect(html).not.toContain("style=");
+  });
+
+  test("揃えは、: の後の空白と末尾の ; があっても置き換える", () => {
+    const { html } = renderMarkdown("# 題\n\n| 数 |\n| ---: |\n| 1 |\n", exists, read);
+    expect(html).toContain('<td class="align-right">1</td>');
+  });
+
+  test("コードの中やリンクの title の style= の文字は、属性ではないので失敗させない", () => {
+    const { html } = renderMarkdown('# 題\n\n```html\n<p style="x">a</p>\n```\n\n[a](https://example.com "inline style=禁止")\n', exists, read);
+    expect(html).toContain("&lt;p style=");
+    expect(html).toContain('title="inline style=禁止"');
+  });
+
   test("題を取り出し、見出しに ID を付けて目次を返す", () => {
     const result = renderMarkdown("# 題\n\n## 一\n\n### 二\n\n#### 三\n\n## 一", exists, read);
     expect(result.title).toBe("題");
@@ -278,5 +298,19 @@ describe("renderPage", () => {
     expect(html).toContain("<title>A &#38; B - recipe-box</title>");
     expect(html).toContain('<a href="#x">&#60;見出し&#62;</a>');
     expect(html).not.toMatch(/<script|style=|<style/);
+  });
+});
+
+describe("assertNoStyleAttributes", () => {
+  test("style 属性が残っていれば、子の token でも失敗させる", () => {
+    const style: [string, string][] = [["style", "color:red"]];
+    expect(() => assertNoStyleAttributes([{ tag: "td", attrs: style, children: null }])).toThrow(GuideError);
+    expect(() =>
+      assertNoStyleAttributes([{ tag: "p", attrs: null, children: [{ tag: "span", attrs: style, children: null }] }]),
+    ).toThrow(/<span> に style 属性/);
+  });
+
+  test("ほかの属性は通す", () => {
+    expect(() => assertNoStyleAttributes([{ tag: "a", attrs: [["title", "style=x"]], children: null }])).not.toThrow();
   });
 });

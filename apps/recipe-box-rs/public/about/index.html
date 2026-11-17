@@ -46,6 +46,7 @@
           <li class="toc-3"><a href="#共有のデモと-seed">共有のデモと seed</a></li>
           <li class="toc-3"><a href="#ciセキュリティサプライチェーン攻撃への対策">CI・セキュリティ・サプライチェーン攻撃への対策</a></li>
           <li class="toc-2"><a href="#リライトで選ぶもの">リライトで選ぶもの</a></li>
+          <li class="toc-2"><a href="#アプリの規模">アプリの規模</a></li>
         </ol>
       </nav>
       <main>
@@ -874,6 +875,174 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 </tbody>
 </table>
 </div>
+<h2 id="アプリの規模">アプリの規模</h2>
+<p>git で管理しているファイルを、1 つの commit で数えたファイルの数と行数です。行数は改行で数えた行で、空の行とコメントも数えます。写真などのバイナリは、ファイルの数にだけ数えます。
+Rust の本番のファイルの末尾にあるテストのモジュール（<code>#[cfg(test)] mod tests</code>）は、行をテストに、ファイルを本番に数えます。生成物とスキルは別枠にし、合計に入れません。</p>
+<p>commit <a href="https://github.com/shoji9x9/recipe-box/commit/bbe337a335d6fadd9f1f75baf42e05bd10b40698">bbe337a</a>（2026-11-17）で数えました。数え直すには <code>git fetch</code> の後に <code>mise run size</code> を実行します。</p>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>区分</th>
+<th>分類</th>
+<th class="align-right">ファイル数</th>
+<th class="align-right">行数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>アプリ</strong></td>
+<td>バックエンド（Rust）の本番</td>
+<td class="align-right">13</td>
+<td class="align-right">7,070</td>
+</tr>
+<tr>
+<td></td>
+<td>バックエンド（Rust）のテスト</td>
+<td class="align-right">9</td>
+<td class="align-right">8,762</td>
+</tr>
+<tr>
+<td></td>
+<td>バックエンド（JavaScript）の本番</td>
+<td class="align-right">2</td>
+<td class="align-right">130</td>
+</tr>
+<tr>
+<td></td>
+<td>バックエンド（JavaScript）のテスト</td>
+<td class="align-right">1</td>
+<td class="align-right">146</td>
+</tr>
+<tr>
+<td></td>
+<td>画面のテンプレート（HTML）</td>
+<td class="align-right">11</td>
+<td class="align-right">471</td>
+</tr>
+<tr>
+<td></td>
+<td>画面の JavaScript の本番</td>
+<td class="align-right">3</td>
+<td class="align-right">866</td>
+</tr>
+<tr>
+<td></td>
+<td>画面の JavaScript のテスト</td>
+<td class="align-right">3</td>
+<td class="align-right">1,015</td>
+</tr>
+<tr>
+<td></td>
+<td>画面の CSS とアイコン</td>
+<td class="align-right">2</td>
+<td class="align-right">842</td>
+</tr>
+<tr>
+<td></td>
+<td>DB のマイグレーション（SQL）</td>
+<td class="align-right">8</td>
+<td class="align-right">127</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>アプリの小計</strong></td>
+<td class="align-right"><strong>52</strong></td>
+<td class="align-right"><strong>19,429</strong></td>
+</tr>
+<tr>
+<td><strong>開発・運用</strong></td>
+<td>スクリプト（TypeScript）の本番</td>
+<td class="align-right">11</td>
+<td class="align-right">2,450</td>
+</tr>
+<tr>
+<td></td>
+<td>スクリプト（TypeScript）のテスト</td>
+<td class="align-right">6</td>
+<td class="align-right">1,025</td>
+</tr>
+<tr>
+<td></td>
+<td>スクリプト（シェル）</td>
+<td class="align-right">2</td>
+<td class="align-right">51</td>
+</tr>
+<tr>
+<td></td>
+<td>CI と設定</td>
+<td class="align-right">31</td>
+<td class="align-right">1,544</td>
+</tr>
+<tr>
+<td></td>
+<td>開発の文書</td>
+<td class="align-right">9</td>
+<td class="align-right">1,441</td>
+</tr>
+<tr>
+<td></td>
+<td>解説の元</td>
+<td class="align-right">9</td>
+<td class="align-right">1,030</td>
+</tr>
+<tr>
+<td></td>
+<td>seed（共有のデモの元のデータ。JSON・写真・出典）</td>
+<td class="align-right">78</td>
+<td class="align-right">653</td>
+</tr>
+<tr>
+<td></td>
+<td>その他</td>
+<td class="align-right">2</td>
+<td class="align-right">280</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>開発・運用の小計</strong></td>
+<td class="align-right"><strong>148</strong></td>
+<td class="align-right"><strong>8,474</strong></td>
+</tr>
+<tr>
+<td></td>
+<td><strong>合計</strong></td>
+<td class="align-right"><strong>200</strong></td>
+<td class="align-right"><strong>27,903</strong></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>別枠（合計に入れないもの）:</p>
+<div class="scroll" tabindex="0" role="region" aria-label="表（横に動かせる）">
+<table>
+<thead>
+<tr>
+<th>分類</th>
+<th class="align-right">ファイル数</th>
+<th class="align-right">行数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>生成物</td>
+<td class="align-right">11</td>
+<td class="align-right">5,439</td>
+</tr>
+<tr>
+<td>スキル（.claude/skills/ の 6 つ）</td>
+<td class="align-right">69</td>
+<td class="align-right">24,211</td>
+</tr>
+<tr>
+<td><strong>別枠の合計</strong></td>
+<td class="align-right"><strong>80</strong></td>
+<td class="align-right"><strong>29,650</strong></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Claude Code のプラグイン（<code>rust-analyzer-lsp@claude-plugins-official</code>）は、コードがリポジトリに無いので数えません。</p>
         </article>
       </main>
     </div>

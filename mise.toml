@@ -64,7 +64,7 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、JavaScript の単体テスト（画面と Worker の JavaScript と、seed・pin・自動削除の確かめ（check-cleanup）・解説（guide）・modern-web-guidance のスクリプト）を実行する"
+description = "Rust のテストと、JavaScript の単体テスト（画面と Worker の JavaScript と、seed・pin・自動削除の確かめ（check-cleanup）・解説（guide）・アプリの規模（size）・modern-web-guidance のスクリプト）を実行する"
 run = [
   "cargo test --workspace --locked",
   # 画面（apps/*/js-tests/）と Worker（apps/*/js-tests/worker/）とスクリプト（scripts/*.test.ts）。vitest.config.ts。
@@ -103,6 +103,11 @@ run = "node scripts/check-cleanup.ts"
 [tasks.guide]
 description = "アプリの解説（/about）を、guide/ の元の文章と図から作り直す"
 run = "node scripts/guide.ts"
+
+[tasks.size]
+description = "アプリの規模（ファイル数と行数）を commit で数え、解説の元（guide/about.md）の表を書き換える（例: mise run size -- --ref origin/main）"
+# 数は commit のたびに変わるので、mise run lint は確かめない（docs/development.md の「解説（/about）」）。
+run = "node scripts/size.ts"
 
 [tasks.seed]
 description = "共有のデモを、サンプルのレシピと写真の状態に戻す（ID は標準入力で渡す。例: mise run seed -- --remote < <ID のファイル>）"

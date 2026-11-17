@@ -33,6 +33,7 @@ pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-
 | `mise run seed -- (--local \| --remote) < <ID のファイル>` | 共有のデモを、サンプルのレシピと写真（`seed/`）の状態に戻す。ローカル（`--local`）では先に別の端末で `mise run dev` を起動しておく。本番（`--remote`）には wrangler の認証が要る。印（`mise run pin`）の付いたワークスペースにだけ入れる。ID は標準入力で渡す |
 | `mise run check-cleanup -- (--local \| --remote)` | 定期の自動削除が 3 時間以内に成功し（D1 の `cleanup_runs`）、消し終えているはずのものが D1 に残っていないかを確かめる。そうでなければ終了コード 1 で止まる（下の「失敗の通知」）。本番（`--remote`）には wrangler の認証が要る |
 | `mise run guide` | アプリの解説（`/about/`）を、`guide/` の元の文章と図から作り直す（下の「解説」）。`mise run lint` は、作り直したものが commit したものと同じかを確かめる |
+| `mise run size [-- --ref <commit>]` | アプリの規模（ファイル数と行数）を、git の commit（既定は `origin/main`）で数え、解説の元（`guide/about.md`）の「アプリの規模」の表を書き換える（下の「解説」） |
 | `mise run mwg -- (search \| list \| retrieve) ...` | Web の作り方の指針（modern-web-guidance）を引く。画面の HTML・CSS・JavaScript を書く前に使う（AGENTS.md の「スキル」）。利用統計を送らず、読むだけのサブコマンドに限る |
 | `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
 
@@ -84,6 +85,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `scripts/seed-lib.ts` | seed のうち、伏せ字とレシピの検証など外部に触れない部分。単体テストは `scripts/seed-lib.test.ts` |
 | `guide/` | アプリの解説（`/about/`）の元の文章（`about.md`）と図の元（`*.d2`。`_style.d2` は図に共通する設定） |
 | `scripts/guide.ts` | 解説を作るスクリプト（`mise run guide`）。印からコードを取り出す部分などは `scripts/guide-lib.ts`、単体テストは `scripts/guide-lib.test.ts` |
+| `scripts/size.ts` | アプリの規模を数えて、解説の表を書き換えるスクリプト（`mise run size`）。分類と数え方は `scripts/size-lib.ts` にあり、単体テストは `scripts/size-lib.test.ts` |
 | `seed/` | デモのサンプルのレシピ（`recipes.json`）と写真（`photos/`。出典と許諾は `photos/SOURCES.md`） |
 | `scripts/mwg.sh` | Web の作り方の指針（modern-web-guidance）を、固定した版で、利用統計を送らずに、読むだけのサブコマンドで引く（`mise run mwg`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |
@@ -110,9 +112,19 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
   - フロー図では、楕円を始まりと終わり、ひし形を分かれ道（「〜か？」の問いの形で書く）、四角を処理にする。断る（失敗の）流れは必ずひし形から出し、赤の破線（`reject`）で描く。処理の中で決まる失敗は、処理の後に「うまくいったか？」のひし形を置いて、そこから出す（処理の前の確かめに移さない。コードの順と食い違うため）。
   - 線の交差を最も避け、次に曲がりを減らす。直線で結べるものは直線にする。交差が残るときは、`direction`・要素と線を書く順・線の結び先（枠か、中の要素か）を変えて試す。
   - 作った SVG は、ブラウザで開いて目で確かめる（`mise run dev` の後に `http://localhost:8787/assets/guide/<名前>.svg`）。
+- 表の列の揃え（`:---:`・`---:`）は、生成のときに `align-center`・`align-right` のクラス（`guide.css`）に置き換える。markdown-it は揃えを `style` 属性で出すが、/about の CSP（`style-src 'self'`）がインラインのスタイルを禁じていて効かないため。ほかに `style` 属性が残れば、生成が失敗する。
 - リポジトリのファイルへのリンクは `[文字](repo:<パス>)` と書く。公開リポジトリの main のファイルへのリンクになり、ファイルが無ければ生成が失敗する。
 - 上限などの値は、解説に書かずに、原本（docs/spec.md・docs/security.md）へのリンクにする。
 - コードや文書を変えて引用の元が変わったら、`mise run guide` で作り直して一緒に commit する。CI（`mise run lint`）は、作り直したものが commit したものと違えば失敗する。
+- 「アプリの規模」の表（`<!-- size:start ... -->` と `<!-- size:end -->` の間）は、`mise run size` が書く。手で直さない。
+  - 数え直すときは、`git fetch` の後に `mise run size`（既定で `origin/main` を数える）を実行し、`mise run guide` で作り直して commit する。数え直す PR そのものも数を変えるので、作業中のブランチではなく、その時の main の commit で数え、表にその commit を書く。
+  - git で管理しているファイルの一覧と中身を、git から読む（作業中のファイルは見ない）。行数は改行の数（最後の行に改行が無ければ 1 を足す）で、バイナリ（NUL のバイトを含むか、写真などの拡張子）は行数に数えない。
+  - 分類の決まりは `scripts/size-lib.ts` の `RULES` にある。どの決まりにも当たらないファイルがあると失敗するので、ファイルを足したら、どこに数えるかを決めて足す。スキル（`.claude/skills/<名前>/`）は、別枠の 1 行にまとめ、スキルの数（ディレクトリの数）を書く。
+  - 「画面の CSS とアイコン」には `style.css` と `favicon.svg` を、「CI と設定」には Workers の静的アセットのヘッダー（`public/_headers`）を数える。「その他」は `LICENSE` と `THIRD_PARTY_NOTICES.md` だけである。スクリプトは、言語で TypeScript（`scripts/**/*.ts`。`*.test.ts` はテスト）とシェル（`scripts/**/*.sh`）に分け、`scripts/tsconfig.json` は「CI と設定」に数える。`scripts/` のそのほかのファイルは分類できないとして失敗する。
+  - Rust の本番のファイルの末尾のテストのモジュール（`#[cfg(test)]` の次の行が `mod tests {`）は、行をテストに、ファイルを本番に数える。モジュールがファイルの最後の項目でなければ失敗する。
+    別のファイルのテストのモジュールの宣言（`#[cfg(test)]` の次の行が `mod tests;`）は、その 2 行をテストに数える（ファイルの途中にあってよい）。
+    行の頭の `#[cfg(...test...)]` の後にモジュールが続くのに、この 2 つの書き方でなければ、本番に数えずに失敗する。
+  - 数は commit のたびに変わるので、`mise run lint` は表が最新かを確かめない。
 
 ## CI と CD
 
@@ -352,6 +364,7 @@ GitHub は、公開リポジトリで 60 日活動が無いと、schedule で動
 | `docs/security.md` の費用の表の「2026-11 時点」（`guide/about.md` にもある） | 料金と無料の範囲は変わる。公式の文書で確かめ直したら、値と時点を直す |
 | mise の Rust・Node の版と、`worker-build`・`worker`（`=0.8.7`）の固定 | `outdated.yml` の Issue と Dependabot で上げる。`worker-build`（`mise.toml`）と `worker`（`apps/recipe-box-rs/Cargo.toml`）は同じ版にそろえて一緒に上げる |
 | CI の `runs-on: ubuntu-latest` | 指す Ubuntu の版は GitHub が変える。CI が急に落ちたら、まずランナーの版の変化を疑う |
+| 解説の「アプリの規模」の表 | commit のたびに数が変わるが、lint では確かめない。大きな機能を足したときや、利用者に求められたときに、`mise run size` と `mise run guide` で数え直す（上の「解説（/about）」） |
 | Cloudflare の Monitors（上の「失敗の通知」） | 設定が消えていないかを毎月見る（上の「毎月」）。beta が終わって dataset や列の名前が変われば、SQL を直し、この文書も直す |
 
 ## 使うのをやめるとき
