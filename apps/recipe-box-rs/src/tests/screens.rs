@@ -2933,24 +2933,6 @@ async fn own_forms_sent_while_visiting_the_demo_are_saved_to_own_workspace() {
         assert!(!response.body.contains("demo-banner"));
     }
 
-    // 入力の誤りは、自分のワークスペースのフォームとして出し直す（印を保ち、デモの帯は出さない）。何も書かない。
-    let count = backend.recipes.lock().unwrap().len();
-    let response = screen_post(
-        &backend,
-        "/recipes",
-        Some(&visiting),
-        "name=&servings=2&workspace=own",
-    )
-    .await;
-    assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    assert!(
-        response
-            .body
-            .contains(r#"<input type="hidden" name="workspace" value="own">"#)
-    );
-    assert!(!response.body.contains("demo-banner"));
-    assert_eq!(backend.recipes.lock().unwrap().len(), count);
-
     // 印の無いフォーム（デモに出したもの）は、これまでどおりデモに書き、デモの表示も続ける。
     let response = screen_post(
         &backend,
@@ -2974,4 +2956,70 @@ async fn own_forms_sent_while_visiting_the_demo_are_saved_to_own_workspace() {
     .await;
     assert_eq!(response.status, StatusCode::NOT_FOUND);
     assert!(response.body.contains(&gone_alert()));
+}
+
+#[tokio::test]
+async fn own_forms_sent_while_visiting_the_demo_are_shown_again_as_own_forms() {
+    let (backend, _, _) = backend_with_demo_recipe().await;
+    backend.add_workspace(WORKSPACE_A, NOW);
+    let own_path = create_recipe(&backend, WORKSPACE_A, "私の").await;
+    let visiting = format!("{}; __Host-demo-view=1", cookie(WORKSPACE_A));
+    // 入力の誤りは、自分のワークスペースのフォームとして出し直す（印を保ち、デモの帯は出さない）。何も書かない。
+    let count = backend.recipes.lock().unwrap().len();
+    let response = screen_post(
+        &backend,
+        "/recipes",
+        Some(&visiting),
+        "name=&servings=2&workspace=own",
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains(r#"<input type="hidden" name="workspace" value="own">"#)
+    );
+    assert!(!response.body.contains("demo-banner"));
+    assert_eq!(backend.recipes.lock().unwrap().len(), count);
+    // 出し直したフォームのリンクと写真の欄は自分のワークスペースのものなので、デモの表示を終え、そのことを知らせる。
+    // 編集のフォームも同じで、写真の欄は自分のレシピのものを出す。
+    for target in ["/recipes", own_path.as_str()] {
+        let response = screen_post(
+            &backend,
+            target,
+            Some(&visiting),
+            "name=&servings=2&workspace=own",
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{target}");
+        assert!(
+            response
+                .body
+                .contains("<p class=\"message success\">自分のレシピ帳に戻りました</p>"),
+            "{}",
+            response.body
+        );
+        assert!(
+            set_cookie_named(&response, "__Host-demo-view")
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    }
+    let response = screen_post(
+        &backend,
+        &own_path,
+        Some(&visiting),
+        "name=&servings=2&workspace=own",
+    )
+    .await;
+    assert!(
+        response
+            .body
+            .contains(&format!(r#"action="{own_path}/photos""#)),
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains(&format!(r#"href="{own_path}""#)));
+    assert_eq!(backend.recipes.lock().unwrap().len(), count);
 }

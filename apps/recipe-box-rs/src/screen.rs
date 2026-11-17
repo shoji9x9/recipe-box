@@ -91,7 +91,7 @@ enum Flash {
     WorkspaceDeleted,
     PhotoAdded,
     PhotoDeleted,
-    /// 一時的にデモを見ている間に、自分のワークスペースに出したフォームから登録・保存した（[`form_viewer`]）。
+    /// 一時的にデモを見ている間に、自分のワークスペースに出したフォームから登録・保存した（[`save_form`]）。
     RecipeCreatedToOwn,
     RecipeSavedToOwn,
     /// Cookie の ID のワークスペースが無くなっていた（自動削除など）。
@@ -1092,22 +1092,49 @@ async fn form_with_alert<B: Backend>(
     render(status, &page)
 }
 
-/// 登録・更新のフォームを保存するワークスペースを決める。2 つ目は、一時的に見ていたデモの表示を終えるか。
+/// 登録・更新のフォームを、使うワークスペースに保存する。
 ///
-/// 自分のワークスペースに出したフォーム（[`RecipeForm::for_own`]）が、一時的にデモを見ている間に送られたら
-/// （デモに切り替える前に開いたタブなど）、デモではなく自分のワークスペースに保存する。
-/// 自分のレシピ帳に書くつもりの入力を、誰でも見られるデモに入れないため。
-/// 自分のワークスペースが無いときは、その前に [`form_if_gone`] が断っている。印の無いフォーム（デモに出したもの）は、これまでどおり。
-async fn form_viewer<B: Backend>(
+/// 1. 覚えていたワークスペースが無くなっていれば、デモに書かずに断る（[`form_if_gone`]）。
+/// 2. 自分のワークスペースに出したフォーム（[`RecipeForm::for_own`]）が、一時的にデモを見ている間に送られたら
+///    （デモに切り替える前に開いたタブなど）、デモではなく自分のワークスペースに保存し、デモの表示を終える。
+///    自分のレシピ帳に書くつもりの入力を、誰でも見られるデモに入れないため。
+///    出し直したフォームのリンクや写真の欄も自分のワークスペースのものなので、保存できずに出し直すときも、デモの表示を終える。
+///    保存できたら、どこに保存したかを知らせ（[`Flash::RecipeCreatedToOwn`] など）、出し直すときは、自分のレシピ帳に戻ったことを知らせる。
+/// 3. ほか（印の無いフォーム。デモに出したもの）は、これまでどおり、使うワークスペース（[`resolve`]）に保存する。
+async fn save_form<B: Backend>(
     backend: &B,
     session: &Session,
+    kind: FormKind,
     form: &RecipeForm,
-) -> Result<(Viewer, bool), ScreenError> {
-    let viewer = require_viewer(backend, session).await?;
-    match (&viewer, &session.own) {
-        (Viewer::Demo { .. }, Some(own)) if form.for_own() => Ok((Viewer::Own(own.clone()), true)),
-        _ => Ok((viewer, false)),
+    limited: bool,
+) -> Result<Response, ScreenError> {
+    if let Some(response) = form_if_gone(session, &kind, form, limited) {
+        return Ok(response);
     }
+    let own_from_demo = session
+        .own
+        .clone()
+        .filter(|_| session.viewing_demo && form.for_own());
+    let Some(own) = own_from_demo else {
+        let viewer = require_viewer(backend, session).await?;
+        return save(backend, session, &viewer, kind, form, limited).await;
+    };
+    let session = Session {
+        viewing_demo: false,
+        flash: Some(Flash::DemoViewEnded),
+        ..session.clone()
+    };
+    let to_own = match kind {
+        FormKind::New => Flash::RecipeCreatedToOwn,
+        FormKind::Edit(_) => Flash::RecipeSavedToOwn,
+    };
+    let mut response = save(backend, &session, &Viewer::Own(own), kind, form, limited).await?;
+    if response.status().is_redirection() {
+        remove_set_cookie(&mut response, FLASH_COOKIE);
+        add_cookie(&mut response, FLASH_COOKIE, to_own.code(), FLASH_MAX_AGE);
+    }
+    remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+    Ok(response)
 }
 
 /// [`RecipeForm::workspace`] に入れる値。
@@ -1126,7 +1153,8 @@ fn workspace_of(viewer: &Viewer) -> String {
 /// 出し直すフォームも自分のワークスペースのものとして出すので、送り直しても、また断る。
 ///
 /// 知らせは見出しの下に出す（[`Layout::gone`]）。書き込みの回数の制限（`429`）と同じく、書きかけの入力（最大 7,100 文字）を消さないため。
-/// 回数の制限に当たっていれば、そちらを先に答える（[`save`]。出し直すフォームは、同じく自分のワークスペースのものなので、次に送ったときに断る）。
+/// 回数の制限に当たっていれば、そちらを先に答える（[`save`]。出し直すフォームにも印が残るので、次に送ったときに断る）。
+/// このときは、自分のワークスペースが無いので、使うワークスペース（デモ）のフォームとして出し直すが、書き込みはしない。
 /// 使うワークスペースが無いので、デモの帯と写真の欄は出さない。
 fn form_if_gone(
     session: &Session,
@@ -1160,7 +1188,6 @@ async fn save<B: Backend>(
     kind: FormKind,
     form: &RecipeForm,
     limited: bool,
-    leaves_demo: bool,
 ) -> Result<Response, ScreenError> {
     if limited {
         let error = ApiError::TooManyRequests;
@@ -1177,31 +1204,19 @@ async fn save<B: Backend>(
             ));
         }
     };
-    let (created, saved) = if leaves_demo {
-        (Flash::RecipeCreatedToOwn, Flash::RecipeSavedToOwn)
-    } else {
-        (Flash::RecipeCreated, Flash::RecipeSaved)
-    };
     let result = match &kind {
         FormKind::New => recipe::insert(backend, viewer.id(), fields)
             .await
-            .map(|recipe| (recipe.id, created)),
+            .map(|recipe| (recipe.id, Flash::RecipeCreated)),
         FormKind::Edit(id) => {
             let id = parse_id(id)?;
             recipe::replace(backend, viewer.id(), &id, fields)
                 .await
-                .map(|recipe| (recipe.id, saved))
+                .map(|recipe| (recipe.id, Flash::RecipeSaved))
         }
     };
     match result {
-        Ok((id, flash)) => {
-            let mut response = see_other_with(&format!("/recipes/{id}"), flash);
-            // 保存したレシピは自分のワークスペースにあり、デモの表示のままでは開けないので、デモの表示を終える。
-            if leaves_demo {
-                remove_cookie(&mut response, DEMO_VIEW_COOKIE);
-            }
-            Ok(response)
-        }
+        Ok((id, flash)) => Ok(see_other_with(&format!("/recipes/{id}"), flash)),
         Err(error) if keeps_form(&error) => {
             Ok(form_with_alert(backend, session, viewer, &kind, form, &error).await)
         }
@@ -1235,21 +1250,7 @@ pub async fn create<B: Backend>(
 ) -> Result<Response, ScreenError> {
     let limited = limited.is_some();
     let form = read_recipe_form(form, limited)?;
-    if let Some(response) = form_if_gone(&session, &FormKind::New, &form, limited) {
-        return Ok(response);
-    }
-    let (viewer, leaves_demo) = form_viewer(&backend, &session, &form).await?;
-    let kind = FormKind::New;
-    save(
-        &backend,
-        &session,
-        &viewer,
-        kind,
-        &form,
-        limited,
-        leaves_demo,
-    )
-    .await
+    save_form(&backend, &session, FormKind::New, &form, limited).await
 }
 
 /// 登録・更新のフォームの本文を読む。書き込みの回数の制限に当たっていれば（[`WriteLimited`]）、
@@ -1590,20 +1591,7 @@ pub async fn update<B: Backend>(
     let limited = limited.is_some();
     let form = read_recipe_form(form, limited)?;
     let kind = FormKind::Edit(id.to_string());
-    if let Some(response) = form_if_gone(&session, &kind, &form, limited) {
-        return Ok(response);
-    }
-    let (viewer, leaves_demo) = form_viewer(&backend, &session, &form).await?;
-    save(
-        &backend,
-        &session,
-        &viewer,
-        kind,
-        &form,
-        limited,
-        leaves_demo,
-    )
-    .await
+    save_form(&backend, &session, kind, &form, limited).await
 }
 
 /// 削除のフォームの値。一覧から消したときは、同じ検索の条件とページに戻す。
