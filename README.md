@@ -48,6 +48,7 @@
 | ファイル | 内容 |
 | --- | --- |
 | [docs/spec.md](docs/spec.md) | 仕様（画面・API・テーブル・ワークスペース・写真・デモ） |
+| [docs/design.md](docs/design.md) | 画面の見た目の決まり（文字の役割と大きさ・折り返し） |
 | [docs/architecture.md](docs/architecture.md) | 方針と技術構成 |
 | [docs/security.md](docs/security.md) | セキュリティ（費用の対策・サプライチェーン攻撃の対策） |
 | [docs/development.md](docs/development.md) | 開発の始め方・よく使うコマンド・CI と CD |

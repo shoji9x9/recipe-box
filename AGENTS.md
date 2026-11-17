@@ -1,8 +1,8 @@
 # AGENTS.md
 
 このリポジトリで作業するコーディングエージェント向けの決まり。
-アプリの概要と使い方は [README.md](README.md) に、仕様は [docs/spec.md](docs/spec.md) に、方針と技術構成は [docs/architecture.md](docs/architecture.md) に、セキュリティは [docs/security.md](docs/security.md) に、開発の手順は [docs/development.md](docs/development.md) にある。
-動きや値を変えるときは、それを書いた文書をすべて一緒に直す（仕様は `docs/spec.md`、上限などの費用の対策は `docs/security.md`、手順は `docs/development.md`、利用者に見える値や操作は `README.md` の使い方も、作りや運用の説明はアプリの解説（`guide/about.md` と図の元の `guide/<名前>.d2`）も）。
+アプリの概要と使い方は [README.md](README.md) に、仕様は [docs/spec.md](docs/spec.md) に、画面の見た目の決まりは [docs/design.md](docs/design.md) に、方針と技術構成は [docs/architecture.md](docs/architecture.md) に、セキュリティは [docs/security.md](docs/security.md) に、開発の手順は [docs/development.md](docs/development.md) にある。
+動きや値を変えるときは、それを書いた文書をすべて一緒に直す（仕様は `docs/spec.md`、画面の文字などの見た目は `docs/design.md`、上限などの費用の対策は `docs/security.md`、手順は `docs/development.md`、利用者に見える値や操作は `README.md` の使い方も、作りや運用の説明はアプリの解説（`guide/about.md` と図の元の `guide/<名前>.d2`）も）。
 解説の直し方（作り直したものも commit する・引用するコードの印・値は原本へのリンクにする）は、`docs/development.md` の「解説（/about）」に従う。
 README.md には概要と使い方だけを書き、詳細は `docs/` に置く。
 
