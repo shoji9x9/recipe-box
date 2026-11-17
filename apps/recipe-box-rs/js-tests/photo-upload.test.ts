@@ -154,6 +154,14 @@ describe("判定の関数", () => {
     const broken = { text: () => Promise.reject(new Error("broken")) } as unknown as Response;
     expect(await failureReason(broken)).toBe("追加できませんでした");
   });
+
+  test("failureReason は、ワークスペースが無くなったことの知らせを理由に混ぜない", async () => {
+    const body = `<main>${messagesHtml(
+      "",
+      `<p class="message error" data-workspace-gone>見つかりませんでした</p><p class="message error">上限です</p>`,
+    )}</main>`;
+    expect(await failureReason(new Response(body, { status: 409 }))).toBe("上限です");
+  });
 });
 
 describe("画面の入れ替え", () => {

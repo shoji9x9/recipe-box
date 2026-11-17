@@ -58,7 +58,7 @@
           {%- if let Some(message) = layout.flash %}<p class="message success">{{ message }}</p>{% endif -%}
         </div>
         <div id="messages-alert" role="alert">
-          {%- if let Some(message) = layout.gone %}<p class="message error">{{ message }}</p>{% endif -%}
+          {%- if let Some(message) = layout.gone %}<p class="message error" data-workspace-gone>{{ message }}</p>{% endif -%}
           {%- if let Some(message) = layout.alert %}<p class="message error">{{ message }}</p>{% endif -%}
         </div>
       </div>

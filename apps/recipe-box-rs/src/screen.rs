@@ -165,9 +165,10 @@ pub struct Session {
     own: Option<WorkspaceId>,
     /// 自分のワークスペースを持ちながら、一時的に共有のデモを見ているか。
     viewing_demo: bool,
-    /// 前の操作から渡された、一度だけ出すメッセージ。
+    /// 前の操作から渡された、一度だけ出すメッセージ（[`Flash::WorkspaceGone`] は入らない。`workspace_gone` にする）。
     flash: Option<Flash>,
-    /// Cookie の ID のワークスペースが無くなっていた（[`identify`] が Cookie を消す）。画面に一度だけ知らせる。
+    /// 覚えていたワークスペースが無くなっていたことを、画面に知らせるか。
+    /// この要求で分かった（[`identify`] が Cookie を消す）か、前の応答から一度だけ出すメッセージで回されてきた。
     workspace_gone: bool,
 }
 
@@ -222,12 +223,10 @@ impl Layout {
         Self {
             demo_shared,
             demo_visiting,
-            flash: session
-                .flash
-                .filter(|flash| *flash != Flash::WorkspaceGone)
-                .map(Flash::message),
+            flash: session.flash.map(Flash::message),
             alert: None,
-            gone: (session.workspace_gone || session.flash == Some(Flash::WorkspaceGone))
+            gone: session
+                .workspace_gone
                 .then(|| Flash::WorkspaceGone.message()),
         }
     }
@@ -599,9 +598,12 @@ fn cookie_workspace(headers: &HeaderMap) -> Option<WorkspaceId> {
 /// - ワークスペースの Cookie があれば、在ることを確かめて最終利用日時を更新する。
 ///   無くなっていれば（自動削除など）か、共有のデモの ID なら、どの画面でも Cookie を消し、そのことを一度だけ知らせる
 ///   （[`Flash::WorkspaceGone`]）。
-///   知らせは、その応答の画面に出す。出せない応答（移動・エラーの画面・写真・一覧の部分だけの入れ替えなど）なら、
+///   知らせは、その応答の画面に出す。出せない応答（移動・エラーの画面・写真など）なら、
 ///   一度だけ出すメッセージの Cookie で、次の画面に回す（ハンドラーが付けたメッセージより優先する）。
 ///   Cookie を消した後は、ワークスペースが無いことが分からなくなり、知らせられないため。
+///   htmx が一部だけを入れ替える要求（一覧の検索）なら、画面の全体を読み直させる（`HX-Refresh`）。
+///   入れ替えた一覧だけがデモのレシピになり、自分のレシピ帳のように見えたまま、知らせも出ないのを避けるため。
+///   回した知らせは、出せる画面まで残す。出せない応答では Cookie に触れない（並んで走る写真の要求などが付け直さないように）。
 ///   ハンドラーが同じ応答でワークスペースの Cookie を付けた・消したとき（作った・切り替えたときなど）は、
 ///   Cookie をそのままにし、知らせも出さない。後ろに削除を足すと新しい Cookie を打ち消し、同じ名前の `Set-Cookie` が 2 つ並ぶため。
 /// - 一度だけ出すメッセージがあれば読み、画面を返すときに消す（移動のときは、移動先で読むので残す）。
@@ -627,29 +629,39 @@ pub async fn identify<B: Backend>(
         },
         None => (None, false),
     };
+    let gone_forwarded = flash == Some(Flash::WorkspaceGone);
     request.extensions_mut().insert(Session {
         own,
         viewing_demo,
-        flash,
-        workspace_gone: stale,
+        flash: flash.filter(|flash| *flash != Flash::WorkspaceGone),
+        workspace_gone: stale || gone_forwarded,
     });
-    // htmx が画面の一部だけを入れ替える要求（一覧の検索など）。画面を返しても、見出しの下の知らせは入れ替わらない。
-    // hx-boost の移動（HX-Boosted）は body の全体を入れ替えるので、知らせも出る。
+    // htmx が画面の一部だけを入れ替える要求（一覧の検索）。画面を返しても、見出しの下の知らせは入れ替わらない。
+    // hx-boost の移動（HX-Boosted）と、戻るでの履歴の復元（HX-History-Restore-Request）は、body の全体を入れ替える。
     let partial = request.headers().contains_key("hx-request")
-        && !request.headers().contains_key("hx-boosted");
+        && !request.headers().contains_key("hx-boosted")
+        && !request.headers().contains_key("hx-history-restore-request");
     let mut response = next.run(request).await;
     // ハンドラーがワークスペースの Cookie を付けた・消したときは、新しいワークスペースを使い始めたので、知らせない。
     let switched = sets_cookie(&response, WORKSPACE_COOKIE);
+    let gone_shown = !partial && response.extensions().get::<GoneNoticeShown>().is_some();
     if stale && !switched {
         for name in [WORKSPACE_COOKIE, DEMO_VIEW_COOKIE] {
             if !sets_cookie(&response, name) {
                 remove_cookie(&mut response, name);
             }
         }
+        if partial {
+            response
+                .headers_mut()
+                .insert("hx-refresh", HeaderValue::from_static("true"));
+        }
     }
-    let gone_pending = !switched && (stale || flash == Some(Flash::WorkspaceGone));
-    let gone_shown = !partial && response.extensions().get::<GoneNoticeShown>().is_some();
-    if gone_pending && !gone_shown {
+    let forward_gone = !switched
+        && !gone_shown
+        // 回されてきた知らせは、ハンドラーがメッセージを付けたとき（移動）だけ付け直し、ほかは Cookie を残す。
+        && (stale || (gone_forwarded && sets_cookie(&response, FLASH_COOKIE)));
+    if forward_gone {
         // 出せなかった知らせを、次の画面に回す。ハンドラーが付けたメッセージの Cookie は、置き換える。
         remove_set_cookie(&mut response, FLASH_COOKIE);
         add_cookie(
@@ -658,7 +670,10 @@ pub async fn identify<B: Backend>(
             Flash::WorkspaceGone.code(),
             FLASH_MAX_AGE,
         );
-    } else if flash.is_some() && !response.status().is_redirection() {
+    } else if flash.is_some()
+        && !response.status().is_redirection()
+        && (!gone_forwarded || gone_shown)
+    {
         remove_cookie(&mut response, FLASH_COOKIE);
     }
     response

@@ -2457,7 +2457,7 @@ async fn posts_from_other_sites_are_rejected_before_the_write_limit() {
 
 /// 覚えていたワークスペースが無くなっていたことの知らせ（赤）の HTML。
 fn gone_alert() -> String {
-    "<p class=\"message error\">このブラウザが覚えていたワークスペースは見つかりませんでした。\
+    "<p class=\"message error\" data-workspace-gone>このブラウザが覚えていたワークスペースは見つかりませんでした。\
      14 日アクセスが無くて消えたか、削除されたためです</p>"
         .to_owned()
 }
@@ -2531,7 +2531,8 @@ async fn stale_cookie_is_told_on_the_next_page_when_the_response_cannot_show_it(
         gone_flash
     );
 
-    // htmx が一覧の部分だけを入れ替える検索。見出しの下の知らせは入れ替わらないので、次の画面に回す。
+    // htmx が一覧の部分だけを入れ替える検索。見出しの下の知らせは入れ替わらないので、次の画面に回し、
+    // 画面の全体を読み直させる（一覧だけが黙ってデモに変わらないように）。
     let request = Request::get("/?q=x")
         .header(header::HOST, HOST)
         .header(header::COOKIE, &stale)
@@ -2544,6 +2545,19 @@ async fn stale_cookie_is_told_on_the_next_page_when_the_response_cannot_show_it(
         set_cookie_named(&response, "__Host-flash").unwrap(),
         gone_flash
     );
+    assert_eq!(response.headers.get("hx-refresh").unwrap(), "true");
+    // 戻るでの履歴の復元は body の全体を入れ替えるので、その画面で出す（次の画面に回して 2 回出さない）。
+    let request = Request::get("/")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &stale)
+        .header("hx-request", "true")
+        .header("hx-history-restore-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let response = send(router(backend.clone()), request).await;
+    assert!(response.body.contains(&gone_alert()));
+    assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
+    assert!(!response.headers.contains_key("hx-refresh"));
     // hx-boost の移動は body の全体を入れ替えるので、その画面で出す。
     let request = Request::get("/")
         .header(header::HOST, HOST)
@@ -2556,14 +2570,19 @@ async fn stale_cookie_is_told_on_the_next_page_when_the_response_cannot_show_it(
     assert!(response.body.contains(&gone_alert()));
     assert_eq!(set_cookie_named(&response, "__Host-flash"), None);
 
-    // 回した知らせは、次に画面を出したときに一度だけ出す。エラーの画面では出せないので、残す。
+    // 回した知らせは、次に画面を出したときに一度だけ出す。エラーの画面と写真では出せないので、Cookie に触れずに残す
+    // （付け直さないので、知らせを出した後に届いた、並んで走る要求が、また付けることもない）。
     let with_flash = "__Host-flash=workspace-gone";
-    let response = screen_get(
-        &backend,
+    for path in [
         "/recipes/00000000000000000000000000000000",
-        Some(with_flash),
-    )
-    .await;
+        "/recipes/00000000000000000000000000000000/photos/11111111111111111111111111111111",
+    ] {
+        let response = screen_get(&backend, path, Some(with_flash)).await;
+        assert_eq!(set_cookie_named(&response, "__Host-flash"), None, "{path}");
+    }
+    // 移動の応答では、ハンドラーが付けたメッセージより優先して、付け直す。
+    let response = screen_post(&backend, "/recipes", Some(with_flash), "name=x&servings=1").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(
         set_cookie_named(&response, "__Host-flash").unwrap(),
         gone_flash

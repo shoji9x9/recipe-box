@@ -88,13 +88,14 @@ function parsePage(html) {
 
 /**
  * 失敗した応答の画面から、知らせ（赤のメッセージ）の文を取り出す。
+ * 覚えていたワークスペースが無くなったことの知らせ（data-workspace-gone）は、失敗の理由ではないので除く。
  * @param {Response} response
  * @returns {Promise<string>}
  */
 export async function failureReason(response) {
   try {
     const text = parsePage(await response.text())
-      .getElementById(ALERT_ID)
+      .querySelector(`#${ALERT_ID} > :not([data-workspace-gone])`)
       ?.textContent?.trim();
     if (text) {
       return text;
