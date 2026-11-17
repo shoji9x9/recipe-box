@@ -701,7 +701,16 @@ async fn htmx_is_configured_safely() {
     );
     assert!(response.body.contains(r#""allowEval":false"#));
     assert!(response.body.contains(r#""includeIndicatorStyles":false"#));
-    assert!(response.body.contains(r#"hx-boost="true""#));
+    assert!(response.body.contains(r#""historyCacheSize":0"#));
+    // 履歴に残すために body を写すと、写した img が遅延読み込みを無視して写真を読みに行く（Issue #70）。
+    let body_tag = response
+        .body
+        .split("<body")
+        .nth(1)
+        .and_then(|rest| rest.split('>').next())
+        .unwrap();
+    assert!(body_tag.contains(r#"hx-boost="true""#));
+    assert!(body_tag.contains(r#"hx-history="false""#));
 }
 
 #[tokio::test]
