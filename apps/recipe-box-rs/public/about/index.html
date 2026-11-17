@@ -167,7 +167,7 @@ Cloudflare のアカウントは要りません。データは <code>apps/recipe
 リクエストごとの記録（invocation logs）は残しません。API の <code>X-Workspace-Id</code>（ワークスペースの ID）が残るかもしれないためです。</li>
 <li><code>wrangler tail</code>: 本番のリクエストとログを、その場で流して見ます。残りません。リクエストごとの CPU 時間は、ここで見ます。</li>
 <li>ダッシュボードの Metrics: リクエストの数・エラーの割合・CPU 時間の傾向を見ます。</li>
-<li>失敗の通知: 定期の自動削除が最近に成功したかを、<code>seed-demo.yml</code> の job が D1 の記録（<code>cleanup_runs</code>）で毎日確かめ、成功していなければ job が失敗して GitHub がメールで知らせます。
+<li>失敗の通知: 定期の自動削除が最近に成功し、この 1 日に失敗した実行が無いかを、<code>seed-demo.yml</code> の job が D1 の記録（<code>cleanup_runs</code>）で毎日確かめ、そうでなければ job が失敗して GitHub がメールで知らせます。
 cron が動いていないこと・無料の範囲に近づいたこと・エラーの割合などは、Cloudflare のダッシュボードの Monitors（ダッシュボードで設定し、リポジトリには残りません）で知らせます。手順と SQL は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/development.md#%E5%A4%B1%E6%95%97%E3%81%AE%E9%80%9A%E7%9F%A5">docs/development.md の「失敗の通知」</a>にあります。</li>
 </ul>
 <p>ワークスペースの ID は、知ればそのワークスペースを読み書きできる鍵なので、ログに残しません。アプリがエラーを出すときは、ID の形の文字の並びを伏せてから出します。
@@ -592,7 +592,7 @@ async fn create_workspace_returns_new_id() {
 <li><strong>受け取り方</strong>: API は <code>X-Workspace-Id</code> ヘッダーで、画面は Cookie（<code>__Host-</code> で始まる名前、HttpOnly・Secure・SameSite=Lax）で受け取ります。</li>
 <li><strong>データの分け方</strong>: すべてのクエリを <code>workspace_id</code> で絞り込みます。ID を知っている人だけが、そのワークスペースを読み書きできます。</li>
 <li><strong>ワークスペースの削除</strong>: 画面と API から、レシピと写真ごと消せます。共有のデモは消させません。</li>
-<li><strong>自動削除</strong>: 最後に使われてから 14 日たったワークスペースを、Cron Trigger で 1 時間ごとに消します。対象を選んでから 1 つずつ消すので、写真に印を付けて隠すときと D1 で消すときに、最終利用日時を確かめ直して、使われていれば消しません。同じ定期実行で、書き込みの途中で失敗して残った写真の行も片付けます（<a href="#%E5%86%99%E7%9C%9F%E3%81%AE%E4%BF%9D%E7%AE%A1">写真の保管</a>）。最後に、結果（成功したか・消した数・失敗した数）を D1 の <code>cleanup_runs</code> に残し、毎日の GitHub Actions がそれを読んで、3 時間成功していなければ失敗して知らせます。</li>
+<li><strong>自動削除</strong>: 最後に使われてから 14 日たったワークスペースを、Cron Trigger で 1 時間ごとに消します。対象を選んでから 1 つずつ消すので、写真に印を付けて隠すときと D1 で消すときに、最終利用日時を確かめ直して、使われていれば消しません。同じ定期実行で、書き込みの途中で失敗して残った写真の行も片付けます（<a href="#%E5%86%99%E7%9C%9F%E3%81%AE%E4%BF%9D%E7%AE%A1">写真の保管</a>）。最後に、結果（成功したか・消した数・失敗した数）を D1 の <code>cleanup_runs</code> に残し、毎日の GitHub Actions がそれを読んで、3 時間成功していないか、この 1 日に失敗した実行があれば、失敗して知らせます。</li>
 </ul>
 <p>最終利用日時は、ワークスペースを使うたびに書き換えると、読むだけの API でも DB に書き込むことになります。そのため、前の書き換えから 1 時間以上たっているときだけ書き換えます。</p>
 <h3 id="費用の対策">費用の対策</h3>

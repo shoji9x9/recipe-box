@@ -452,17 +452,16 @@ impl Backend for CloudflareBackend {
         let values = SendWrapper::new([run.ran_at, run.deleted, run.failed].map(int_to_js));
         let before = SendWrapper::new(int_to_js(before));
         // BOOLEAN の値は、pinned と同じく TRUE か FALSE を SQL に書く（D1 に JavaScript の真偽値を渡すと、何で入るかが決まっていないため）。
-        let insert = if run.succeeded {
-            "INSERT INTO cleanup_runs (ran_at, succeeded, deleted, failed) VALUES (?, TRUE, ?, ?)"
-        } else {
-            "INSERT INTO cleanup_runs (ran_at, succeeded, deleted, failed) VALUES (?, FALSE, ?, ?)"
-        };
+        let succeeded = if run.succeeded { "TRUE" } else { "FALSE" };
+        let insert = format!(
+            "INSERT INTO cleanup_runs (ran_at, succeeded, deleted, failed) VALUES (?, {succeeded}, ?, ?)"
+        );
         SendFuture::new(async move {
             let action = "自動削除の結果を残せない";
             let db = database(&env)?;
             // 自動削除の結果は、アプリ全体の 1 つの記録なので、全体を対象にする（AGENTS.md の、自動削除のクエリ）。
             let statements = vec![
-                db.prepare(insert)
+                db.prepare(&insert)
                     .bind(values.0.as_slice())
                     .map_err(|e| backend_error(action, &e))?,
                 db.prepare("DELETE FROM cleanup_runs WHERE ran_at < ?")

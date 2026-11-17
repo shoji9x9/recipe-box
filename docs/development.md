@@ -31,7 +31,7 @@ pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-
 | `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck・JavaScript とテストの型の確認（`tsc`））と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
 | `mise run pin -- (--local \| --remote) [--unpin] < <ID のファイル>` | ワークスペースに、自動削除と削除から外す印を付ける（外す）。共有のデモに使う管理用のコマンドで、本番（`--remote`）には wrangler の認証が要る。デモの ID を表示やシェルの履歴に残さないよう、ID は標準入力で渡す |
 | `mise run seed -- (--local \| --remote) < <ID のファイル>` | 共有のデモを、サンプルのレシピと写真（`seed/`）の状態に戻す。ローカル（`--local`）では先に別の端末で `mise run dev` を起動しておく。本番（`--remote`）には wrangler の認証が要る。印（`mise run pin`）の付いたワークスペースにだけ入れる。ID は標準入力で渡す |
-| `mise run check-cleanup -- (--local \| --remote)` | 定期の自動削除が 3 時間以内に成功したかを、D1 の `cleanup_runs` で確かめる。成功していなければ終了コード 1 で止まる（下の「失敗の通知」）。本番（`--remote`）には wrangler の認証が要る |
+| `mise run check-cleanup -- (--local \| --remote)` | 定期の自動削除が、3 時間以内に成功し、直近 26 時間に失敗した実行が無いかを、D1 の `cleanup_runs` で確かめる。そうでなければ終了コード 1 で止まる（下の「失敗の通知」）。本番（`--remote`）には wrangler の認証が要る |
 | `mise run guide` | アプリの解説（`/about/`）を、`guide/` の元の文章と図から作り直す（下の「解説」）。`mise run lint` は、作り直したものが commit したものと同じかを確かめる |
 | `mise run mwg -- (search \| list \| retrieve) ...` | Web の作り方の指針（modern-web-guidance）を引く。画面の HTML・CSS・JavaScript を書く前に使う（AGENTS.md の「スキル」）。利用統計を送らず、読むだけのサブコマンドに限る |
 | `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
@@ -122,7 +122,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `pr-title.yml` | PR のタイトルが Conventional Commits の形かを調べる（タイトルを直したときにも動く） |
 | `codeql.yml` | Rust のコード・JavaScript と TypeScript・workflow を CodeQL で解析する |
 | `claude-review.yml` | PR を Claude Code でレビューする |
-| `seed-demo.yml` | 毎日 UTC の 19 時（日本時間の 4 時）に、共有のデモを seed で入れ直す（手でも実行できる）。別の job で、定期の自動削除が 3 時間以内に成功したかを確かめる（下の「失敗の通知」） |
+| `seed-demo.yml` | 毎日 UTC の 19 時（日本時間の 4 時）に、共有のデモを seed で入れ直す（手でも実行できる）。別の job で、定期の自動削除が最近に成功し、失敗した実行が無いかを確かめる（下の「失敗の通知」） |
 | `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。D1 と R2 のバケットが無ければ作り、先に D1 にマイグレーションを当てる。デプロイの後に、本番の API・トップの画面・静的アセットが 200 を返すかを、GET で確かめる |
 | `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする。GITHUB_TOKEN でのマージでは `deploy.yml` の push が動かないので、マージされるのを待って `deploy.yml` を起動する |
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
@@ -163,13 +163,17 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
 1. 自動削除の結果を D1 に残し、GitHub Actions で確かめる。
    - 自動削除は、最後に結果（成功したか・消した数・失敗した数）を `cleanup_runs` に残す（docs/spec.md の「ワークスペースによるデータの分離」）。途中で止まった実行は結果を残さない。
      workers-rs の `scheduled` は、処理の結果にかかわらず成功で終わるので、一部の失敗は Cloudflare の側（下の Monitors）からは見えない。この記録で見る。
-   - `seed-demo.yml` の job `check-cleanup` が、毎日（seed と同じ時刻）`scripts/check-cleanup.ts --remote` を動かし、最後の成功から 3 時間を超えていれば失敗する。
+   - `seed-demo.yml` の job `check-cleanup` が、毎日（seed と同じ時刻）`scripts/check-cleanup.ts --remote` を動かし、次のどちらかなら失敗する。
+     - 最後の成功から 3 時間を超えた（cron は 1 時間ごとなので、止まったか、落ち続けている）。止まったことを、確かめの時刻の近くで見つける幅である。
+     - 直近 26 時間に、成功でない実行が 1 回でもある。自動削除は対象を実行ごとにずらして選ぶので、消すたびに失敗するワークスペースがあっても、それを選ばない実行は成功になり、最後の成功だけでは見逃すためである。
+       確かめは毎日なので、1 日のすべての実行を見る。GitHub の schedule の遅れを見込んで 2 時間を足している（重なった分の失敗は 2 日続けて知らせうる）。一時的な失敗でも知らせる。
      失敗すると、GitHub Actions の失敗の通知（上の「CI と CD」の、schedule で動く workflow の通知）が届く。seed と別の job なので、確かめが失敗してもデモは入れ直す。
-     cron は 1 時間ごとなので、3 時間は、一時的な失敗や起動の遅れを 2 回まで見逃し、失敗が続いていれば知らせる幅である。
+     GitHub の schedule は、混んでいると遅れたり、その日に動かなかったりする。動かなかった日は確かめが無く、26 時間を超えて前の失敗は、次の日の確かめでは見えない（Monitors の 1・2 は、cron が止まったことと落ちたことだけを知らせる）。
    - 公開のログには、成功か失敗かと、最後の成功から経った時間だけを出す（docs/security.md の「ログ」）。
    - マイグレーション（`0007_create_cleanup_runs.sql`）を当てた直後は記録が無いので、デプロイの後の最初の cron（毎時 0 分）より前に確かめが動くと、「成功の記録が無い」で失敗する。そのままにする。次の cron の後に Actions で再実行すれば通る。
+   - 一時的な失敗で知らされたときも、原因を Workers のログで見てから、Actions で再実行して通ることを確かめる（失敗した行は 26 時間たつまで残るので、それまでは再実行しても失敗する）。
    - 失敗したら、Workers のログ（上の「本番のログ」）で「自動削除で失敗があった」の行と、その前のエラーを見る。
-     いつから失敗しているかは、手元で `apps/recipe-box-rs` から `pnpm exec wrangler d1 execute DB --remote --command "SELECT ran_at, succeeded, deleted, failed FROM cleanup_runs ORDER BY ran_at DESC"` を実行して見る（7 日分ある。結果を Issue などの公開の場所に貼らない）。
+     どの実行が失敗したかは、手元で `apps/recipe-box-rs` から `pnpm exec wrangler d1 execute DB --remote --command "SELECT ran_at, succeeded, deleted, failed FROM cleanup_runs ORDER BY ran_at DESC"` を実行して見る（7 日分ある。結果を Issue などの公開の場所に貼らない）。
    - GitHub が 60 日の無活動で schedule を止めると、この確かめも止まる（下の「schedule が止まらないようにする」）。cron が動いていないことは、下の Monitors でも知らせる。
 2. Cloudflare の Monitors（ダッシュボードの Alerts > Monitors。beta の機能）で、cron の起動・無料の範囲・応答のエラー・リクエストの途絶を知らせる。
    設定はダッシュボードにだけあり、リポジトリには残らないので、消えていないかを毎月見る（下の「最低限のメンテナンス」）。

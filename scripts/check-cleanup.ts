@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// 定期の自動削除が、最近に成功したかを、D1 の cleanup_runs で確かめる（Issue #56）。成功していなければ終了コード 1 で止まる。
+// 定期の自動削除が、3 時間以内に成功し、直近 26 時間に失敗した実行が無いかを、D1 の cleanup_runs で確かめる（Issue #56）。
+// そうでなければ終了コード 1 で止まる（判定は scripts/cleanup-check-lib.ts）。
 // .github/workflows/seed-demo.yml の job が毎日動かし、失敗すると GitHub が通知のメールを送る（docs/development.md の「失敗の通知」）。
 // Node が型の注釈を取り除いて、そのまま動かす（ビルドしない。docs/development.md の「言語」）。
 //
@@ -7,7 +8,7 @@
 //   --local:  ローカルの D1（mise run dev が使うもの）
 //   --remote: 本番の D1。wrangler の認証（wrangler login か CLOUDFLARE_API_TOKEN）が要る
 // 公開の Actions のログに出るので、成功か失敗かと、最後の成功から経った時間だけを表示する（数や ID は出さない）。
-import { cleanupCheck, LAST_SUCCESS_SQL } from "./cleanup-check-lib.ts";
+import { checkSql, cleanupCheck } from "./cleanup-check-lib.ts";
 import { hasOwnKey } from "./seed-lib.ts";
 import { redact, type Target, wrangler } from "./wrangler.ts";
 
@@ -25,9 +26,10 @@ if (args.length !== 1 || !hasOwnKey(TARGETS, target)) {
   process.exit(2);
 }
 
+const now = Date.now();
 let output: string;
 try {
-  output = await wrangler(target, "d1", "execute", "DB", "--json", "--command", LAST_SUCCESS_SQL);
+  output = await wrangler(target, "d1", "execute", "DB", "--json", "--command", checkSql(now));
 } catch (error) {
   // wrangler の失敗の文は wrangler.ts が伏せている。それ以外の例外（起動の失敗など）も、伏せてから出す。
   fail(`D1 を読めない: ${redact(error instanceof Error ? error.message : error)}`);
@@ -35,7 +37,7 @@ try {
 
 let result: ReturnType<typeof cleanupCheck>;
 try {
-  result = cleanupCheck(output, Date.now());
+  result = cleanupCheck(output, now);
 } catch {
   fail("wrangler の d1 execute --json の出力を JSON として読めない");
 }
