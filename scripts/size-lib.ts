@@ -9,13 +9,12 @@
 //   （新しいファイルを足したら、どこに数えるかを決めてここに書く）。
 // - Rust の本番のファイルの末尾のテストのモジュール（#[cfg(test)] mod tests）は、行をテストに数え、ファイルは本番に数える。
 
+import { REPOSITORY } from "./guide-lib.ts";
+
 /** 数え方を決められないなどの誤り。分類の決まりか、数える元のファイルを直す必要がある。 */
 export class SizeError extends Error {
   override name = "SizeError";
 }
-
-/** 公開リポジトリの URL の先頭（数えた commit へのリンクに使う）。 */
-export const REPOSITORY = "https://github.com/shoji9x9/recipe-box/";
 
 /** guide/about.md の中で、このスクリプトが書き換える範囲の印。 */
 export const BLOCK_START = "<!-- size:start mise run size が書く。手で直さない -->";
@@ -40,12 +39,13 @@ export const GROUPS = [
   {
     name: "開発・運用",
     categories: [
-      "スクリプトの本番",
-      "スクリプトのテスト",
+      "スクリプト（TypeScript）の本番",
+      "スクリプト（TypeScript）のテスト",
+      "スクリプト（シェル）",
       "CI と設定",
       "開発の文書",
       "解説の元",
-      "seed（共有のデモの元のデータ）",
+      "seed（共有のデモの元のデータ。JSON・写真・出典）",
       "その他",
     ],
   },
@@ -54,11 +54,12 @@ export const GROUPS = [
 /** 合計に数える分類の名前。 */
 export type Category = (typeof GROUPS)[number]["categories"][number];
 
-/** 合計に入れない分類（スキルは、スキルごとに別の行にする）。 */
+/** 合計に入れない分類。 */
 export const GENERATED = "生成物";
+export const SKILLS = "スキル";
 
-/** 分類の結果。スキルは、そのスキルの名前（.claude/skills/<名前>/）。 */
-export type Classification = { category: Category | typeof GENERATED } | { skill: string };
+/** 分類の結果。 */
+export type Classification = { category: Category | typeof GENERATED | typeof SKILLS };
 
 const RUST_PRODUCTION: Category = "バックエンド（Rust）の本番";
 const RUST_TEST: Category = "バックエンド（Rust）のテスト";
@@ -88,13 +89,13 @@ function exact(paths: string[]): RegExp {
 const APP = "apps/recipe-box-rs/";
 
 /** 分類の決まり。上から順に見て、最初に当たったものにする。 */
-const RULES: { pattern: RegExp; result: Classification | "skill" }[] = [
+const RULES: { pattern: RegExp; result: Classification }[] = [
   // 生成物（lockfile と、mise run guide が作る解説）。
   { pattern: exact(["Cargo.lock", "pnpm-lock.yaml", "mise.lock", ".github/workflows/actions.lock"]), result: { category: GENERATED } },
   { pattern: new RegExp(`^${APP}public/about/`), result: { category: GENERATED } },
   { pattern: new RegExp(`^${APP}public/assets/guide/[^/]+\\.svg$`), result: { category: GENERATED } },
   // 外から入れたスキル。
-  { pattern: /^\.claude\/skills\/[^/]+\//, result: "skill" },
+  { pattern: /^\.claude\/skills\/[^/]+\//, result: { category: SKILLS } },
   // アプリ。
   { pattern: new RegExp(`^${APP}src/tests/`), result: { category: RUST_TEST } },
   { pattern: new RegExp(`^${APP}src/.+\\.rs$`), result: { category: RUST_PRODUCTION } },
@@ -114,13 +115,15 @@ const RULES: { pattern: RegExp; result: Classification | "skill" }[] = [
   },
   { pattern: /^\.github\//, result: { category: "CI と設定" } },
   { pattern: /^\.config\/skills\//, result: { category: "CI と設定" } },
-  { pattern: /^scripts\/.+\.test\.ts$/, result: { category: "スクリプトのテスト" } },
-  { pattern: /^scripts\//, result: { category: "スクリプトの本番" } },
+  // scripts/ のそのほかのファイル（JavaScript など）は、分類できないとして失敗させる。
+  { pattern: /^scripts\/.+\.test\.ts$/, result: { category: "スクリプト（TypeScript）のテスト" } },
+  { pattern: /^scripts\/.+\.ts$/, result: { category: "スクリプト（TypeScript）の本番" } },
+  { pattern: /^scripts\/.+\.sh$/, result: { category: "スクリプト（シェル）" } },
   { pattern: exact(["README.md", "AGENTS.md", "CLAUDE.md", "SECURITY.md"]), result: { category: "開発の文書" } },
   { pattern: /^docs\//, result: { category: "開発の文書" } },
   { pattern: /^guide\//, result: { category: "解説の元" } },
   { pattern: exact([`${APP}public/assets/guide.css`]), result: { category: "解説の元" } },
-  { pattern: /^seed\//, result: { category: "seed（共有のデモの元のデータ）" } },
+  { pattern: /^seed\//, result: { category: "seed（共有のデモの元のデータ。JSON・写真・出典）" } },
   { pattern: exact(["LICENSE", "THIRD_PARTY_NOTICES.md"]), result: { category: "その他" } },
 ];
 
@@ -128,7 +131,7 @@ const RULES: { pattern: RegExp; result: Classification | "skill" }[] = [
 export function classify(path: string): Classification | undefined {
   for (const { pattern, result } of RULES) {
     if (pattern.test(path)) {
-      return result === "skill" ? { skill: path.split("/")[2] ?? "" } : result;
+      return result;
     }
   }
   return undefined;
@@ -156,7 +159,7 @@ export function countLines(content: Uint8Array): number {
 
 /** 行の一覧（最後の改行の後の空の行は入れない）。 */
 function splitLines(text: string): string[] {
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/);
   if (lines.at(-1) === "") {
     lines.pop();
   }
@@ -169,10 +172,21 @@ function splitLines(text: string): string[] {
  * そのモジュールがファイルの最後の項目でなければ（閉じる `}` の後に何かあれば）、失敗させる。
  * rustfmt で整えたコードでは、行の頭の `}` は一番外の項目を閉じるので、`mod tests {` の後の最初の行の頭の `}` を、モジュールの終わりとみなす。
  * 次の行が `mod tests;`（ファイルを分けたモジュールの宣言）なら、その 2 行。
+ * 行の頭の `#[cfg(...test...)]` の後に（属性を挟んで）モジュールが続くのに、この書き方でなければ、黙って本番に数えずに失敗させる
+ * （`#[cfg(all(test, ...))]`・間に別の属性・`mod unit_tests` など）。
  */
 export function rustTestLines(path: string, text: string): number {
   const lines = splitLines(text);
   const starts = lines.flatMap((line, i) => (line === "#[cfg(test)]" && /^(pub(\([a-z]+\))? )?mod tests\b/.test(lines[i + 1] ?? "") ? [i] : []));
+  for (const [i, line] of lines.entries()) {
+    if (!/^#\[cfg\(.*\btest\b.*\)\]$/.test(line) || starts.includes(i)) {
+      continue;
+    }
+    const item = lines.slice(i + 1).find((next) => !next.startsWith("#["));
+    if (item !== undefined && /^(pub(\([a-z]+\))? )?mod \w+/.test(item)) {
+      throw new SizeError(`${path} の ${i + 1} 行目のテストのモジュールの書き方が、想定（#[cfg(test)] の次の行に mod tests）と違います`);
+    }
+  }
   if (starts.length === 0) {
     return 0;
   }
@@ -195,32 +209,6 @@ export function rustTestLines(path: string, text: string): number {
     );
   }
   return lines.length - start;
-}
-
-/** AGENTS.md の「スキル」の節から、スキルの名前とその入手元（GitHub の owner/repo）を読む。 */
-export function skillSources(agents: string): Map<string, string> {
-  const sources = new Map<string, string>();
-  let inSection = false;
-  let source: string | undefined;
-  for (const line of agents.split(/\r?\n/)) {
-    if (/^## /.test(line)) {
-      inSection = line === "## スキル";
-      continue;
-    }
-    if (!inSection) {
-      continue;
-    }
-    const from = /\[([\w.-]+\/[\w.-]+)\]\(https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\) から/.exec(line);
-    if (from && from[1] === from[2]) {
-      source = from[1];
-      continue;
-    }
-    const skill = /^- `([a-z0-9-]+)`:/.exec(line);
-    if (skill && source !== undefined) {
-      sources.set(skill[1] ?? "", source);
-    }
-  }
-  return sources;
 }
 
 /** .claude/settings.json の、有効にしたプラグインの名前。 */
@@ -250,8 +238,7 @@ export interface Report {
   groups: { name: string; rows: Row[]; subtotal: Row }[];
   total: Row;
   generated: Row;
-  skills: Row[];
-  skillsSubtotal: Row;
+  skills: Row;
   plugins: string[];
 }
 
@@ -277,21 +264,28 @@ function sum(label: string, rows: Row[]): Row {
 const decoder = new TextDecoder();
 
 /**
- * ファイルを分類して数える。`agents` は AGENTS.md、`settings` は .claude/settings.json の中身（どちらも同じ commit のもの）。
- * 分類できないファイルや、AGENTS.md に入手元の書かれていないスキルがあれば、その一覧を添えて失敗させる。
+ * ファイルを分類して数える。`settings` は、同じ commit の .claude/settings.json の中身。
+ * 分類できないファイルがあれば、その一覧を添えて失敗させる。
  */
-export function tally(files: SourceFile[], agents: string, settings: string): Report {
+export function tally(files: SourceFile[], settings: string): Report {
   const categories = new Map<string, Row>();
   for (const group of GROUPS) {
     for (const category of group.categories) {
       categories.set(category, emptyRow(category));
     }
   }
+  const category = (name: string): Row => {
+    const row = categories.get(name);
+    if (row === undefined) {
+      throw new SizeError(`知らない分類です: ${name}`);
+    }
+    return row;
+  };
   const generated = emptyRow(GENERATED);
-  const sources = skillSources(agents);
-  const skillRows = new Map<string, Row>();
+  const skills = emptyRow(SKILLS);
+  // スキルの数（.claude/skills/<名前>/ のディレクトリの数）。
+  const skillNames = new Set<string>();
   const unclassified: string[] = [];
-  const unknownSkills = new Set<string>();
 
   for (const { path, content } of files) {
     const result = classify(path);
@@ -300,56 +294,43 @@ export function tally(files: SourceFile[], agents: string, settings: string): Re
       continue;
     }
     const lines = isBinary(path, content) ? undefined : countLines(content);
-    if ("skill" in result) {
-      if (!sources.has(result.skill)) {
-        unknownSkills.add(result.skill);
-        continue;
-      }
-      const row = skillRows.get(result.skill) ?? emptyRow(`${result.skill}（${sources.get(result.skill)}）`);
-      skillRows.set(result.skill, row);
-      add(row, 1, lines);
+    if (result.category === SKILLS) {
+      skillNames.add(path.split("/")[2] ?? "");
+      add(skills, 1, lines);
       continue;
     }
     if (result.category === GENERATED) {
       add(generated, 1, lines);
       continue;
     }
-    const row = categories.get(result.category);
-    if (row === undefined) {
-      throw new SizeError(`知らない分類です: ${result.category}`);
-    }
+    const row = category(result.category);
     if (result.category === RUST_PRODUCTION && lines !== undefined) {
       const test = rustTestLines(path, decoder.decode(content));
       add(row, 1, lines - test);
       if (test > 0) {
-        add(categories.get(RUST_TEST) ?? emptyRow(RUST_TEST), 0, test);
+        add(category(RUST_TEST), 0, test);
       }
       continue;
     }
     add(row, 1, lines);
   }
 
-  const problems = [
-    ...unclassified.map((path) => `分類できない: ${path}`),
-    ...[...unknownSkills].map((skill) => `AGENTS.md の「スキル」に入手元が書かれていないスキル: .claude/skills/${skill}/`),
-  ];
-  if (problems.length > 0) {
-    throw new SizeError(`${problems.join("\n")}\nscripts/size-lib.ts の分類の決まり（RULES）か AGENTS.md に足してください`);
+  if (unclassified.length > 0) {
+    throw new SizeError(
+      `${unclassified.map((path) => `分類できない: ${path}`).join("\n")}\nscripts/size-lib.ts の分類の決まり（RULES）に足してください`,
+    );
   }
 
   const groups = GROUPS.map((group) => {
     const rows = group.categories.map((category) => categories.get(category) ?? emptyRow(category));
     return { name: group.name, rows, subtotal: sum(`${group.name}の小計`, rows) };
   });
-  // スキルは、AGENTS.md に書いた順（入手元ごと）に並べる。
-  const order = [...sources.keys()];
-  const skills = [...skillRows.entries()].sort(([a], [b]) => order.indexOf(a) - order.indexOf(b)).map(([, row]) => row);
+  skills.label = `スキル（.claude/skills/ の ${skillNames.size} つ）`;
   return {
     groups,
     total: sum("合計", groups.map((g) => g.subtotal)),
     generated,
     skills,
-    skillsSubtotal: sum("スキルの小計", skills),
     plugins: enabledPlugins(settings),
   };
 }
@@ -358,9 +339,11 @@ function number(value: number | undefined): string {
   return value === undefined ? "—" : value.toLocaleString("en-US");
 }
 
-function tableRow(row: Row, bold = false): string {
-  const cell = (text: string) => (bold ? `**${text}**` : text);
-  return `| ${cell(row.label)} | ${cell(number(row.files))} | ${cell(number(row.lines))} |`;
+/** 表の 1 行。`first` は、先頭に足す列（区分）。 */
+function tableRow(row: Row, options: { bold?: boolean; first?: string } = {}): string {
+  const cell = (text: string) => (options.bold ? `**${text}**` : text);
+  const cells = [...(options.first === undefined ? [] : [options.first]), cell(row.label), cell(number(row.files)), cell(number(row.lines))];
+  return `|${cells.map((text) => (text === "" ? " " : ` ${text} `)).join("|")}|`;
 }
 
 /** 数えた commit。 */
@@ -372,26 +355,27 @@ export interface Commit {
 
 /** guide/about.md の印の間に入れる Markdown（印の行を含む）。 */
 export function renderBlock(report: Report, commit: Commit): string {
-  const header = ["| 分類 | ファイル数 | 行数 |", "| --- | ---: | ---: |"];
+  // 区分の名前は、その区分の最初の行にだけ書く。小計と合計は太字にする。
   const counted = report.groups.flatMap((group) => [
-    `| **${group.name}** | | |`,
-    ...group.rows.map((row) => tableRow(row)),
-    tableRow(group.subtotal),
+    ...group.rows.map((row, i) => tableRow(row, { first: i === 0 ? group.name : "" })),
+    tableRow(group.subtotal, { first: "", bold: true }),
   ]);
-  const separate = [tableRow(report.generated), ...report.skills.map((row) => tableRow(row)), tableRow(report.skillsSubtotal)];
   const plugins = report.plugins.length === 0 ? "無し" : report.plugins.map((p) => `\`${p}\``).join("・");
   return [
     BLOCK_START,
-    `commit [${commit.sha.slice(0, 7)}](${REPOSITORY}commit/${commit.sha})（${commit.date}）で数えました。数え直すには \`mise run size -- --ref origin/main\` を実行します。`,
+    `commit [${commit.sha.slice(0, 7)}](${REPOSITORY}commit/${commit.sha})（${commit.date}）で数えました。数え直すには \`git fetch\` の後に \`mise run size\` を実行します。`,
     "",
-    ...header,
+    "| 区分 | 分類 | ファイル数 | 行数 |",
+    "| --- | --- | ---: | ---: |",
     ...counted,
-    tableRow(report.total, true),
+    tableRow(report.total, { first: "", bold: true }),
     "",
     "別枠（合計に入れないもの）:",
     "",
-    ...header,
-    ...separate,
+    "| 分類 | ファイル数 | 行数 |",
+    "| --- | ---: | ---: |",
+    tableRow(report.generated),
+    tableRow(report.skills),
     "",
     `Claude Code のプラグイン（${plugins}）は、コードがリポジトリに無いので数えません。`,
     BLOCK_END,

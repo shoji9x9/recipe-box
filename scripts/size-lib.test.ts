@@ -14,33 +14,11 @@ import {
   replaceBlock,
   rustTestLines,
   SizeError,
-  skillSources,
   tally,
 } from "./size-lib.ts";
 
 const encoder = new TextEncoder();
 const bytes = (text: string) => encoder.encode(text);
-
-const AGENTS = `# AGENTS.md
-
-## スキル
-
-\`.claude/skills/\` に、[shoji9x9/skills](https://github.com/shoji9x9/skills) から次のスキルを入れている。
-
-- \`pr-finalize-loop\`: PR を収束させる。
-- \`browser-test\`: 画面を確かめる。
-
-\`pr-finalize-loop\` の再レビューの依頼先は \`claude-code\` にしている。
-
-[cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill) から、次のスキルを入れている。
-
-- \`security-audit\`: セキュリティのレビュー。
-  - \`nested\`: 字下げした項目はスキルにしない。
-
-## 次の節
-
-- \`outside\`: 節の外はスキルにしない。
-`;
 
 const SETTINGS = JSON.stringify({ enabledPlugins: { "b@market": true, "a@market": true, "off@market": false } });
 
@@ -58,9 +36,11 @@ describe("classify", () => {
     ["apps/recipe-box-rs/public/assets/style.css", "画面の CSS とアイコン"],
     ["apps/recipe-box-rs/public/assets/favicon.svg", "画面の CSS とアイコン"],
     ["apps/recipe-box-rs/migrations/0001_create_workspaces.sql", "DB のマイグレーション（SQL）"],
-    ["scripts/size.ts", "スクリプトの本番"],
-    ["scripts/mwg.sh", "スクリプトの本番"],
-    ["scripts/size-lib.test.ts", "スクリプトのテスト"],
+    ["scripts/size.ts", "スクリプト（TypeScript）の本番"],
+    ["scripts/sub/a.ts", "スクリプト（TypeScript）の本番"],
+    ["scripts/size-lib.test.ts", "スクリプト（TypeScript）のテスト"],
+    ["scripts/mwg.sh", "スクリプト（シェル）"],
+    ["scripts/check-mwg-version.sh", "スクリプト（シェル）"],
     ["scripts/tsconfig.json", "CI と設定"],
     [".github/workflows/ci.yml", "CI と設定"],
     ["mise.toml", "CI と設定"],
@@ -75,8 +55,9 @@ describe("classify", () => {
     ["guide/about.md", "解説の元"],
     ["guide/_style.d2", "解説の元"],
     ["apps/recipe-box-rs/public/assets/guide.css", "解説の元"],
-    ["seed/recipes.json", "seed（共有のデモの元のデータ）"],
-    ["seed/photos/gyoza-1.jpg", "seed（共有のデモの元のデータ）"],
+    ["seed/recipes.json", "seed（共有のデモの元のデータ。JSON・写真・出典）"],
+    ["seed/photos/gyoza-1.jpg", "seed（共有のデモの元のデータ。JSON・写真・出典）"],
+    ["seed/photos/SOURCES.md", "seed（共有のデモの元のデータ。JSON・写真・出典）"],
     ["LICENSE", "その他"],
     ["THIRD_PARTY_NOTICES.md", "その他"],
     ["Cargo.lock", "生成物"],
@@ -89,9 +70,9 @@ describe("classify", () => {
     expect(classify(path)).toEqual({ category });
   });
 
-  test("スキルは、ディレクトリの名前で分ける", () => {
-    expect(classify(".claude/skills/browser-test/SKILL.md")).toEqual({ skill: "browser-test" });
-    expect(classify(".claude/skills/security-audit/references/a.md")).toEqual({ skill: "security-audit" });
+  test("スキルは、どのスキルのファイルも別枠のスキルにする", () => {
+    expect(classify(".claude/skills/browser-test/SKILL.md")).toEqual({ category: "スキル" });
+    expect(classify(".claude/skills/security-audit/references/a.md")).toEqual({ category: "スキル" });
   });
 
   test.each([
@@ -100,6 +81,10 @@ describe("classify", () => {
     "apps/recipe-box-rs/js-tests/helper.ts",
     ".claude/agents/x.md",
     "apps/recipe-box-rs/public/robots.txt",
+    "scripts/helper.js",
+    "scripts/data.json",
+    "scripts/README.md",
+    ".claude/skills/SKILL.md",
   ])("決まりに無いファイル（%s）は分類しない", (path) => {
     expect(classify(path)).toBeUndefined();
   });
@@ -176,15 +161,16 @@ describe("rustTestLines", () => {
     expect(() => rustTestLines("a.rs", "#[cfg(test)]\nmod tests;\n#[cfg(test)]\nmod tests {\n}\n")).toThrow(/2 つ以上/);
     expect(() => rustTestLines("a.rs", "#[cfg(test)]\nmod tests { fn t() {} }\n")).toThrow(/想定と違います/);
   });
-});
 
-describe("skillSources", () => {
-  test("「スキル」の節の、入手元ごとのスキルの一覧を読む", () => {
-    expect([...skillSources(AGENTS)]).toEqual([
-      ["pr-finalize-loop", "shoji9x9/skills"],
-      ["browser-test", "shoji9x9/skills"],
-      ["security-audit", "cloudflare/security-audit-skill"],
-    ]);
+  test("CRLF のファイルも、LF と同じに数える", () => {
+    expect(rustTestLines("a.rs", "fn a() {}\r\n#[cfg(test)]\r\nmod tests {\r\n    fn t() {}\r\n}\r\n")).toBe(4);
+  });
+
+  test("テストのモジュールらしいのに、想定の書き方でなければ、本番に数えずに失敗する", () => {
+    // cfg の条件が違う・間に別の属性がある・名前が違う。
+    expect(() => rustTestLines("a.rs", "#[cfg(all(test, feature = \"x\"))]\nmod tests {\n}\n")).toThrow(/想定（/);
+    expect(() => rustTestLines("a.rs", "#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n}\n")).toThrow(/想定（/);
+    expect(() => rustTestLines("a.rs", "#[cfg(test)]\nmod unit_tests {\n}\n")).toThrow(/想定（/);
   });
 });
 
@@ -212,40 +198,52 @@ describe("tally", () => {
     report.groups.flatMap((g) => [...g.rows, g.subtotal]).find((r) => r.label === label);
 
   test("Rust のテストの行を分け、ファイルは本番に数える", () => {
-    const report = tally(files, AGENTS, SETTINGS);
+    const report = tally(files, SETTINGS);
     // a.rs の 2 行と lib.rs の 1 行が本番。a.rs の 4 行・lib.rs の 2 行・tests/mod.rs の 1 行がテスト。
     expect(row(report, "バックエンド（Rust）の本番")).toEqual({ label: "バックエンド（Rust）の本番", files: 2, lines: 3 });
     expect(row(report, "バックエンド（Rust）のテスト")).toEqual({ label: "バックエンド（Rust）のテスト", files: 1, lines: 7 });
   });
 
   test("バイナリはファイルの数にだけ数え、テキストが無ければ行数は無し", () => {
-    const report = tally(files, AGENTS, SETTINGS);
-    expect(row(report, "seed（共有のデモの元のデータ）")).toMatchObject({ files: 2, lines: 1 });
+    const report = tally(files, SETTINGS);
+    expect(row(report, "seed（共有のデモの元のデータ。JSON・写真・出典）")).toMatchObject({ files: 2, lines: 1 });
     expect(row(report, "その他")).toEqual({ label: "その他", files: 0, lines: undefined });
   });
 
-  test("合計に別枠を入れず、スキルを AGENTS.md の順に並べる", () => {
-    const report = tally(files, AGENTS, SETTINGS);
+  test("合計に別枠を入れず、スキルを 1 行にまとめてスキルの数を書く", () => {
+    const report = tally(files, SETTINGS);
     expect(report.total).toEqual({ label: "合計", files: 5, lines: 11 });
     expect(report.generated).toEqual({ label: "生成物", files: 1, lines: 2 });
-    expect(report.skills).toEqual([
-      { label: "pr-finalize-loop（shoji9x9/skills）", files: 2, lines: 1 },
-      { label: "browser-test（shoji9x9/skills）", files: 1, lines: 3 },
-    ]);
-    expect(report.skillsSubtotal).toEqual({ label: "スキルの小計", files: 3, lines: 4 });
+    expect(report.skills).toEqual({ label: "スキル（.claude/skills/ の 2 つ）", files: 3, lines: 4 });
     expect(report.plugins).toEqual(["a@market", "b@market"]);
   });
 
-  test("分類できないファイルと、入手元の無いスキルがあれば、一覧を添えて失敗する", () => {
+  test("スクリプトを言語で分ける", () => {
+    const report = tally(
+      [
+        { path: "scripts/a.ts", content: bytes("a\nb\n") },
+        { path: "scripts/a.test.ts", content: bytes("a\n") },
+        { path: "scripts/a.sh", content: bytes("a\nb\nc\n") },
+        { path: "scripts/tsconfig.json", content: bytes("{}\n") },
+      ],
+      "{}",
+    );
+    expect(row(report, "スクリプト（TypeScript）の本番")).toMatchObject({ files: 1, lines: 2 });
+    expect(row(report, "スクリプト（TypeScript）のテスト")).toMatchObject({ files: 1, lines: 1 });
+    expect(row(report, "スクリプト（シェル）")).toMatchObject({ files: 1, lines: 3 });
+    expect(row(report, "CI と設定")).toMatchObject({ files: 1, lines: 1 });
+  });
+
+  test("分類できないファイルがあれば、一覧を添えて失敗する", () => {
     const extra = [
       ...files,
       { path: "unknown.txt", content: bytes("x\n") },
       { path: "other/unknown.md", content: bytes("x\n") },
-      { path: ".claude/skills/mystery/SKILL.md", content: bytes("x\n") },
+      { path: "scripts/helper.js", content: bytes("x\n") },
     ];
-    expect(() => tally(extra, AGENTS, SETTINGS)).toThrow(SizeError);
-    expect(() => tally(extra, AGENTS, SETTINGS)).toThrow(
-      /分類できない: unknown\.txt\n分類できない: other\/unknown\.md\nAGENTS\.md の「スキル」に入手元が書かれていないスキル: \.claude\/skills\/mystery\//,
+    expect(() => tally(extra, SETTINGS)).toThrow(SizeError);
+    expect(() => tally(extra, SETTINGS)).toThrow(
+      /分類できない: unknown\.txt\n分類できない: other\/unknown\.md\n分類できない: scripts\/helper\.js\n/,
     );
   });
 });
@@ -255,8 +253,8 @@ describe("renderBlock と replaceBlock", () => {
     [
       { path: "LICENSE", content: bytes("x\n".repeat(1234)) },
       { path: "seed/photos/a.jpg", content: new Uint8Array([1]) },
+      { path: "apps/recipe-box-rs/src/a.rs", content: bytes("fn a() {}\n") },
     ],
-    AGENTS,
     "{}",
   );
   const block = renderBlock(report, { sha: "0123456789abcdef0123456789abcdef01234567", date: "2026-11-17" });
@@ -267,10 +265,18 @@ describe("renderBlock と replaceBlock", () => {
     expect(block).toContain(
       "commit [0123456](https://github.com/shoji9x9/recipe-box/commit/0123456789abcdef0123456789abcdef01234567)（2026-11-17）で数えました。",
     );
-    expect(block).toContain("| その他 | 1 | 1,234 |");
-    expect(block).toContain("| seed（共有のデモの元のデータ） | 1 | — |");
-    expect(block).toContain("| **合計** | **2** | **1,234** |");
-    expect(block).toContain("| スキルの小計 | 0 | — |");
+    expect(block).toContain("| 区分 | 分類 | ファイル数 | 行数 |\n| --- | --- | ---: | ---: |\n");
+    // 区分の名前は、その区分の最初の行にだけ書く。
+    expect(block).toContain("| アプリ | バックエンド（Rust）の本番 | 1 | 1 |\n| | バックエンド（Rust）のテスト | 0 | — |\n");
+    expect(block).toContain("| 開発・運用 | スクリプト（TypeScript）の本番 | 0 | — |\n");
+    expect(block).toContain("| | その他 | 1 | 1,234 |");
+    expect(block).toContain("| | seed（共有のデモの元のデータ。JSON・写真・出典） | 1 | — |");
+    expect(block).toContain("| | **アプリの小計** | **1** | **1** |");
+    expect(block).toContain("| | **開発・運用の小計** | **2** | **1,234** |");
+    expect(block).toContain("| | **合計** | **3** | **1,235** |");
+    expect(block).not.toContain("| **アプリ** |");
+    // 別枠は、生成物とスキルの 2 行だけ。
+    expect(block).toContain("| 分類 | ファイル数 | 行数 |\n| --- | ---: | ---: |\n| 生成物 | 0 | — |\n| スキル（.claude/skills/ の 0 つ） | 0 | — |\n\n");
     expect(block).toContain("Claude Code のプラグイン（無し）");
   });
 

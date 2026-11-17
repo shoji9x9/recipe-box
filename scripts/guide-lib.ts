@@ -10,8 +10,10 @@
 // 印が見つからないとき、印の書き方が違うとき、リンクの先のファイルが無いときは、生成を失敗させる。
 import MarkdownIt from "markdown-it";
 
+/** 公開リポジトリの URL の先頭（規模の表の commit へのリンクにも使う。scripts/size-lib.ts）。 */
+export const REPOSITORY = "https://github.com/shoji9x9/recipe-box/";
 /** 解説のリンクと引用の元にする、公開リポジトリの main のファイルの URL の先頭。 */
-export const REPOSITORY_BLOB = "https://github.com/shoji9x9/recipe-box/blob/main/";
+export const REPOSITORY_BLOB = `${REPOSITORY}blob/main/`;
 
 /** expandDirectives が、引用するコードの前に置く行の形。 */
 const CITE_LINE = /^\[[^\]]+\]\(https:\/\/[^)]+\) から:$/;

@@ -421,44 +421,37 @@ git で管理しているファイルを、1 つの commit で数えたファイ
 Rust の本番のファイルの末尾にあるテストのモジュール（`#[cfg(test)] mod tests`）は、行をテストに、ファイルを本番に数えます。生成物とスキルは別枠にし、合計に入れません。
 
 <!-- size:start mise run size が書く。手で直さない -->
-commit [bbe337a](https://github.com/shoji9x9/recipe-box/commit/bbe337a335d6fadd9f1f75baf42e05bd10b40698)（2026-11-17）で数えました。数え直すには `mise run size -- --ref origin/main` を実行します。
+commit [bbe337a](https://github.com/shoji9x9/recipe-box/commit/bbe337a335d6fadd9f1f75baf42e05bd10b40698)（2026-11-17）で数えました。数え直すには `git fetch` の後に `mise run size` を実行します。
 
-| 分類 | ファイル数 | 行数 |
-| --- | ---: | ---: |
-| **アプリ** | | |
-| バックエンド（Rust）の本番 | 13 | 7,070 |
-| バックエンド（Rust）のテスト | 9 | 8,762 |
-| バックエンド（JavaScript）の本番 | 2 | 130 |
-| バックエンド（JavaScript）のテスト | 1 | 146 |
-| 画面のテンプレート（HTML） | 11 | 471 |
-| 画面の JavaScript の本番 | 3 | 866 |
-| 画面の JavaScript のテスト | 3 | 1,015 |
-| 画面の CSS とアイコン | 2 | 842 |
-| DB のマイグレーション（SQL） | 8 | 127 |
-| アプリの小計 | 52 | 19,429 |
-| **開発・運用** | | |
-| スクリプトの本番 | 13 | 2,501 |
-| スクリプトのテスト | 6 | 1,025 |
-| CI と設定 | 31 | 1,544 |
-| 開発の文書 | 9 | 1,441 |
-| 解説の元 | 9 | 1,030 |
-| seed（共有のデモの元のデータ） | 78 | 653 |
-| その他 | 2 | 280 |
-| 開発・運用の小計 | 148 | 8,474 |
-| **合計** | **200** | **27,903** |
+| 区分 | 分類 | ファイル数 | 行数 |
+| --- | --- | ---: | ---: |
+| アプリ | バックエンド（Rust）の本番 | 13 | 7,070 |
+| | バックエンド（Rust）のテスト | 9 | 8,762 |
+| | バックエンド（JavaScript）の本番 | 2 | 130 |
+| | バックエンド（JavaScript）のテスト | 1 | 146 |
+| | 画面のテンプレート（HTML） | 11 | 471 |
+| | 画面の JavaScript の本番 | 3 | 866 |
+| | 画面の JavaScript のテスト | 3 | 1,015 |
+| | 画面の CSS とアイコン | 2 | 842 |
+| | DB のマイグレーション（SQL） | 8 | 127 |
+| | **アプリの小計** | **52** | **19,429** |
+| 開発・運用 | スクリプト（TypeScript）の本番 | 11 | 2,450 |
+| | スクリプト（TypeScript）のテスト | 6 | 1,025 |
+| | スクリプト（シェル） | 2 | 51 |
+| | CI と設定 | 31 | 1,544 |
+| | 開発の文書 | 9 | 1,441 |
+| | 解説の元 | 9 | 1,030 |
+| | seed（共有のデモの元のデータ。JSON・写真・出典） | 78 | 653 |
+| | その他 | 2 | 280 |
+| | **開発・運用の小計** | **148** | **8,474** |
+| | **合計** | **200** | **27,903** |
 
 別枠（合計に入れないもの）:
 
 | 分類 | ファイル数 | 行数 |
 | --- | ---: | ---: |
 | 生成物 | 11 | 5,439 |
-| pr-finalize-loop（shoji9x9/skills） | 20 | 5,980 |
-| dependabot-merge（shoji9x9/skills） | 8 | 4,190 |
-| dependabot-alert-issue（shoji9x9/skills） | 11 | 4,471 |
-| browser-test（shoji9x9/skills） | 9 | 4,212 |
-| security-audit（cloudflare/security-audit-skill） | 20 | 5,281 |
-| modern-web-guidance（GoogleChrome/modern-web-guidance） | 1 | 77 |
-| スキルの小計 | 69 | 24,211 |
+| スキル（.claude/skills/ の 6 つ） | 69 | 24,211 |
 
 Claude Code のプラグイン（`rust-analyzer-lsp@claude-plugins-official`）は、コードがリポジトリに無いので数えません。
 <!-- size:end -->
