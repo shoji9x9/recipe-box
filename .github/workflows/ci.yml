@@ -119,6 +119,9 @@ jobs:
             cat /tmp/wrangler.log
             exit 1
           fi
+      # スモークテストが動かした自動削除の結果を、本番の確かめ（seed-demo.yml の check-cleanup）と同じスクリプトと SQL で読む。
+      - name: Check cleanup record
+        run: mise run check-cleanup -- --local
 
   secrets:
     name: Secret scan

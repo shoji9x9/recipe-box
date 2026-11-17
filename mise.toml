@@ -64,7 +64,7 @@ description = "依存の脆弱性・ライセンス・取得元・署名を調�
 run = ["cargo deny --locked check", "pnpm audit signatures"]
 
 [tasks.test]
-description = "Rust のテストと、JavaScript の単体テスト（画面と Worker の JavaScript と、seed・pin・解説（guide）・modern-web-guidance のスクリプト）を実行する"
+description = "Rust のテストと、JavaScript の単体テスト（画面と Worker の JavaScript と、seed・pin・自動削除の確かめ（check-cleanup）・解説（guide）・modern-web-guidance のスクリプト）を実行する"
 run = [
   "cargo test --workspace --locked",
   # 画面（apps/*/js-tests/）と Worker（apps/*/js-tests/worker/）とスクリプト（scripts/*.test.ts）。vitest.config.ts。
@@ -95,6 +95,10 @@ run = "node scripts/smoke-test.ts"
 [tasks.pin]
 description = "ワークスペースに、自動削除と削除から外す印を付ける（管理用。ID は標準入力で渡す。例: mise run pin -- --remote < <ID のファイル>）"
 run = "node scripts/pin-workspace.ts"
+
+[tasks.check-cleanup]
+description = "定期の自動削除が 3 時間以内に成功し、消し終えているはずのものが残っていないかを、D1 で確かめる（例: mise run check-cleanup -- --local）"
+run = "node scripts/check-cleanup.ts"
 
 [tasks.guide]
 description = "アプリの解説（/about）を、guide/ の元の文章と図から作り直す"
