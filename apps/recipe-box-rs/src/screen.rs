@@ -170,6 +170,9 @@ pub struct Session {
     /// 覚えていたワークスペースが無くなっていたことを、画面に知らせるか。
     /// この要求で分かった（[`identify`] が Cookie を消す）か、前の応答から一度だけ出すメッセージで回されてきた。
     workspace_gone: bool,
+    /// この要求の Cookie の ID のワークスペースが無くなっていて、一時的にデモを見ている印も無い。
+    /// 画面の書き込みを断る（[`refuse_write_if_gone`]）。自分のレシピ帳に書くつもりの入力を、共有のデモに書かないため。
+    own_gone: bool,
 }
 
 /// 書き込みの回数の制限に当たったことを、ハンドラーに渡す印。[`guard`] が付ける。
@@ -245,6 +248,9 @@ pub enum ScreenError {
     NoWorkspace,
     /// 画面だけの失敗。エラーの画面に、状態コードと説明を出す（API の説明が画面に合わないとき）。
     Page(StatusCode, &'static str),
+    /// 覚えていたワークスペースが無くなっていたので、書き込みを断った（[`refuse_write_if_gone`]）。
+    /// エラーの画面（`404`）に、無くなったことの知らせ（[`Layout::gone`]）だけを出す。
+    WorkspaceGone,
 }
 
 impl From<ApiError> for ScreenError {
@@ -259,6 +265,16 @@ impl IntoResponse for ScreenError {
             Self::Api(error) => error_page(&error),
             Self::NoWorkspace => see_other("/"),
             Self::Page(status, message) => message_page(status, message),
+            Self::WorkspaceGone => render(
+                StatusCode::NOT_FOUND,
+                &ErrorPage {
+                    layout: Layout {
+                        gone: Some(Flash::WorkspaceGone.message()),
+                        ..Layout::default()
+                    },
+                    edit_href: None,
+                },
+            ),
         }
     }
 }
@@ -635,6 +651,7 @@ pub async fn identify<B: Backend>(
         viewing_demo,
         flash: flash.filter(|flash| *flash != Flash::WorkspaceGone),
         workspace_gone: stale || gone_forwarded,
+        own_gone: stale && !viewing_demo,
     });
     // htmx が画面の一部だけを入れ替える要求（一覧の検索）。画面を返しても、見出しの下の知らせは入れ替わらない。
     // hx-boost の移動（HX-Boosted）と、戻るでの履歴の復元（HX-History-Restore-Request）は、body の全体を入れ替える。
@@ -701,6 +718,19 @@ async fn resolve<B: Backend>(backend: &B, session: &Session) -> Result<Option<Vi
         }));
     }
     Ok(session.own.clone().map(Viewer::Own))
+}
+
+/// 覚えていたワークスペースが無くなっていれば、画面の書き込みを断る（[`Session::own_gone`]）。
+///
+/// Cookie の ID が無ければ、画面は共有のデモを使う。そのまま書き込むと、自分のレシピ帳に書くつもりの入力
+/// （レシピや写真）が、誰でも見られるデモに入る。断った応答には、無くなったことの知らせを出すので、
+/// 送り直せば、Cookie の無い人としてデモに書き込める。
+fn refuse_write_if_gone(session: &Session) -> Result<(), ScreenError> {
+    if session.own_gone {
+        Err(ScreenError::WorkspaceGone)
+    } else {
+        Ok(())
+    }
 }
 
 /// ワークスペースが要る画面で、使うワークスペースを決める。無ければ「はじめる」画面へ移す。
@@ -1020,6 +1050,30 @@ async fn form_with_alert<B: Backend>(
     render(status, &page)
 }
 
+/// 覚えていたワークスペースが無くなっていれば（[`refuse_write_if_gone`]）、保存せずに、入力を保ったフォームを出し直す（`404`）。
+/// 知らせは見出しの下に出す（[`Layout::gone`]）。書き込みの回数の制限（`429`）と同じく、書きかけの入力（最大 7,100 文字）を消さないため。
+/// 回数の制限に当たっていれば、そちらを先に答える（[`save`]）。
+/// 使うワークスペースが無いので、デモの帯と写真の欄は出さない。
+fn form_if_gone(
+    session: &Session,
+    kind: &FormKind,
+    form: &RecipeForm,
+    limited: bool,
+) -> Option<Response> {
+    if limited || refuse_write_if_gone(session).is_ok() {
+        return None;
+    }
+    let page = form_page(
+        Layout::new(None, session),
+        kind,
+        form,
+        Vec::new(),
+        Validation::NotSubmitted,
+        PhotoArea::None,
+    );
+    Some(render(StatusCode::NOT_FOUND, &page))
+}
+
 /// 登録と更新で共通の処理。入力の誤りと、[`keeps_form`] の失敗は、フォームに出し直す。
 ///
 /// `limited` は、書き込みの回数の制限に当たったか（[`WriteLimited`]）。当たっていれば、入力を確かめる前に
@@ -1091,9 +1145,12 @@ pub async fn create<B: Backend>(
     limited: Option<Extension<WriteLimited>>,
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &session).await?;
     let limited = limited.is_some();
     let form = read_recipe_form(form, limited)?;
+    if let Some(response) = form_if_gone(&session, &FormKind::New, &form, limited) {
+        return Ok(response);
+    }
+    let viewer = require_viewer(&backend, &session).await?;
     save(&backend, &session, &viewer, FormKind::New, &form, limited).await
 }
 
@@ -1302,6 +1359,7 @@ pub async fn add_thumbnail<B: Backend>(
     query: Result<Query<ThumbnailQuery>, QueryRejection>,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let (id, photo_id) = photo::parse_ids(ids)?;
     // クエリと本文の誤りは、デモかを確かめた後に返す（[`photo::add_thumbnail`] の確かめる順）。
@@ -1329,6 +1387,7 @@ pub async fn add_photo<B: Backend>(
     raw: Option<Extension<RawPhotoBody>>,
     request: Request,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let id = recipe::parse_recipe_id(id)?;
     let from_script = raw.is_some() || !photo::has_multipart_body(request.headers());
@@ -1400,6 +1459,7 @@ pub async fn delete_photo<B: Backend>(
     Extension(session): Extension<Session>,
     ids: Result<Path<(String, String)>, PathRejection>,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let (id, photo_id) = photo::parse_ids(ids)?;
     match photo::remove(&backend, viewer.id(), &id, &photo_id).await {
@@ -1427,11 +1487,14 @@ pub async fn update<B: Backend>(
     id: Result<Path<String>, PathRejection>,
     form: Result<Form<RecipeForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
-    let viewer = require_viewer(&backend, &session).await?;
     let id = recipe::parse_recipe_id(id)?;
     let limited = limited.is_some();
     let form = read_recipe_form(form, limited)?;
     let kind = FormKind::Edit(id.to_string());
+    if let Some(response) = form_if_gone(&session, &kind, &form, limited) {
+        return Ok(response);
+    }
+    let viewer = require_viewer(&backend, &session).await?;
     save(&backend, &session, &viewer, kind, &form, limited).await
 }
 
@@ -1449,6 +1512,7 @@ pub async fn delete<B: Backend>(
     id: Result<Path<String>, PathRejection>,
     form: Result<Form<DeleteForm>, FormRejection>,
 ) -> Result<Response, ScreenError> {
+    refuse_write_if_gone(&session)?;
     let viewer = require_viewer(&backend, &session).await?;
     let id = recipe::parse_recipe_id(id)?;
     let Form(form) = form.map_err(|rejection| form_error(&rejection))?;

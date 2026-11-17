@@ -162,6 +162,11 @@ describe("判定の関数", () => {
     )}</main>`;
     expect(await failureReason(new Response(body, { status: 409 }))).toBe("上限です");
   });
+
+  test("failureReason は、ワークスペースが無くなったことの知らせだけなら、それを理由にし、残りを送らない", async () => {
+    const body = `<main>${messagesHtml("", `<p class="message error" data-workspace-gone>見つかりませんでした</p>`)}</main>`;
+    expect(await classify(new Response(body, { status: 404 }))).toEqual({ kind: "stop", reason: "見つかりませんでした" });
+  });
 });
 
 describe("画面の入れ替え", () => {
