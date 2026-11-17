@@ -1,7 +1,7 @@
 name: Reset demo
 
 # 共有のデモは誰でも書き換えられるので、毎日 seed でサンプルの状態に戻す（docs/spec.md の「デモ用のデータ」）。
-# 別の job（check-cleanup）で、定期の自動削除が最近に成功し、失敗した実行が無いかを D1 の記録で確かめ、失敗なら job を失敗させて通知のメールを出す
+# 別の job（check-cleanup）で、定期の自動削除が最近に成功し、消し終えているはずのものが残っていないかを D1 で確かめ、失敗なら job を失敗させて通知のメールを出す
 # （docs/development.md の「失敗の通知」）。seed と別の job にし、確かめが失敗してもデモの入れ直しは止めない。
 # デモの ID と Cloudflare の API トークンは、GitHub Environment「production」の secret に置く（deploy.yml と同じ）。
 # デモの ID を知れば誰でもデモに書き込めるので、公開リポジトリの Actions のログで伏せ字にする。
@@ -160,7 +160,7 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$database_id"
-      # 公開のログには、成功か失敗かと、最後の成功から経った時間だけを出す（scripts/check-cleanup.ts）。
+      # 公開のログには、成功か失敗かと、最後の成功から経った時間と、残っているものの種類だけを出す（scripts/check-cleanup.ts）。
       # マイグレーション（0007）を当てた直後は記録が無いので、最初の 1 回は失敗する（docs/development.md の「失敗の通知」）。
       - name: Check cleanup runs
         env:

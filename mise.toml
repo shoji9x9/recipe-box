@@ -97,7 +97,7 @@ description = "ワークスペースに、自動削除と削除から外す印�
 run = "node scripts/pin-workspace.ts"
 
 [tasks.check-cleanup]
-description = "定期の自動削除が、3 時間以内に成功し、26 時間に失敗が無いかを、D1 の記録で確かめる（例: mise run check-cleanup -- --local）"
+description = "定期の自動削除が 3 時間以内に成功し、消し終えているはずのものが残っていないかを、D1 で確かめる（例: mise run check-cleanup -- --local）"
 run = "node scripts/check-cleanup.ts"
 
 [tasks.guide]

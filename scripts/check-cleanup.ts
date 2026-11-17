@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 定期の自動削除が、3 時間以内に成功し、直近 26 時間に失敗した実行が無いかを、D1 の cleanup_runs で確かめる（Issue #56）。
+// 定期の自動削除が、3 時間以内に成功し（D1 の cleanup_runs）、消し終えているはずのものが D1 に残っていないかを確かめる（Issue #56）。
 // そうでなければ終了コード 1 で止まる（判定は scripts/cleanup-check-lib.ts）。
 // .github/workflows/seed-demo.yml の job が毎日動かし、失敗すると GitHub が通知のメールを送る（docs/development.md の「失敗の通知」）。
 // Node が型の注釈を取り除いて、そのまま動かす（ビルドしない。docs/development.md の「言語」）。
@@ -7,7 +7,7 @@
 // 使い方: node scripts/check-cleanup.ts (--local | --remote)
 //   --local:  ローカルの D1（mise run dev が使うもの）
 //   --remote: 本番の D1。wrangler の認証（wrangler login か CLOUDFLARE_API_TOKEN）が要る
-// 公開の Actions のログに出るので、成功か失敗かと、最後の成功から経った時間だけを表示する（数や ID は出さない）。
+// 公開の Actions のログに出るので、成功か失敗かと、最後の成功から経った時間と、残っているものの種類だけを表示する（数や ID は出さない）。
 import { checkSql, cleanupCheck } from "./cleanup-check-lib.ts";
 import { hasOwnKey } from "./seed-lib.ts";
 import { redact, type Target, wrangler } from "./wrangler.ts";

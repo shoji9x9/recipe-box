@@ -277,9 +277,27 @@ pub const CLEANUP_SUBREQUESTS: i64 = 1
     + 1;
 const _: () = assert!(CLEANUP_SUBREQUESTS <= MAX_SUBREQUESTS_PER_RUN);
 
+/// 対象になってから、自動削除が消し終えているはずの時間（1 日）。
+///
+/// 失敗を知らせる確かめ（`scripts/check-cleanup.ts`）は、これを過ぎても残っている、使われていないワークスペースと、
+/// 書き込みか削除の途中で残った写真の行を、失敗として知らせる。対象は実行ごとにずらして選ぶ（[`pick_for_run`]）ので、
+/// 消すたびに失敗するものがあっても、ほかの実行は成功になる。最後の成功だけでは見逃すので、残っているもので見る。
+/// アプリ全体のものがすべて同時に対象になっても、この間の実行で消し終える（下の 2 つの assert）ので、ふだんは残らない。
+/// 値を変えたら、`scripts/cleanup-check-lib.ts` の値も直す（`scripts/cleanup-check-lib.test.ts` が確かめる）。
+pub const CLEANUP_OVERDUE_MILLIS: i64 = DAY_MILLIS;
+/// [`CLEANUP_OVERDUE_MILLIS`] の間に動く、定期実行の回数。
+const OVERDUE_RUNS: i64 = CLEANUP_OVERDUE_MILLIS / CLEANUP_INTERVAL_MILLIS;
+// アプリ全体のワークスペースが、すべて同時に対象になっても、その間に消し終える。
+const _: () = assert!(MAX_WORKSPACES_PER_RUN * OVERDUE_RUNS >= MAX_WORKSPACES);
+// アプリ全体の写真の行（最大 40,000）に、すべて同時に印が残っても、片付けの対象になってから、その間に片付け終える。
+const _: () = assert!(
+    MAX_WORKSPACES * crate::recipe::MAX_RECIPES_PER_WORKSPACE * photo::MAX_PHOTOS_PER_RECIPE
+        <= photo::MAX_PENDING_BATCHES_PER_RUN * photo::MAX_PHOTOS_PER_DELETE * OVERDUE_RUNS
+);
+
 /// 自動削除の結果（`cleanup_runs` の行）を残す期間（7 日）。これより古い結果は、結果を残すときに消す。
 ///
-/// 失敗を知らせる確かめ（`.github/workflows/seed-demo.yml`）が読むのは直近の数時間だけだが、
+/// 失敗を知らせる確かめ（`scripts/check-cleanup.ts`）が読むのは最後の成功だけだが、
 /// 知らせを受けてから、いつから失敗していたかを手で調べられるよう、1 週間分（168 行）を残す。
 pub const CLEANUP_RUNS_KEPT_MILLIS: i64 = 7 * DAY_MILLIS;
 
@@ -336,7 +354,8 @@ impl CleanupSummary {
 /// 3. 使われていないワークスペースを、最終利用日時の古い順に並べ、[`MAX_WORKSPACES_PER_RUN`] 個まで消す（[`pick_for_run`]）。
 ///    残りは次の実行に回す。
 /// 4. 結果（成功したか・消した数・失敗した数）を D1 に残し、[`CLEANUP_RUNS_KEPT_MILLIS`] より古い結果を消す（1 回の batch）。
-///    途中で止まった実行（例外や時間切れ）は結果を残さないので、失敗を知らせる確かめは「最近に成功の結果が無い」ことで見つける。
+///    途中で止まった実行（例外や時間切れ）は結果を残さないので、失敗を知らせる確かめは「最近に成功の結果が無い」ことで見つける
+///    （消すたびに失敗するものは、[`CLEANUP_OVERDUE_MILLIS`] を過ぎて残っていることで見つける）。
 ///
 /// 1 つのワークスペースで失敗しても、ほかのワークスペースは消す。
 /// 失敗の理由はログに出す。ワークスペースの ID は持ち主の証なので、ログに出す前に伏せる（[`crate::id::redact`]）。

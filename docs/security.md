@@ -112,7 +112,7 @@ Worker の CPU 時間を抑えるため、ファイルの頭の部分（画像�
   - リクエストごとの記録（invocation logs）は残さない（`invocation_logs = false`）。Cloudflare は Cookie などのヘッダーを伏せるとしているが、API の `X-Workspace-Id` が伏せられるかを確かめられないためである。
     リクエストごとの CPU 時間などは、`wrangler tail` で見る（そのときだけ流れ、残らない）。
 - 定期の自動削除の結果（D1 の `cleanup_runs`）を確かめる job（`seed-demo.yml` の `check-cleanup`）は、公開リポジトリの Actions のログに出る。
-  そのため、成功か失敗かと、最後の成功から経った時間だけを出し、消した数・ID・アカウントの状況は出さない（`scripts/check-cleanup.ts`）。
+  そのため、成功か失敗かと、最後の成功から経った時間と、残っているものの種類だけを出し、数・ID・アカウントの状況は出さない（`scripts/check-cleanup.ts`）。
   D1 のデータベースの ID は、seed の job と同じく `::add-mask::` で伏せる。`cleanup_runs` は、ワークスペースの ID を持たない。
 
 ## サプライチェーン攻撃の対策
