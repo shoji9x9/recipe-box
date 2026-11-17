@@ -24,7 +24,8 @@ const OVERDUE = {
   overdue_photos: "書き込みか削除の途中で残った写真の行",
 } as const;
 // 1 日の数を数えるための古い記録（photo_uploads・workspace_creations）は数えない。消すのは 1 回の batch で、
-// 失敗すればその実行は成功にならない（ずらして選ぶことも無い）ので、最後の成功が 3 時間以内なら残っていないためである。
+// 失敗すればその実行は成功にならない（ずらして選ぶことも無い）ので、最後の成功が 3 時間以内なら、
+// その実行の UTC の 0 時より前の記録は残っていないためである（消す境目は Rust のテストの records_before_today_are_deleted が確かめる）。
 
 // 埋め込む日時を整数にする（wrangler d1 execute は値を別に渡せない）。
 function millis(value: number): number {

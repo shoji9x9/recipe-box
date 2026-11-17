@@ -290,7 +290,7 @@ pub const CLEANUP_OVERDUE_MILLIS: i64 = DAY_MILLIS;
 const OVERDUE_RUNS: i64 = CLEANUP_OVERDUE_MILLIS / CLEANUP_INTERVAL_MILLIS;
 // 1 日以上にして、アプリ全体のワークスペースが、すべて同時に対象になっても、その間に消し終えるようにする
 // （1 日で消し終えることは、MAX_WORKSPACES_PER_RUN の assert が確かめる）。
-const _: () = assert!(OVERDUE_RUNS >= CLEANUP_RUNS_PER_DAY);
+const _: () = assert!(CLEANUP_OVERDUE_MILLIS >= DAY_MILLIS);
 // アプリ全体の写真の行（最大 40,000）に、すべて同時に印が残っても、片付けの対象になってから、その間に片付け終える。
 const _: () = assert!(
     MAX_WORKSPACES * crate::recipe::MAX_RECIPES_PER_WORKSPACE * photo::MAX_PHOTOS_PER_RECIPE
