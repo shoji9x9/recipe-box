@@ -187,7 +187,7 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
 
 #### Monitors の作り方
 
-Monitors は、ダッシュボードでだけ作れる（beta の間は、API・Terraform・wrangler では作れない）。下の表の 10 個を、1 つずつ手で作る（[Monitors](https://developers.cloudflare.com/notifications/monitors/)）。
+Monitors は、ダッシュボードでだけ作れる（beta の間は、API・Terraform・wrangler では作れない）。下の表の 5 個を、1 つずつ手で作る（[Monitors](https://developers.cloudflare.com/notifications/monitors/)）。
 
 準備: アカウント ID を調べる。ダッシュボードを開いたときの URL（`https://dash.cloudflare.com/<アカウント ID>/...`）の、最初の 32 文字の部分である。Workers & Pages の概要の画面の右側の「Account ID」でも見られる。
 アカウント ID は、下の SQL の `<アカウント ID>` に貼るときだけ使い、リポジトリ・Issue・PR には書かない。
@@ -197,55 +197,48 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 1. ダッシュボードの左のメニューで Alerts > Monitors を開き、Create Monitor を押す。
 2. 検出のしかたで Threshold を選ぶ（Anomaly detection・Service-level objective は使わない）。
 3. クエリを Custom SQL にし、下の表の番号の SQL を貼って、`<アカウント ID>` を置き換える。最後に `;` を付けない。
-   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。時刻の列の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」のように断られる。4 の R2 の `usageReportTimestamp` も、「query already contains time predicates on `usageReportTimestamp`; remove them to use time_range」で断られた（2026-11、画面で確かめた）。Monitors は、この列にも時間の範囲を当てる。
+   時間の条件は SQL に書かない。SQL は、Run every の長さの直近の区間で計算される（下の説明）。時刻の列の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」のように断られる（R2 の dataset の `usageReportTimestamp` のような、ほかの時刻の列でも同じだった。2026-11）。
 4. 表のとおりに、次の欄を入れる。
-   - Run every: Custom を選び、表の値にする（Automatic や既定のままにしない。区間が短くなり、1・9 は知らせ続け、5〜7 は少なく数えて知らせなくなり、3・4 は記録が区間に入らずに 0 になって知らせなくなる）。
+   - Run every: Custom を選び、表の値にする（Automatic や既定のままにしない。区間が短くなり、1・5 は知らせ続け、3・4 は少なく数えて知らせなくなる）。
    - Average over: Custom を選び、Run every と同じ値にする。
    - Trigger when: Query result の比べ方（`<`・`>`・`>=`）と値を、表のとおりに入れる。
    - Repeat notification after: 24h（続いている間は、1 日に 1 通だけ届く）。
 5. 保存する前に、プレビューの範囲を Last 24 hours などの長いものにし、グラフの点が Run every ごとに並び、値が表の「ふだんの値」の近くで、条件に当たらないことを確かめる。
 6. 表の「名前」を付け、Description に下の表の文を入れ、通知の先にメール（自分のアドレス）を足して、作る。
 
+Monitors（custom analytics policies）は、1 つのアカウントで 5 個までしか作れない（6 個目は「this account can have at most 5 custom analytics policies」で断られる。2026-11）。そのため、知らせるものを次の 5 個にまとめている。
+
 | 番号 | 名前 | 知らせるもの | Run every と Average over | Trigger when | ふだんの値 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `recipe-box: cron が動いていない` | 自動削除の cron が、2 時間に 1 回も成功しない | 2h | `<` `1` | 2 |
-| 2 | `recipe-box: cron が落ちた` | 自動削除の cron が、1 時間のうちに成功以外で終わった | 1h | `>` `0` | 0 |
-| 3 | `recipe-box: D1 の保存量` | D1 の保存量が、無料の範囲（1 つのデータベースで 500 MB）の 50 %（250,000,000 バイト）を超えた | 24h | `>` `250000000` | それより十分に小さい（0 でない） |
-| 4 | `recipe-box: R2 の保存量` | R2 の写真のバケットの保存量が、無料の範囲（10 GB-月）の 50 %（5,000,000,000 バイト）を超えた | 24h | `>` `5000000000` | それより十分に小さい（0 でない） |
-| 5 | `recipe-box: Workers のリクエスト` | アカウントの Workers のリクエストが、24 時間で、1 日の無料の範囲（10 万回）の 80 % を超えた | 24h | `>` `80000` | それより十分に小さい |
-| 6 | `recipe-box: D1 の読んだ行` | D1 の読んだ行が、24 時間で、1 日の無料の範囲（500 万行）の 80 % を超えた | 24h | `>` `4000000` | それより十分に小さい |
-| 7 | `recipe-box: D1 の書いた行` | D1 の書いた行が、24 時間で、1 日の無料の範囲（10 万行）の 80 % を超えた | 24h | `>` `80000` | それより十分に小さい |
-| 8 | `recipe-box: Worker のエラーの割合` | Worker の成功以外の status（接続を切られたものを除く）が、15 分に 3 回以上あり、割合が 10 % を超えた | 15m | `>` `10` | 0 |
-| 9 | `recipe-box: リクエストが無い` | cron を除く Worker の起動が、26 時間 0 回 | 26h | `<` `1` | 1 以上 |
-| 10 | `recipe-box: 5xx の応答` | Worker が `500` 以上の状態コードを、15 分に 3 回以上返した | 15m | `>=` `3` | 0 |
+| 2 | `recipe-box: Worker の失敗` | Worker の失敗（成功以外の status か、`500` 以上の応答。接続を切られたものを除く）が、15 分に 3 回以上 | 15m | `>=` `3` | 0 |
+| 3 | `recipe-box: D1 の読み書き` | D1 の読んだ行（1 日 500 万行）か書いた行（1 日 10 万行）の、24 時間の量が、無料の範囲の 80 % を超えた（値は、無料の範囲に対する % の大きいほう） | 24h | `>` `80` | 80 より十分に小さい |
+| 4 | `recipe-box: Workers のリクエスト` | アカウントの Workers のリクエストが、24 時間で、1 日の無料の範囲（10 万回）の 80 % を超えた | 24h | `>` `80000` | それより十分に小さい |
+| 5 | `recipe-box: リクエストが無い` | cron を除く Worker の起動が、26 時間 0 回 | 26h | `<` `1` | 1 以上 |
 
 Description（知らせのメールに出る説明）は、何が起きたかと、どこを見るかを書く。
 
 | 番号 | Description |
 | --- | --- |
 | 1 | 自動削除の cron（1 時間ごと）が、直近 2 時間に 1 回も成功していない。Worker（recipe-box）のログと Cron Triggers を見る。docs/development.md の「失敗の通知」 |
-| 2 | 自動削除の cron が、成功以外で終わった。Worker（recipe-box）のログを見る。docs/development.md の「失敗の通知」 |
-| 3 | D1 の保存量が、無料の範囲の 50 % を超えた。docs/security.md の「費用の対策」を見る |
-| 4 | R2 の写真の保存量が、無料の範囲の 50 % を超えた。どの行からもたどれないデータが残っていないかを見る。docs/security.md の「費用の対策」 |
-| 5 | Workers のリクエストが、1 日の無料の範囲の 80 % を超えた。攻撃や想定外の呼び出しを、Worker の Metrics で見る |
-| 6 | D1 の読んだ行が、1 日の無料の範囲の 80 % を超えた。D1 の Metrics と、Worker のログを見る |
-| 7 | D1 の書いた行が、1 日の無料の範囲の 80 % を超えた。D1 の Metrics と、Worker のログを見る |
-| 8 | Worker の失敗の割合が高い。Worker のログと `wrangler tail` を見る |
-| 9 | 26 時間、cron 以外のリクエストが無い。毎日のデモの入れ直し（seed-demo.yml）が止まっていないか、Worker が動いているかを見る |
-| 10 | Worker が 500 以上の応答を続けて返した。Worker のログと `wrangler tail` を見る |
+| 2 | Worker が 15 分に 3 回以上失敗した。Worker のログと `wrangler tail` を見る |
+| 3 | D1 の読み書きが、1 日の無料の範囲の 80 % を超えた。D1 の Metrics と、Worker のログを見る |
+| 4 | Workers のリクエストが、1 日の無料の範囲の 80 % を超えた。攻撃や想定外の呼び出しを、Worker の Metrics で見る |
+| 5 | 26 時間、cron 以外のリクエストが無い。毎日のデモの入れ直し（seed-demo.yml）が止まっていないか、Worker が動いているかを見る |
 
 - SQL は、Run every ごとに、その長さの直近の区間で計算される（公式の文書の「Automatic」の時間の範囲。2026-11、1 の Monitor のプレビューのグラフで確かめた。Run every 1h では 1 時間ごとに 1、2h では 2 時間ごとに 2 だった）。
   Average over の意味（複数の点の平均か、続いた時間か）は確かめていないので、Run every と同じ値にして、点を 1 つだけ比べるようにしている。
 - 区間は重ならないので、区間の終わり近くの記録が分析に遅れて届くと、どの実行にも数えられず、知らせないことがある。cron の失敗は、上の 1 の確かめ（GitHub Actions）でも見つかる。
-- 1・2 の cron は 1 時間ごとなので、2 時間に 1 回も成功しなければ、起動しなかったか、例外で落ちた。1 回だけの抜けは 1 では知らせない。2 は、1 回でも落ちれば知らせる。
-  自動削除の一部の失敗（`scheduled` は成功で終わる）は、ここでは分からず、上の 1 の確かめで知らせる。
-- 3・4 の保存量は、記録が出る間隔が分からないので、24 時間の最大を比べる。プレビューで 0 になるなら、記録が無いので、Run every を見直す。
-- 4 の R2 は、アプリの上限でアプリ全体の写真の合計を 5 GB（無料の範囲のちょうど 50 %）までにしている（docs/security.md の「費用の対策」）。超えるのは、どの行からもたどれないデータが残ったときなどで、それを知らせる。
-- 5〜7 は 1 日に 1 回、直近 24 時間の量を比べるので、知らせが最大 1 日遅れる。無料の範囲は 1 日ごとに数え直されるので、これで足りるとした。5 は、無料の範囲がアカウントの全体で数えられるので、Worker で絞らない。1 日の量は、Cloudflare が UTC の 0 時で数え直すが、ここでは直近の 24 時間で近似する。
-- 8・10 は、15 分の区間ごとに比べる。区間をまたいでゆっくり続く失敗（例: 7 分ごとの 5xx）は、どの区間も 3 回に届かず知らせない。リクエストが少ないアプリなので、1 回の失敗で振れないよう、15 分に 3 回以上とした。
-  8 の `clientDisconnected`（送り手が接続を切った）は、アプリの失敗ではないので除く。
-  10 は、アプリが自分で返す `500` などの応答が、8 の `status` では成功に数えられうるので、応答の状態コードで別に数える。
-- 9 は、cron の起動を除いて数える（cron は 1 で見る）。毎日のデモの入れ直し（`seed-demo.yml`）が API を呼ぶので、ふだんは 0 にならない。seed の時刻のずれを見込んで 26 時間にする。
+- 1 の cron は 1 時間ごとなので、2 時間に 1 回も成功しなければ、起動しなかったか、例外で落ちた。1 回だけの抜けは知らせない。
+  cron が 1 回だけ落ちたことと、自動削除の一部の失敗（`scheduled` は成功で終わる）は、Monitors では知らせず、上の 1 の確かめで知らせる（落ち続ければ 1 も知らせる）。
+- 2 は、例外などの成功以外の status と、アプリが自分で返す `500` などの応答（status では成功に数えられうる）を、合わせて数える。`clientDisconnected`（送り手が接続を切った）は、アプリの失敗ではないので除く。
+  リクエストが少ないアプリなので、1 回の失敗で知らせないよう 15 分に 3 回以上とした。区間をまたいでゆっくり続く失敗（例: 7 分ごと）は、どの区間も 3 回に届かず知らせない。
+- 3 は、読んだ行と書いた行を、それぞれの 1 日の無料の範囲に対する % にし、大きいほうを比べる（SQL は `greatest` を使えないので `CASE` で選ぶ）。
+- 3・4 は 1 日に 1 回、直近 24 時間の量を比べるので、知らせが最大 1 日遅れる。無料の範囲は 1 日ごとに数え直されるので、これで足りるとした。4 は、無料の範囲がアカウントの全体で数えられるので、Worker で絞らない。1 日の量は、Cloudflare が UTC の 0 時で数え直すが、ここでは直近の 24 時間で近似する。
+- 5 は、cron の起動を除いて数える（cron は 1 で見る）。毎日のデモの入れ直し（`seed-demo.yml`）が API を呼ぶので、ふだんは 0 にならない。seed の時刻のずれを見込んで 26 時間にする。
+- 5 個に収めるため、次のものは Monitors では知らせない。
+  - D1 と R2 の保存量: アプリの上限で、無料の範囲の内側に抑えている（docs/security.md の「費用の対策」。R2 はアプリ全体で 5 GB まで）。毎月、ダッシュボードの D1 と R2 の画面で見る（下の「最低限のメンテナンス」）。
+  - cron が 1 回だけ落ちたこと: 上のとおり。
 - 無料の範囲の値は 2026-11 時点のもの（docs/security.md の「費用の対策」）。
 
 ```sql
@@ -254,61 +247,34 @@ SELECT countIf(status = 'success') AS value FROM events.workersInvocations WHERE
 ```
 
 ```sql
--- 2. recipe-box: cron が落ちた
-SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType = 'cron' AND status <> 'success'
+-- 2. recipe-box: Worker の失敗
+SELECT countIf(status NOT IN ('success', 'clientDisconnected') OR httpResponseStatus >= 500) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box'
 ```
 
 ```sql
--- 3. recipe-box: D1 の保存量
-SELECT MAX(databaseSizeBytes) AS value FROM states.d1Storage WHERE accountTag = '<アカウント ID>'
+-- 3. recipe-box: D1 の読み書き
+SELECT CASE WHEN SUM(rowsWritten) * 50 > SUM(rowsRead) THEN SUM(rowsWritten) * 100.0 / 100000 ELSE SUM(rowsRead) * 100.0 / 5000000 END AS value FROM events.d1BackendRequest WHERE accountTag = '<アカウント ID>'
 ```
 
 ```sql
--- 4. recipe-box: R2 の保存量
-SELECT MAX(payloadSizeBytes + metadataSizeBytes) AS value FROM states.r2CombinedStorage WHERE accountTag = '<アカウント ID>' AND bucketName = 'recipe-box-photos'
-```
-
-```sql
--- 5. recipe-box: Workers のリクエスト
+-- 4. recipe-box: Workers のリクエスト
 SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>'
 ```
 
 ```sql
--- 6. recipe-box: D1 の読んだ行
-SELECT SUM(rowsRead) AS value FROM events.d1BackendRequest WHERE accountTag = '<アカウント ID>'
-```
-
-```sql
--- 7. recipe-box: D1 の書いた行
-SELECT SUM(rowsWritten) AS value FROM events.d1BackendRequest WHERE accountTag = '<アカウント ID>'
-```
-
-```sql
--- 8. recipe-box: Worker のエラーの割合
-SELECT CASE WHEN countIf(status NOT IN ('success', 'clientDisconnected')) < 3 THEN 0.0 ELSE countIf(status NOT IN ('success', 'clientDisconnected')) * 100.0 / COUNT(*) END AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box'
-```
-
-```sql
--- 9. recipe-box: リクエストが無い
+-- 5. recipe-box: リクエストが無い
 SELECT COUNT(*) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box' AND invocationType <> 'cron'
-```
-
-```sql
--- 10. recipe-box: 5xx の応答
-SELECT countIf(httpResponseStatus >= 500) AS value FROM events.workersInvocations WHERE accountTag = '<アカウント ID>' AND scriptName = 'recipe-box'
 ```
 
 SQL について:
 
 - どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の条件は書かない・最後に `;` を付けない）に合わせてある。
 - 結果の行が無いと Monitors は何も知らせないが、`COUNT`・`SUM`・`MAX`・`countIf` の集計は、合う行が無くても 0 の 1 行を返す（確かめ済み）。
-  そのため、dataset や列の名前が変わって合う行が無くなっても、3〜8・10 は 0 のままで、知らせも失敗も出ない。毎月の確認で、名前と、プレビューで 0 でない値が出ることを確かめる（1・9 は、行が無くなれば知らせが来る）。
-- 10 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`。4 は `usageReportTimestamp`）を足した形で確かめた。Monitors に貼る、時刻の条件の無い形は、SQL API では保存してある期間の全体を数えるので、そのままでは確かめていない。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
+  そのため、dataset や列の名前が変わって合う行が無くなっても、2〜4 は 0 のままで、知らせも失敗も出ない。毎月の確認で、名前と、プレビューで 0 でない値が出ることを確かめる（1・5 は、行が無くなれば知らせが来る）。
+- 5 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、末尾に `AND timestamp >= NOW() - INTERVAL '<Run every の長さ>'`（例: `'2' HOUR`・`'15' MINUTE`）を足した形で確かめた。Monitors に貼る、時刻の条件の無い形は、SQL API では保存してある期間の全体を数えるので、そのままでは確かめていない。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
 - **確かめていない**こと:
   - Average over の意味（上の説明）。Run every と同じ値にしているので、判定には効かない見込みである。
-  - 区間が Run every になることは、`timestamp` の列を持つ 1 で確かめた。3・4（`states.` の dataset）でも同じに区間を当てることは、断られたときの文（時間の範囲をその列に当てる）から推しているが、値で確かめてはいない。保存量は日ごとにほとんど変わらないので、プレビューでも見分けにくい。
-    4 が区間を当てずに保存期間の全体の最大を数えていると、一度 5 GB を超えた後は、片付けても記録が古くなって消えるまで知らせ続けうる。そのときは、知らせが続いても R2 の今の保存量（ダッシュボードの R2 の画面）を見て判断する。
-  - `events.` の dataset は、量に応じて間引かれる（adaptive sampling）と公式の文書にある。間引かれると、5〜7 の数を少なく数える。introspection で間引きの重みの列（sample interval など）があれば、`COUNT(*)` をその列の `SUM` に替える。間引かれるのは量の多いときなので、しきい値に近いときほど、知らせが遅れうる。
+  - `events.` の dataset は、量に応じて間引かれる（adaptive sampling）と公式の文書にある。間引かれると、3・4 の数を少なく数える。introspection で間引きの重みの列（sample interval など）があれば、`COUNT(*)` をその列の `SUM` に替える。間引かれるのは量の多いときなので、しきい値に近いときほど、知らせが遅れうる。
 - beta の間は、dataset と列の名前が変わりうる。毎月の確認（下の「最低限のメンテナンス」）で、名前を問い合わせて確かめる。
   `GET /client/v4/analytics/sql/introspection?account_tag=<アカウント ID>&dataset_name=<dataset の名前>&include_columns=true` を、Account Analytics Read の権限を持つトークンで呼ぶ（結果は公開の場所に貼らない）。
 
@@ -364,8 +330,9 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
 ### 毎月
 
 - `dependabot-alert-issue` スキルで、Dependabot の alert から Issue を作る。`mise run audit` も実行する。
-- Cloudflare の Monitors の設定が残っているか（上の「失敗の通知」の 1〜10 があり、Run every・Average over・Trigger when が表のとおりで、通知の先が今のメールか）を、ダッシュボードの Alerts > Monitors で見る。beta の機能で、設定はリポジトリに残らない。
+- Cloudflare の Monitors の設定が残っているか（上の「失敗の通知」の 1〜5 があり、Run every・Average over・Trigger when が表のとおりで、通知の先が今のメールか）を、ダッシュボードの Alerts > Monitors で見る。beta の機能で、設定はリポジトリに残らない。
   SQL が使う dataset と列の名前が変わっていないかも、introspection（上の「Monitors の作り方」）で確かめる。
+- D1 と R2 の保存量を、ダッシュボードの D1 と R2 の画面で見る。無料の範囲（D1 は 1 つのデータベースで 500 MB、R2 は 10 GB-月）の 50 % を超えていれば、原因を調べる（Monitors の数の上限のため、保存量は知らせない。上の「Monitors の作り方」）。
 - `outdated.yml` の Issue にある mise のツールを、まとめて上げる（`mise install` の後に `mise lock`。AGENTS.md の「ツールの版」）。Node は、使っているメジャーの版のサポートの終わり（EOL）が近くないかも見る。
 
 ### schedule が止まらないようにする
