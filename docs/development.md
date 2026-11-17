@@ -31,6 +31,7 @@ pnpm install    # wrangler・commitlint・vitest・TypeScript・chrome-devtools-
 | `mise run lint` | 整形の確認と静的解析（clippy・taplo・rumdl・actionlint・ghalint・zizmor・shellcheck・JavaScript とテストの型の確認（`tsc`））と、modern-web-guidance のスキルとパッケージの版がそろっているかの確認 |
 | `mise run pin -- (--local \| --remote) [--unpin] < <ID のファイル>` | ワークスペースに、自動削除と削除から外す印を付ける（外す）。共有のデモに使う管理用のコマンドで、本番（`--remote`）には wrangler の認証が要る。デモの ID を表示やシェルの履歴に残さないよう、ID は標準入力で渡す |
 | `mise run seed -- (--local \| --remote) < <ID のファイル>` | 共有のデモを、サンプルのレシピと写真（`seed/`）の状態に戻す。ローカル（`--local`）では先に別の端末で `mise run dev` を起動しておく。本番（`--remote`）には wrangler の認証が要る。印（`mise run pin`）の付いたワークスペースにだけ入れる。ID は標準入力で渡す |
+| `mise run check-cleanup -- (--local \| --remote)` | 定期の自動削除が 3 時間以内に成功したかを、D1 の `cleanup_runs` で確かめる。成功していなければ終了コード 1 で止まる（下の「失敗の通知」）。本番（`--remote`）には wrangler の認証が要る |
 | `mise run guide` | アプリの解説（`/about/`）を、`guide/` の元の文章と図から作り直す（下の「解説」）。`mise run lint` は、作り直したものが commit したものと同じかを確かめる |
 | `mise run mwg -- (search \| list \| retrieve) ...` | Web の作り方の指針（modern-web-guidance）を引く。画面の HTML・CSS・JavaScript を書く前に使う（AGENTS.md の「スキル」）。利用統計を送らず、読むだけのサブコマンドに限る |
 | `mise run audit` | 依存の脆弱性・ライセンス・取得元・署名を調べる（cargo-deny・pnpm audit signatures） |
@@ -88,6 +89,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `scripts/check-mwg-version.sh` | modern-web-guidance のスキルとパッケージの版がそろっているかを確かめる（`mise run lint`）。単体テストは `scripts/mwg.test.ts` |
 | `scripts/smoke-test.ts` | ローカルの Worker に API を呼んで確かめるスクリプト（`mise run smoke`。CI でも使う） |
 | `scripts/pin-workspace.ts` | ワークスペースに、自動削除と削除から外す印を付ける・外す管理用のスクリプト（`mise run pin`）。出力の読み方は `scripts/pin-lib.ts` にあり、単体テストは `scripts/pin-lib.test.ts` |
+| `scripts/check-cleanup.ts` | 定期の自動削除の結果（`cleanup_runs`）を確かめるスクリプト（`mise run check-cleanup`。`seed-demo.yml` と CI が使う）。出力の読み方と判定は `scripts/cleanup-check-lib.ts` にあり、単体テストは `scripts/cleanup-check-lib.test.ts` |
 | `scripts/wrangler.ts` | seed と pin が wrangler を動かす部分（失敗の文の伏せ字と、ID の読み方）。失敗の文を作る部分は `scripts/wrangler-lib.ts` にあり、単体テストは `scripts/wrangler-lib.test.ts` |
 | `.github/workflows/` | CI・デプロイ・レビューなどの workflow と、その lockfile（`actions.lock`） |
 
@@ -120,7 +122,7 @@ commit のときは、lefthook が整形・静的解析・gitleaks・commitlint 
 | `pr-title.yml` | PR のタイトルが Conventional Commits の形かを調べる（タイトルを直したときにも動く） |
 | `codeql.yml` | Rust のコード・JavaScript と TypeScript・workflow を CodeQL で解析する |
 | `claude-review.yml` | PR を Claude Code でレビューする |
-| `seed-demo.yml` | 毎日 UTC の 19 時（日本時間の 4 時）に、共有のデモを seed で入れ直す（手でも実行できる） |
+| `seed-demo.yml` | 毎日 UTC の 19 時（日本時間の 4 時）に、共有のデモを seed で入れ直す（手でも実行できる）。別の job で、定期の自動削除が 3 時間以内に成功したかを確かめる（下の「失敗の通知」） |
 | `deploy.yml` | main に入った変更を Cloudflare Workers へデプロイする。D1 と R2 のバケットが無ければ作り、先に D1 にマイグレーションを当てる。デプロイの後に、本番の API・トップの画面・静的アセットが 200 を返すかを、GET で確かめる |
 | `dependabot-automerge.yml` | Dependabot の PR のうち、1.0 以上の依存の minor と patch の更新を自動でマージする。GITHUB_TOKEN でのマージでは `deploy.yml` の push が動かないので、マージされるのを待って `deploy.yml` を起動する |
 | `outdated.yml` | mise のツールに新しい版があれば、追跡用の Issue を作る |
@@ -132,7 +134,8 @@ D1 のデータベース（`recipe-box`）は、無ければ `deploy.yml` が作
 
 使われていないワークスペースの自動削除は、Cron Trigger（`wrangler.toml` の `[triggers]`）で 1 時間ごとに動く。ローカルで確かめるときは、`apps/recipe-box-rs` で `pnpm exec wrangler dev --test-scheduled` を起動し、`curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"` で呼ぶ。
 結果は起動した端末のログに、「使われていないワークスペースの自動削除が終わった」か「使われていないワークスペースの自動削除で失敗があった」で始まる行で出る。
-CI は、`wrangler dev --test-scheduled` のログを `SCHEDULED_LOG` で smoke に渡し、ワークスペースを古くして写真の行に印を付けてから（wrangler でローカルの D1 を書き換える）`/__scheduled` を呼び、失敗が無く、消えることを確かめる。
+CI は、`wrangler dev --test-scheduled` のログを `SCHEDULED_LOG` で smoke に渡し、ワークスペースを古くして写真の行に印を付けてから（wrangler でローカルの D1 を書き換える）`/__scheduled` を呼び、失敗が無く、消えることと、成功の結果が `cleanup_runs` に 1 行残ることを確かめる。
+その後に `mise run check-cleanup -- --local` を動かし、本番の確かめと同じスクリプトと SQL が通ることを確かめる。
 手元で同じことをするときは、`wrangler dev --test-scheduled` の出力をファイルに書き、`SCHEDULED_LOG=<そのファイル> mise run smoke` を実行する。
 
 共有のデモをローカルで試すときは、`mise run dev` を起動した後で、ワークスペースを作って ID をファイルに書き（`curl -s -X POST http://localhost:8787/api/workspaces | jq -r .id > <ID のファイル>`）、`apps/recipe-box-rs/.dev.vars` に `DEMO_WORKSPACE_ID=<ID>` と書いて `mise run dev` を起動し直す。
@@ -152,6 +155,135 @@ GitHub は、公開リポジトリで 60 日活動（commit など）が無い�
   `apps/recipe-box-rs` で `pnpm exec wrangler tail recipe-box --format pretty` を実行する（`wrangler login` が要る）。流れている間だけ見え、残らない。
   `--format json` は、リクエストのヘッダー（API の `X-Workspace-Id` を含みうる）も出すので、その出力を人に見せたり、ファイルに残したりしない。
 - リクエストの数・エラーの割合・CPU 時間の傾向は、ダッシュボードの、同じ Worker の Metrics で見る。
+
+### 失敗の通知
+
+定期の自動削除の失敗と、無料の範囲への接近は、次の 2 つで知らせる（Issue #56）。
+
+1. 自動削除の結果を D1 に残し、GitHub Actions で確かめる。
+   - 自動削除は、最後に結果（成功したか・消した数・失敗した数）を `cleanup_runs` に残す（docs/spec.md の「ワークスペースによるデータの分離」）。途中で止まった実行は結果を残さない。
+     workers-rs の `scheduled` は、処理の結果にかかわらず成功で終わるので、一部の失敗は Cloudflare の側（下の Monitors）からは見えない。この記録で見る。
+   - `seed-demo.yml` の job `check-cleanup` が、毎日（seed と同じ時刻）`scripts/check-cleanup.ts --remote` を動かし、最後の成功から 3 時間を超えていれば失敗する。
+     失敗すると、GitHub Actions の失敗の通知（上の「CI と CD」の、schedule で動く workflow の通知）が届く。seed と別の job なので、確かめが失敗してもデモは入れ直す。
+     cron は 1 時間ごとなので、3 時間は、一時的な失敗や起動の遅れを 2 回まで見逃し、失敗が続いていれば知らせる幅である。
+   - 公開のログには、成功か失敗かと、最後の成功から経った時間だけを出す（docs/security.md の「ログ」）。
+   - マイグレーション（`0007_create_cleanup_runs.sql`）を当てた直後は記録が無いので、デプロイの後の最初の cron（毎時 0 分）より前に確かめが動くと、「成功の記録が無い」で失敗する。そのままにする。次の cron の後に Actions で再実行すれば通る。
+   - 失敗したら、Workers のログ（上の「本番のログ」）で「自動削除で失敗があった」の行と、その前のエラーを見る。
+     いつから失敗しているかは、手元で `apps/recipe-box-rs` から `pnpm exec wrangler d1 execute DB --remote --command "SELECT ran_at, succeeded, deleted, failed FROM cleanup_runs ORDER BY ran_at DESC"` を実行して見る（7 日分ある。結果を Issue などの公開の場所に貼らない）。
+   - GitHub が 60 日の無活動で schedule を止めると、この確かめも止まる（下の「schedule が止まらないようにする」）。cron が動いていないことは、下の Monitors でも知らせる。
+2. Cloudflare の Monitors（ダッシュボードの Alerts > Monitors。beta の機能）で、cron の起動・無料の範囲・応答のエラー・リクエストの途絶を知らせる。
+   設定はダッシュボードにだけあり、リポジトリには残らないので、消えていないかを毎月見る（下の「最低限のメンテナンス」）。
+
+#### Monitors の作り方
+
+ダッシュボードで Alerts > Monitors > Create a Monitor を開き、下の表のものを 1 つずつ作る（[Monitors](https://developers.cloudflare.com/notifications/monitors/)）。
+
+1. 検出のしかたは Threshold にし、クエリは custom SQL にして、下の SQL を貼る。`<アカウント ID>` は、ダッシュボードの値に置き換える（リポジトリや Issue には書かない）。
+2. 実行の間隔（Execution interval）と、比べ方・しきい値を、表のとおりにする。時間の範囲は SQL に書いてある（Manual）。
+3. 名前を付け、通知の先にメールを足して作る。
+
+決まりと注意:
+
+- SQL は、`value` という名前の数を 1 つだけ返し、dataset を 1 つだけ読み、アカウントで絞り込み、最後に `;` を付けない。
+- 結果の行が無いと Monitors は何も知らせないので、どの SQL も、行が無くても 1 行を返す集計（`COUNT`・`SUM`・`MAX` に `COALESCE`）にしている。
+- dataset の名前と列の名前は、公式の文書で確かめられたもの（`states.d1Storage` の `timestamp`・`databaseSizeBytes`、`accountTag`、`NOW()`・`INTERVAL`）のほかは、GraphQL の同じ dataset の名前（`workersInvocationsAdaptive`・`d1AnalyticsAdaptiveGroups`・`r2StorageAdaptiveGroups`）から推したもので、**確かめていない**。
+  作るときに、ダッシュボードの dataset の一覧と列の一覧で名前を確かめ、違えば直す（直したら、この文書も直す）。保存する前に、プレビュー（7 日まで）で、ふだんの値がしきい値の反対側にあることを確かめる（たとえば 1 の cron の SQL は、ふだん 2 になる）。
+- 無料の範囲の値は 2026-11 時点のもの（docs/security.md の「費用の対策」）。1 日の量は、Cloudflare が UTC の 0 時で数え直すが、ここでは直近の 24 時間で近似する。
+
+| 知らせるもの | 間隔 | 条件 |
+| --- | --- | --- |
+| 1. cron が 2 時間で 1 回も成功しない | 1 時間 | `value < 1` |
+| 2. cron の成功以外の status | 1 時間 | `value > 0` |
+| 3. D1 の保存量が無料の範囲（1 つのデータベースで 500 MB）の 50 % を超えた | 1 時間 | `value > 250000000` |
+| 4. R2 の保存量が無料の範囲（10 GB-月）の 50 % を超えた | 1 時間 | `value > 5000000000` |
+| 5. Workers のリクエストが、1 日の無料の範囲（10 万回）の 80 % を超えた | 1 時間 | `value > 80000` |
+| 6. D1 の読んだ行が、1 日の無料の範囲（500 万行）の 80 % を超えた | 1 時間 | `value > 4000000` |
+| 7. D1 の書いた行が、1 日の無料の範囲（10 万行）の 80 % を超えた | 1 時間 | `value > 80000` |
+| 8. Workers の成功以外の status の割合が 10 % を超えた（3 回以上のとき） | 15 分 | `value > 10` |
+| 9. Workers のリクエストが 26 時間 0 回 | 1 時間 | `value < 1` |
+
+- 1・2 の cron は 1 時間ごとなので、2 時間に 1 回も成功しなければ、起動しなかったか、例外で落ちた。2 は、1 回でも落ちれば知らせる。
+  自動削除の一部の失敗（`scheduled` は成功で終わる）は、ここでは分からず、上の 1 の `cleanup_runs` で知らせる。
+- 4 の R2 は、アプリの上限でアプリ全体の写真の合計を 5 GB（無料の範囲のちょうど 50 %）までにしている（docs/security.md の「費用の対策」）。超えるのは、どの行からもたどれないデータが残ったときなどで、それを知らせる。
+- 8 は、リクエストが少ないアプリなので、1 回の失敗で割合が大きく振れる。15 分に 3 回以上の失敗があり、かつ 10 % を超えたときだけ知らせる。
+  アプリが返す `500` などの応答は、Worker の status では成功に数えられうる（**確かめていない**）。数えられないときは、ダッシュボードの Metrics で見る。
+- 9 は、毎日のデモの入れ直し（`seed-demo.yml`）が API を呼び、cron も 1 時間ごとに動くので、ふだんは 0 にならない。seed の時刻のずれを見込んで 26 時間にする。
+
+```sql
+-- 1. cron が 2 時間で 1 回も成功しない（Workers の起動の記録）
+SELECT COALESCE(SUM(CASE WHEN status = 'success' THEN requests ELSE 0 END), 0) AS value
+FROM events.workersInvocations
+WHERE accountTag = '<アカウント ID>'
+  AND scriptName = 'recipe-box'
+  AND eventType = 'scheduled'
+  AND timestamp >= NOW() - INTERVAL '2' HOUR
+```
+
+```sql
+-- 2. cron の成功以外の status
+SELECT COALESCE(SUM(CASE WHEN status <> 'success' THEN requests ELSE 0 END), 0) AS value
+FROM events.workersInvocations
+WHERE accountTag = '<アカウント ID>'
+  AND scriptName = 'recipe-box'
+  AND eventType = 'scheduled'
+  AND timestamp >= NOW() - INTERVAL '1' HOUR
+```
+
+```sql
+-- 3. D1 の保存量（バイト）
+SELECT COALESCE(MAX(databaseSizeBytes), 0) AS value
+FROM states.d1Storage
+WHERE accountTag = '<アカウント ID>'
+  AND timestamp >= NOW() - INTERVAL '1' HOUR
+```
+
+```sql
+-- 4. R2 の保存量（バイト。写真のバケット）
+SELECT COALESCE(MAX(payloadSize + metadataSize), 0) AS value
+FROM states.r2Storage
+WHERE accountTag = '<アカウント ID>'
+  AND bucketName = 'recipe-box-photos'
+  AND timestamp >= NOW() - INTERVAL '1' HOUR
+```
+
+```sql
+-- 5. Workers のリクエスト（直近の 24 時間）
+SELECT COALESCE(SUM(requests), 0) AS value
+FROM events.workersInvocations
+WHERE accountTag = '<アカウント ID>'
+  AND timestamp >= NOW() - INTERVAL '24' HOUR
+```
+
+```sql
+-- 6. D1 の読んだ行（直近の 24 時間）。7 は rowsRead を rowsWritten に替える
+SELECT COALESCE(SUM(rowsRead), 0) AS value
+FROM events.d1Analytics
+WHERE accountTag = '<アカウント ID>'
+  AND timestamp >= NOW() - INTERVAL '24' HOUR
+```
+
+```sql
+-- 8. Workers の成功以外の status の割合（%。3 回未満なら 0）
+SELECT CASE
+    WHEN COALESCE(SUM(CASE WHEN status <> 'success' THEN requests ELSE 0 END), 0) < 3 THEN 0
+    ELSE SUM(CASE WHEN status <> 'success' THEN requests ELSE 0 END) * 100.0 / SUM(requests)
+  END AS value
+FROM events.workersInvocations
+WHERE accountTag = '<アカウント ID>'
+  AND scriptName = 'recipe-box'
+  AND timestamp >= NOW() - INTERVAL '15' MINUTE
+```
+
+```sql
+-- 9. Workers のリクエストが 26 時間 0 回
+SELECT COALESCE(SUM(requests), 0) AS value
+FROM events.workersInvocations
+WHERE accountTag = '<アカウント ID>'
+  AND scriptName = 'recipe-box'
+  AND timestamp >= NOW() - INTERVAL '26' HOUR
+```
+
+1・2 の `eventType = 'scheduled'`（cron の起動だけに絞る列）と、5〜9 の `requests`（行ごとの起動の数。行が 1 回の起動なら `COUNT(*)` に替える）も、**確かめていない**。
 
 ### デプロイが失敗したとき
 
@@ -205,6 +337,7 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
 ### 毎月
 
 - `dependabot-alert-issue` スキルで、Dependabot の alert から Issue を作る。`mise run audit` も実行する。
+- Cloudflare の Monitors の設定が残っているか（上の「失敗の通知」の 1〜9 があり、通知の先が今のメールか）を、ダッシュボードの Alerts > Monitors で見る。beta の機能で、設定はリポジトリに残らない。
 - `outdated.yml` の Issue にある mise のツールを、まとめて上げる（`mise install` の後に `mise lock`。AGENTS.md の「ツールの版」）。Node は、使っているメジャーの版のサポートの終わり（EOL）が近くないかも見る。
 
 ### schedule が止まらないようにする
@@ -224,7 +357,7 @@ GitHub は、公開リポジトリで 60 日活動が無いと、schedule で動
 | `docs/security.md` の費用の表の「2026-11 時点」（`guide/about.md` にもある） | 料金と無料の範囲は変わる。公式の文書で確かめ直したら、値と時点を直す |
 | mise の Rust・Node の版と、`worker-build`・`worker`（`=0.8.7`）の固定 | `outdated.yml` の Issue と Dependabot で上げる。`worker-build`（`mise.toml`）と `worker`（`apps/recipe-box-rs/Cargo.toml`）は同じ版にそろえて一緒に上げる |
 | CI の `runs-on: ubuntu-latest` | 指す Ubuntu の版は GitHub が変える。CI が急に落ちたら、まずランナーの版の変化を疑う |
-| Cloudflare の Monitors（定期の処理の失敗の通知） | #56 で入れたら、設定が消えていないかを見る |
+| Cloudflare の Monitors（上の「失敗の通知」） | 設定が消えていないかを毎月見る（上の「毎月」）。beta が終わって dataset や列の名前が変われば、SQL を直し、この文書も直す |
 
 ## 使うのをやめるとき
 

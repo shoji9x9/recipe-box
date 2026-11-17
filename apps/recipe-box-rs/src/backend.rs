@@ -73,6 +73,19 @@ pub struct UnusedWorkspace {
     pub last_used_at: i64,
 }
 
+/// 自動削除の 1 回の実行の結果。`cleanup_runs` の表に残す（[`Backend::record_cleanup_run`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CleanupRun {
+    /// 実行を始めた日時（UNIX 時間のミリ秒）。
+    pub ran_at: i64,
+    /// どこも失敗しなかったか。
+    pub succeeded: bool,
+    /// 消したワークスペースの数。
+    pub deleted: i64,
+    /// 失敗した数（ワークスペースと、途中で残った写真の行）。
+    pub failed: i64,
+}
+
 /// 書き込みか削除が終わっていない印（`pending_since`）の付いた写真の行（自動削除が片付ける）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PendingPhoto {
@@ -188,6 +201,14 @@ pub trait Backend: Clone + Send + Sync + 'static {
 
     /// 1 日の数を数えるための記録（写真の追加・ワークスペースの作成）のうち、`before` より前のものを消す。
     fn delete_old_records(&self, before: i64) -> impl Future<Output = BackendResult<()>> + Send;
+
+    /// 自動削除の結果 `run` を残し、`ran_at` が `before` より前の結果を消す。
+    /// 足すことと消すことを 1 回の batch で行う（1 回の実行で呼べる数を 1 つだけ使う）。
+    fn record_cleanup_run(
+        &self,
+        run: &CleanupRun,
+        before: i64,
+    ) -> impl Future<Output = BackendResult<()>> + Send;
 
     /// ワークスペースの最終利用日時を `now` にする。
     fn set_workspace_last_used_at(

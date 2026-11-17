@@ -10,7 +10,7 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    backend::{Backend, BackendError, PhotoKey, WorkspaceLimits},
+    backend::{Backend, BackendError, CleanupRun, PhotoKey, WorkspaceLimits},
     error::{ApiError, log_error, run_to_completion_or_internal},
     id,
     limits::{DAY_MILLIS, client_key, start_of_utc_day},
@@ -267,13 +267,23 @@ pub const MAX_SUBREQUESTS_PER_RUN: i64 = 50;
 /// 写真を隠す D1 の 1 回・R2 の削除・D1 の削除の 1 回・R2 の削除（写真が無ければ R2 は呼ばない）。
 /// 1 つのワークスペースの写真は、R2 の 1 回の削除で消せる（[`photo::MAX_PHOTOS_PER_DELETE`]。元の写真と小さな版のキー）。
 const SUBREQUESTS_PER_WORKSPACE: i64 = 4;
-/// 自動削除（[`delete_unused`]）の 1 回の実行の呼び出しの数の最大。
-/// 古い記録の削除の 1 回・書き込み中の写真の片付け・対象を選ぶ 1 回・ワークスペースごとの削除。
-pub const CLEANUP_SUBREQUESTS: i64 =
-    1 + photo::PENDING_CLEANUP_SUBREQUESTS + 1 + MAX_WORKSPACES_PER_RUN * SUBREQUESTS_PER_WORKSPACE;
+/// 自動削除（[`delete_unused`]）の 1 回の実行の呼び出しの数の最大（44）。
+/// 古い記録の削除の 1 回・書き込み中の写真の片付け（9）・対象を選ぶ 1 回・ワークスペースごとの削除（8 × 4）・
+/// 結果を残す 1 回（[`Backend::record_cleanup_run`]。足すことと古い結果を消すことを 1 回の batch で行う）。
+pub const CLEANUP_SUBREQUESTS: i64 = 1
+    + photo::PENDING_CLEANUP_SUBREQUESTS
+    + 1
+    + MAX_WORKSPACES_PER_RUN * SUBREQUESTS_PER_WORKSPACE
+    + 1;
 const _: () = assert!(CLEANUP_SUBREQUESTS <= MAX_SUBREQUESTS_PER_RUN);
 
-/// 自動削除の結果。ログに出す。
+/// 自動削除の結果（`cleanup_runs` の行）を残す期間（7 日）。これより古い結果は、結果を残すときに消す。
+///
+/// 失敗を知らせる確かめ（`.github/workflows/seed-demo.yml`）が読むのは直近の数時間だけだが、
+/// 知らせを受けてから、いつから失敗していたかを手で調べられるよう、1 週間分（168 行）を残す。
+pub const CLEANUP_RUNS_KEPT_MILLIS: i64 = 7 * DAY_MILLIS;
+
+/// 自動削除の結果。ログに出し、[`CleanupRun`] にして D1 に残す。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct CleanupSummary {
     /// 消したワークスペースの数。
@@ -290,6 +300,8 @@ pub struct CleanupSummary {
     pub records_failed: bool,
     /// 書き込みか削除の途中で残った写真の行を片付けた結果（[`photo::clean_pending`]）。
     pub pending_photos: PendingCleanup,
+    /// 結果を D1 に残せなかったか（[`Backend::record_cleanup_run`]）。
+    pub record_failed: bool,
 }
 
 impl CleanupSummary {
@@ -300,6 +312,18 @@ impl CleanupSummary {
             || self.records_failed
             || self.pending_photos.failed > 0
             || self.pending_photos.list_failed
+            || self.record_failed
+    }
+
+    /// D1 に残す形にする。`ran_at` は実行を始めた日時。
+    pub fn to_run(&self, ran_at: i64) -> CleanupRun {
+        let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+        CleanupRun {
+            ran_at,
+            succeeded: !self.has_failure(),
+            deleted: count(self.deleted),
+            failed: count(self.failed.saturating_add(self.pending_photos.failed)),
+        }
     }
 }
 
@@ -311,6 +335,8 @@ impl CleanupSummary {
 /// 2. 書き込みか削除の途中で失敗して残った写真の行を、R2 のデータと一緒に片付ける（[`photo::clean_pending`]）。
 /// 3. 使われていないワークスペースを、最終利用日時の古い順に並べ、[`MAX_WORKSPACES_PER_RUN`] 個まで消す（[`pick_for_run`]）。
 ///    残りは次の実行に回す。
+/// 4. 結果（成功したか・消した数・失敗した数）を D1 に残し、[`CLEANUP_RUNS_KEPT_MILLIS`] より古い結果を消す（1 回の batch）。
+///    途中で止まった実行（例外や時間切れ）は結果を残さないので、失敗を知らせる確かめは「最近に成功の結果が無い」ことで見つける。
 ///
 /// 1 つのワークスペースで失敗しても、ほかのワークスペースは消す。
 /// 失敗の理由はログに出す。ワークスペースの ID は持ち主の証なので、ログに出す前に伏せる（[`crate::id::redact`]）。
@@ -366,6 +392,14 @@ pub async fn delete_unused<B: Backend>(backend: &B) -> CleanupSummary {
             // 失敗の理由は、失敗したところでログに出している。
             Err(_) => summary.failed += 1,
         }
+    }
+    let run = summary.to_run(now);
+    if let Err(error) = backend
+        .record_cleanup_run(&run, now - CLEANUP_RUNS_KEPT_MILLIS)
+        .await
+    {
+        log_error(&error);
+        summary.record_failed = true;
     }
     summary
 }

@@ -287,12 +287,18 @@ async function checkScheduled(logPath: string, photo: Buffer, keptWorkspace: str
       `UPDATE photos SET pending_since = 0 WHERE workspace_id = '${kept}' AND id = '${keptPhoto}'`,
   );
   const offset = statSync(logPath).size;
+  // 自動削除は、最後に結果を D1 の cleanup_runs に残す。動かす前の時刻より後の、成功の結果が増えるかを確かめる
+  // （Worker とこのスクリプトは同じ機械の時計を使う。1 秒の余裕を見る）。
+  const startedAt = Date.now() - 1000;
   // cron の値は、wrangler.toml の [triggers] と同じにする（アプリは値を見ない）。
   await request("GET", "/__scheduled?cron=0+*+*+*+*");
   expect(200, "GET /__scheduled");
   const line = await waitForCleanupLog(logPath, offset);
   if (!line.includes("自動削除が終わった:")) fail(`定期の自動削除で失敗があった: ${line}`);
   console.log(`  ${line.trim()}`);
+  // 結果は、ログを出した後ではなく前に残す（src/workspace.rs の delete_unused の最後）ので、ログが出ていれば読める。
+  const runs = await localSql(`SELECT COUNT(*) AS n FROM cleanup_runs WHERE succeeded = TRUE AND ran_at >= ${startedAt}`);
+  if ((runs[0] as { n?: unknown } | undefined)?.n !== 1) fail("自動削除の成功の結果が cleanup_runs に 1 行だけ残っていない");
   // 古くしたワークスペースは、レシピと写真ごと消える。
   await request("GET", "/api/recipes", { workspace: unused });
   expect(404, "定期の自動削除で消したワークスペース");

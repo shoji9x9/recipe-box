@@ -1,6 +1,8 @@
 name: Reset demo
 
 # 共有のデモは誰でも書き換えられるので、毎日 seed でサンプルの状態に戻す（docs/spec.md の「デモ用のデータ」）。
+# 別の job（check-cleanup）で、定期の自動削除が最近に成功したかを D1 の記録で確かめ、失敗なら job を失敗させて通知のメールを出す
+# （docs/development.md の「失敗の通知」）。seed と別の job にし、確かめが失敗してもデモの入れ直しは止めない。
 # デモの ID と Cloudflare の API トークンは、GitHub Environment「production」の secret に置く（deploy.yml と同じ）。
 # デモの ID を知れば誰でもデモに書き込めるので、公開リポジトリの Actions のログで伏せ字にする。
 on:
@@ -11,7 +13,7 @@ on:
 
 permissions: {}
 
-# 2 つの seed が同時に消しては入れると、レシピが混ざる。途中で止めず、1 つずつ実行する。
+# 2 つの seed が同時に消しては入れると、レシピが混ざる。途中で止めず、1 つずつ実行する（確かめの job も一緒に待つ）。
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
@@ -97,3 +99,71 @@ jobs:
           DEMO_WORKSPACE_ID: ${{ secrets.DEMO_WORKSPACE_ID }}
         # ID は引数に置かず、標準入力で渡す（scripts/seed.ts）。
         run: printf '%s\n' "$DEMO_WORKSPACE_ID" | node scripts/seed.ts --remote
+
+  check-cleanup:
+    name: Check cleanup runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read # 確かめるスクリプトを読む
+    steps:
+      # main からだけ動かす（seed の job と同じ）。
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::自動削除の確かめは main からだけ動かす（今は $REF）"
+            exit 1
+          fi
+      # D1 を読むだけなので、デモの ID は渡さない。
+      - name: Check secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Environment「production」に secret の CLOUDFLARE_API_TOKEN・CLOUDFLARE_ACCOUNT_ID のどちらかが無い"
+            exit 1
+          fi
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.7
+        with:
+          cache: true
+          # 確かめは Node と pnpm（wrangler）だけを使う（seed の job と同じ）。
+          install_args: node pnpm lefthook
+      - name: Install Node packages
+        run: pnpm install --frozen-lockfile
+      # seed の job の Mask D1 database ID と同じ（理由もそちら）。job ごとに伏せ字を作り直す必要がある。
+      - name: Mask D1 database ID
+        working-directory: apps/recipe-box-rs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          NO_COLOR: "1"
+          FORCE_COLOR: "0"
+        run: |
+          mask() {
+            sed -E 's/[0-9a-fA-F-]{32,}/***/g' "$@"
+          }
+          if ! pnpm exec wrangler d1 list --json >/tmp/d1-list.json 2>/tmp/d1-list.log; then
+            mask /tmp/d1-list.json /tmp/d1-list.log
+            echo "::error::D1 のデータベースの一覧を取れない"
+            exit 1
+          fi
+          database_id=$(jq -r 'first(.[] | select(.name == "recipe-box") | .uuid) // empty' /tmp/d1-list.json 2>/dev/null) || database_id=""
+          if [ -z "$database_id" ]; then
+            echo "::error::D1 のデータベース recipe-box の ID を取れない"
+            exit 1
+          fi
+          echo "::add-mask::$database_id"
+      # 公開のログには、成功か失敗かと、最後の成功から経った時間だけを出す（scripts/check-cleanup.ts）。
+      # マイグレーション（0007）を当てた直後は記録が無いので、最初の 1 回は失敗する（docs/development.md の「失敗の通知」）。
+      - name: Check cleanup runs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/check-cleanup.ts --remote

@@ -9,12 +9,13 @@ use super::{
     fake::{FakeBackend, NOW},
 };
 use crate::{
+    backend::CleanupRun,
     limits::{DAY_MILLIS, start_of_utc_day},
     photo::{MAX_PENDING_BATCHES_PER_RUN, MAX_PHOTOS_PER_DELETE, PENDING_CLEANUP_AFTER_MILLIS},
     workspace::{
-        CLEANUP_INTERVAL_MILLIS, CLEANUP_RUNS_PER_DAY, CLEANUP_SUBREQUESTS, CleanupSummary,
-        MAX_SUBREQUESTS_PER_RUN, MAX_WORKSPACES_PER_DAY, MAX_WORKSPACES_PER_RUN,
-        UNUSED_DELETE_AFTER_MILLIS, delete_unused,
+        CLEANUP_INTERVAL_MILLIS, CLEANUP_RUNS_KEPT_MILLIS, CLEANUP_RUNS_PER_DAY,
+        CLEANUP_SUBREQUESTS, CleanupSummary, MAX_SUBREQUESTS_PER_RUN, MAX_WORKSPACES_PER_DAY,
+        MAX_WORKSPACES_PER_RUN, UNUSED_DELETE_AFTER_MILLIS, delete_unused,
     },
 };
 
@@ -269,6 +270,16 @@ async fn many_due_workspaces_and_pending_photos_stay_within_the_call_limit() {
     // 上限を超えず、どれも失敗しない。片付けも動く。
     assert!(!summary.has_failure(), "{summary:?}");
     assert!(calls(&backend) <= to_usize(CLEANUP_SUBREQUESTS));
+    // 呼び出しを使い切った後でも、最後の結果を残せる（上限に結果の 1 回を入れてある）。
+    assert_eq!(
+        *backend.cleanup_runs.lock().unwrap(),
+        [CleanupRun {
+            ran_at: NOW,
+            succeeded: true,
+            deleted: MAX_WORKSPACES_PER_RUN,
+            failed: 0,
+        }]
+    );
     let per_run_workspaces = to_usize(MAX_WORKSPACES_PER_RUN);
     assert_eq!(summary.deleted, per_run_workspaces);
     assert_eq!(summary.deferred, due - per_run_workspaces);
@@ -369,4 +380,111 @@ async fn workspaces_that_keep_failing_do_not_block_the_others() {
     let workspaces = backend.workspaces.lock().unwrap();
     assert!(good.iter().all(|w| !workspaces.contains_key(w)));
     assert_eq!(workspaces.len(), per_run);
+}
+
+#[test]
+fn cleanup_budget_includes_one_call_for_the_result() {
+    // 記録の削除 1・写真の片付け 9・対象を選ぶ 1・ワークスペースごとに 4（8 個）・結果を残す 1。
+    // 数を変えたら、docs/spec.md と docs/security.md の回数も直す。
+    // 上限（MAX_SUBREQUESTS_PER_RUN）に収まることは、src/workspace.rs の const の assert が確かめる。
+    assert_eq!(CLEANUP_SUBREQUESTS, 44);
+}
+
+#[tokio::test]
+async fn successful_run_is_recorded_once_at_the_end() {
+    let backend = setup();
+    let summary = delete_unused(&backend).await;
+    assert!(!summary.has_failure());
+    // 1 回の実行で、結果を残すのは 1 回だけ（1 回の batch）。
+    assert_eq!(backend.cleanup_run_writes.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        *backend.cleanup_runs.lock().unwrap(),
+        [CleanupRun {
+            ran_at: NOW,
+            succeeded: true,
+            deleted: 1,
+            failed: 0,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn failed_run_is_recorded_with_its_counts() {
+    let backend = setup();
+    backend.add_workspace(WORKSPACE_B, BEFORE - 1);
+    // アプリは作らない、形の正しくない ID の行（失敗に数える）。
+    backend.add_workspace("not-a-workspace-id", BEFORE - 1);
+    // 片付けに失敗する、途中で残った写真の行。
+    backend.add_photo_row(WORKSPACE_C, &"4".repeat(32), &"5".repeat(32), 1);
+    backend.mark_pending(&"5".repeat(32), NOW - PENDING_CLEANUP_AFTER_MILLIS - 1);
+    let broken = FakeBackend {
+        broken_r2_delete: true,
+        ..backend.clone()
+    };
+    let summary = delete_unused(&broken).await;
+    assert!(summary.has_failure());
+    // B だけを消し、A（R2 の削除）・形の正しくない ID・写真の行の 3 つが失敗する。
+    assert_eq!(
+        *backend.cleanup_runs.lock().unwrap(),
+        [CleanupRun {
+            ran_at: NOW,
+            succeeded: false,
+            deleted: 1,
+            failed: 3,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn failure_without_a_count_is_recorded_as_failed() {
+    // 対象を選べないと、失敗の数は 0 のままだが、成功ではない。
+    let backend = FakeBackend {
+        broken_list: true,
+        ..setup()
+    };
+    delete_unused(&backend).await;
+    let runs = backend.cleanup_runs.lock().unwrap();
+    assert_eq!(runs.len(), 1);
+    assert!(!runs[0].succeeded);
+    assert_eq!(runs[0].failed, 0);
+}
+
+#[tokio::test]
+async fn results_older_than_the_kept_period_are_deleted() {
+    let backend = setup();
+    let old = |ran_at| CleanupRun {
+        ran_at,
+        succeeded: true,
+        deleted: 0,
+        failed: 0,
+    };
+    *backend.cleanup_runs.lock().unwrap() = vec![
+        old(NOW - CLEANUP_RUNS_KEPT_MILLIS - 1),
+        old(NOW - CLEANUP_RUNS_KEPT_MILLIS),
+    ];
+    delete_unused(&backend).await;
+    // 7 日を過ぎた結果は消し、ちょうど 7 日の結果と、今回の結果を残す。
+    let ran_at: Vec<i64> = backend
+        .cleanup_runs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.ran_at)
+        .collect();
+    assert_eq!(ran_at, [NOW - CLEANUP_RUNS_KEPT_MILLIS, NOW]);
+    assert_eq!(CLEANUP_RUNS_KEPT_MILLIS, 7 * DAY_MILLIS);
+}
+
+#[tokio::test]
+async fn failure_to_record_is_reported() {
+    let backend = FakeBackend {
+        broken_cleanup_run: true,
+        ..setup()
+    };
+    let summary = delete_unused(&backend).await;
+    // ほかは成功しても、結果を残せなければ失敗としてログに出す（確かめの側は、成功の結果が無いことで見つける）。
+    assert!(summary.record_failed);
+    assert!(summary.has_failure());
+    assert_eq!(summary.deleted, 1);
+    assert!(backend.cleanup_runs.lock().unwrap().is_empty());
 }

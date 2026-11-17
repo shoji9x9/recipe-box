@@ -14,8 +14,8 @@ use std::{
 
 use crate::{
     backend::{
-        Backend, BackendError, BackendResult, ListedRecipe, PendingPhoto, PhotoInsert, PhotoKey,
-        PhotoLimits, RecipePage, ThumbnailReserve, UnusedWorkspace, WorkspaceLimits,
+        Backend, BackendError, BackendResult, CleanupRun, ListedRecipe, PendingPhoto, PhotoInsert,
+        PhotoKey, PhotoLimits, RecipePage, ThumbnailReserve, UnusedWorkspace, WorkspaceLimits,
         WorkspaceStatus,
     },
     photo::{Photo, PhotoBody, PhotoId, object_key},
@@ -95,6 +95,12 @@ pub struct FakeBackend {
     pub workspace_vanishes_on_delete: bool,
     /// `true` なら、古い記録の削除だけが失敗したことにする。
     pub broken_records: bool,
+    /// 自動削除の結果（`cleanup_runs` の行）。
+    pub cleanup_runs: Arc<Mutex<Vec<CleanupRun>>>,
+    /// 自動削除の結果を残した（`record_cleanup_run` を呼んだ）回数。
+    pub cleanup_run_writes: Arc<AtomicUsize>,
+    /// `true` なら、自動削除の結果を残すのだけが失敗したことにする。
+    pub broken_cleanup_run: bool,
     /// `true` なら、自動削除の対象を選ぶところだけが失敗したことにする。
     pub broken_list: bool,
     /// `true` なら、レシピの登録と更新だけが失敗したことにする（D1 の一時的な失敗）。
@@ -155,6 +161,9 @@ impl Default for FakeBackend {
             used_after_listing: None,
             broken_list: false,
             broken_records: false,
+            cleanup_runs: Arc::default(),
+            cleanup_run_writes: Arc::default(),
+            broken_cleanup_run: false,
             broken_recipe_write: false,
             injected_photo: Arc::default(),
             broken_owner_delete: false,
@@ -491,6 +500,24 @@ impl Backend for FakeBackend {
                 .lock()
                 .unwrap()
                 .retain(|&t| t >= before);
+            Ok(())
+        }))
+    }
+
+    fn record_cleanup_run(
+        &self,
+        run: &CleanupRun,
+        before: i64,
+    ) -> impl Future<Output = BackendResult<()>> + Send {
+        self.cleanup_run_writes.fetch_add(1, Ordering::Relaxed);
+        ready(self.check().and_then(|()| {
+            if self.broken_cleanup_run {
+                return Err(BackendError("壊れた自動削除の結果".into()));
+            }
+            // 本物の batch と同じく、足すことと消すことを一緒に行う（失敗したら、どちらもしない）。
+            let mut runs = self.cleanup_runs.lock().unwrap();
+            runs.push(*run);
+            runs.retain(|r| r.ran_at >= before);
             Ok(())
         }))
     }
