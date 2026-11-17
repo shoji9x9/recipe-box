@@ -91,13 +91,16 @@ enum Flash {
     WorkspaceDeleted,
     PhotoAdded,
     PhotoDeleted,
+    /// 一時的にデモを見ている間に、自分のワークスペースに出したフォームから登録・保存した（[`form_viewer`]）。
+    RecipeCreatedToOwn,
+    RecipeSavedToOwn,
     /// Cookie の ID のワークスペースが無くなっていた（自動削除など）。
     /// ほかと違い、誤りの知らせ（赤）として出す（[`Layout::gone`]）。
     WorkspaceGone,
 }
 
 impl Flash {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 13] = [
         Self::RecipeCreated,
         Self::RecipeSaved,
         Self::RecipeDeleted,
@@ -108,6 +111,8 @@ impl Flash {
         Self::WorkspaceDeleted,
         Self::PhotoAdded,
         Self::PhotoDeleted,
+        Self::RecipeCreatedToOwn,
+        Self::RecipeSavedToOwn,
         Self::WorkspaceGone,
     ];
 
@@ -124,6 +129,8 @@ impl Flash {
             Self::WorkspaceDeleted => "workspace-deleted",
             Self::PhotoAdded => "photo-added",
             Self::PhotoDeleted => "photo-deleted",
+            Self::RecipeCreatedToOwn => "recipe-created-to-own",
+            Self::RecipeSavedToOwn => "recipe-saved-to-own",
             Self::WorkspaceGone => "workspace-gone",
         }
     }
@@ -145,6 +152,12 @@ impl Flash {
             Self::WorkspaceDeleted => "ワークスペースを削除しました",
             Self::PhotoAdded => "写真を追加しました",
             Self::PhotoDeleted => "写真を削除しました",
+            Self::RecipeCreatedToOwn => {
+                "レシピを、共有のデモではなく自分のレシピ帳に登録しました。デモの表示を終えて、自分のレシピ帳に戻りました"
+            }
+            Self::RecipeSavedToOwn => {
+                "レシピを、共有のデモではなく自分のレシピ帳に保存しました。デモの表示を終えて、自分のレシピ帳に戻りました"
+            }
             Self::WorkspaceGone => {
                 "このブラウザが覚えていたワークスペースは見つかりませんでした。\
                  14 日アクセスが無くて消えたか、削除されたためです"
@@ -1079,6 +1092,24 @@ async fn form_with_alert<B: Backend>(
     render(status, &page)
 }
 
+/// 登録・更新のフォームを保存するワークスペースを決める。2 つ目は、一時的に見ていたデモの表示を終えるか。
+///
+/// 自分のワークスペースに出したフォーム（[`RecipeForm::for_own`]）が、一時的にデモを見ている間に送られたら
+/// （デモに切り替える前に開いたタブなど）、デモではなく自分のワークスペースに保存する。
+/// 自分のレシピ帳に書くつもりの入力を、誰でも見られるデモに入れないため。
+/// 自分のワークスペースが無いときは、その前に [`form_if_gone`] が断っている。印の無いフォーム（デモに出したもの）は、これまでどおり。
+async fn form_viewer<B: Backend>(
+    backend: &B,
+    session: &Session,
+    form: &RecipeForm,
+) -> Result<(Viewer, bool), ScreenError> {
+    let viewer = require_viewer(backend, session).await?;
+    match (&viewer, &session.own) {
+        (Viewer::Demo { .. }, Some(own)) if form.for_own() => Ok((Viewer::Own(own.clone()), true)),
+        _ => Ok((viewer, false)),
+    }
+}
+
 /// [`RecipeForm::workspace`] に入れる値。
 fn workspace_of(viewer: &Viewer) -> String {
     match viewer {
@@ -1129,6 +1160,7 @@ async fn save<B: Backend>(
     kind: FormKind,
     form: &RecipeForm,
     limited: bool,
+    leaves_demo: bool,
 ) -> Result<Response, ScreenError> {
     if limited {
         let error = ApiError::TooManyRequests;
@@ -1145,19 +1177,31 @@ async fn save<B: Backend>(
             ));
         }
     };
+    let (created, saved) = if leaves_demo {
+        (Flash::RecipeCreatedToOwn, Flash::RecipeSavedToOwn)
+    } else {
+        (Flash::RecipeCreated, Flash::RecipeSaved)
+    };
     let result = match &kind {
         FormKind::New => recipe::insert(backend, viewer.id(), fields)
             .await
-            .map(|recipe| (recipe.id, Flash::RecipeCreated)),
+            .map(|recipe| (recipe.id, created)),
         FormKind::Edit(id) => {
             let id = parse_id(id)?;
             recipe::replace(backend, viewer.id(), &id, fields)
                 .await
-                .map(|recipe| (recipe.id, Flash::RecipeSaved))
+                .map(|recipe| (recipe.id, saved))
         }
     };
     match result {
-        Ok((id, flash)) => Ok(see_other_with(&format!("/recipes/{id}"), flash)),
+        Ok((id, flash)) => {
+            let mut response = see_other_with(&format!("/recipes/{id}"), flash);
+            // 保存したレシピは自分のワークスペースにあり、デモの表示のままでは開けないので、デモの表示を終える。
+            if leaves_demo {
+                remove_cookie(&mut response, DEMO_VIEW_COOKIE);
+            }
+            Ok(response)
+        }
         Err(error) if keeps_form(&error) => {
             Ok(form_with_alert(backend, session, viewer, &kind, form, &error).await)
         }
@@ -1194,8 +1238,18 @@ pub async fn create<B: Backend>(
     if let Some(response) = form_if_gone(&session, &FormKind::New, &form, limited) {
         return Ok(response);
     }
-    let viewer = require_viewer(&backend, &session).await?;
-    save(&backend, &session, &viewer, FormKind::New, &form, limited).await
+    let (viewer, leaves_demo) = form_viewer(&backend, &session, &form).await?;
+    let kind = FormKind::New;
+    save(
+        &backend,
+        &session,
+        &viewer,
+        kind,
+        &form,
+        limited,
+        leaves_demo,
+    )
+    .await
 }
 
 /// 登録・更新のフォームの本文を読む。書き込みの回数の制限に当たっていれば（[`WriteLimited`]）、
@@ -1539,8 +1593,17 @@ pub async fn update<B: Backend>(
     if let Some(response) = form_if_gone(&session, &kind, &form, limited) {
         return Ok(response);
     }
-    let viewer = require_viewer(&backend, &session).await?;
-    save(&backend, &session, &viewer, kind, &form, limited).await
+    let (viewer, leaves_demo) = form_viewer(&backend, &session, &form).await?;
+    save(
+        &backend,
+        &session,
+        &viewer,
+        kind,
+        &form,
+        limited,
+        leaves_demo,
+    )
+    .await
 }
 
 /// 削除のフォームの値。一覧から消したときは、同じ検索の条件とページに戻す。
