@@ -239,6 +239,8 @@ export interface Report {
   total: Row;
   generated: Row;
   skills: Row;
+  /** 別枠（生成物とスキル）の合計。 */
+  separateTotal: Row;
   plugins: string[];
 }
 
@@ -331,6 +333,7 @@ export function tally(files: SourceFile[], settings: string): Report {
     total: sum("合計", groups.map((g) => g.subtotal)),
     generated,
     skills,
+    separateTotal: sum("別枠の合計", [generated, skills]),
     plugins: enabledPlugins(settings),
   };
 }
@@ -357,7 +360,8 @@ export interface Commit {
 export function renderBlock(report: Report, commit: Commit): string {
   // 区分の名前は、その区分の最初の行にだけ書く。小計と合計は太字にする。
   const counted = report.groups.flatMap((group) => [
-    ...group.rows.map((row, i) => tableRow(row, { first: i === 0 ? group.name : "" })),
+    // guide.css は数の表の 1 列目を太くしないので、区分の名前は Markdown で太字にする。
+    ...group.rows.map((row, i) => tableRow(row, { first: i === 0 ? `**${group.name}**` : "" })),
     tableRow(group.subtotal, { first: "", bold: true }),
   ]);
   const plugins = report.plugins.length === 0 ? "無し" : report.plugins.map((p) => `\`${p}\``).join("・");
@@ -376,6 +380,7 @@ export function renderBlock(report: Report, commit: Commit): string {
     "| --- | ---: | ---: |",
     tableRow(report.generated),
     tableRow(report.skills),
+    tableRow(report.separateTotal, { bold: true }),
     "",
     `Claude Code のプラグイン（${plugins}）は、コードがリポジトリに無いので数えません。`,
     BLOCK_END,

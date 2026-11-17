@@ -425,7 +425,7 @@ commit [bbe337a](https://github.com/shoji9x9/recipe-box/commit/bbe337a335d6fadd9
 
 | 区分 | 分類 | ファイル数 | 行数 |
 | --- | --- | ---: | ---: |
-| アプリ | バックエンド（Rust）の本番 | 13 | 7,070 |
+| **アプリ** | バックエンド（Rust）の本番 | 13 | 7,070 |
 | | バックエンド（Rust）のテスト | 9 | 8,762 |
 | | バックエンド（JavaScript）の本番 | 2 | 130 |
 | | バックエンド（JavaScript）のテスト | 1 | 146 |
@@ -435,7 +435,7 @@ commit [bbe337a](https://github.com/shoji9x9/recipe-box/commit/bbe337a335d6fadd9
 | | 画面の CSS とアイコン | 2 | 842 |
 | | DB のマイグレーション（SQL） | 8 | 127 |
 | | **アプリの小計** | **52** | **19,429** |
-| 開発・運用 | スクリプト（TypeScript）の本番 | 11 | 2,450 |
+| **開発・運用** | スクリプト（TypeScript）の本番 | 11 | 2,450 |
 | | スクリプト（TypeScript）のテスト | 6 | 1,025 |
 | | スクリプト（シェル） | 2 | 51 |
 | | CI と設定 | 31 | 1,544 |
@@ -452,6 +452,7 @@ commit [bbe337a](https://github.com/shoji9x9/recipe-box/commit/bbe337a335d6fadd9
 | --- | ---: | ---: |
 | 生成物 | 11 | 5,439 |
 | スキル（.claude/skills/ の 6 つ） | 69 | 24,211 |
+| **別枠の合計** | **80** | **29,650** |
 
 Claude Code のプラグイン（`rust-analyzer-lsp@claude-plugins-official`）は、コードがリポジトリに無いので数えません。
 <!-- size:end -->

@@ -215,6 +215,7 @@ describe("tally", () => {
     expect(report.total).toEqual({ label: "合計", files: 5, lines: 11 });
     expect(report.generated).toEqual({ label: "生成物", files: 1, lines: 2 });
     expect(report.skills).toEqual({ label: "スキル（.claude/skills/ の 2 つ）", files: 3, lines: 4 });
+    expect(report.separateTotal).toEqual({ label: "別枠の合計", files: 4, lines: 6 });
     expect(report.plugins).toEqual(["a@market", "b@market"]);
   });
 
@@ -266,17 +267,20 @@ describe("renderBlock と replaceBlock", () => {
       "commit [0123456](https://github.com/shoji9x9/recipe-box/commit/0123456789abcdef0123456789abcdef01234567)（2026-11-17）で数えました。",
     );
     expect(block).toContain("| 区分 | 分類 | ファイル数 | 行数 |\n| --- | --- | ---: | ---: |\n");
-    // 区分の名前は、その区分の最初の行にだけ書く。
-    expect(block).toContain("| アプリ | バックエンド（Rust）の本番 | 1 | 1 |\n| | バックエンド（Rust）のテスト | 0 | — |\n");
-    expect(block).toContain("| 開発・運用 | スクリプト（TypeScript）の本番 | 0 | — |\n");
+    // 区分の名前は、その区分の最初の行にだけ、太字で書く（guide.css は数の表の 1 列目を太くしない）。
+    expect(block).toContain("| **アプリ** | バックエンド（Rust）の本番 | 1 | 1 |\n| | バックエンド（Rust）のテスト | 0 | — |\n");
+    expect(block).toContain("| **開発・運用** | スクリプト（TypeScript）の本番 | 0 | — |\n");
     expect(block).toContain("| | その他 | 1 | 1,234 |");
     expect(block).toContain("| | seed（共有のデモの元のデータ。JSON・写真・出典） | 1 | — |");
     expect(block).toContain("| | **アプリの小計** | **1** | **1** |");
     expect(block).toContain("| | **開発・運用の小計** | **2** | **1,234** |");
     expect(block).toContain("| | **合計** | **3** | **1,235** |");
-    expect(block).not.toContain("| **アプリ** |");
-    // 別枠は、生成物とスキルの 2 行だけ。
-    expect(block).toContain("| 分類 | ファイル数 | 行数 |\n| --- | ---: | ---: |\n| 生成物 | 0 | — |\n| スキル（.claude/skills/ の 0 つ） | 0 | — |\n\n");
+    // 区分の見出しだけの行は作らない。
+    expect(block).not.toContain("| **アプリ** | | |");
+    // 別枠は、生成物とスキルの 2 行と、太字の合計の行。
+    expect(block).toContain(
+      "| 分類 | ファイル数 | 行数 |\n| --- | ---: | ---: |\n| 生成物 | 0 | — |\n| スキル（.claude/skills/ の 0 つ） | 0 | — |\n| **別枠の合計** | **0** | **—** |\n\n",
+    );
     expect(block).toContain("Claude Code のプラグイン（無し）");
   });
 

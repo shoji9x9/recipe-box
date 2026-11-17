@@ -303,6 +303,15 @@ export function renderMarkdown(
   const anchors: string[] = [];
   let title = "";
   tokens.forEach((token, i) => {
+    // 表の列の揃え（`---:` など）を、markdown-it は style 属性で出す。CSP（style-src 'self'）がインラインのスタイルを禁じていて効かないので、
+    // クラス（align-left・align-center・align-right。guide.css。左は既定なので CSS は要らない）に置き換える。
+    if (token.type === "th_open" || token.type === "td_open") {
+      const align = /^text-align:\s*(left|center|right);?$/.exec(String(token.attrGet("style") ?? "").trim());
+      if (align) {
+        token.attrs = (token.attrs ?? []).filter(([name]) => name !== "style");
+        token.attrSet("class", `align-${align[1]}`);
+      }
+    }
     // 引用するコードの前の「<ファイル> から:」の段落に、見た目を分けるクラスを付ける（expandDirectives が作る行）。
     if (token.type === "paragraph_open" && CITE_LINE.test(tokens[i + 1]?.content ?? "")) {
       token.attrSet("class", "cite");
@@ -358,6 +367,7 @@ export function renderMarkdown(
   if (missing.length > 0) {
     throw new GuideError(`ページの中のリンクの先の見出しがありません: ${missing.join(", ")}`);
   }
+  assertNoStyleAttributes(tokens);
   const body = md.renderer.render(
     tokens.filter(
       (token, i) =>
@@ -367,6 +377,26 @@ export function renderMarkdown(
     {},
   );
   return { html: body, title, headings };
+}
+
+/** markdown-it の token のうち、属性を確かめるのに使う部分。 */
+interface AttributeToken {
+  tag: string;
+  attrs: [string, string | number][] | null;
+  children: AttributeToken[] | null;
+}
+
+/**
+ * style 属性が残っていれば失敗させる。インラインのスタイルは CSP（style-src 'self'）で効かないため。
+ * 生の HTML は書かせない（html: false）ので、属性は token の attrs だけを見ればよい（文字の中の「style=」には当たらない）。
+ */
+export function assertNoStyleAttributes(tokens: AttributeToken[]): void {
+  for (const token of tokens) {
+    if (token.attrs?.some(([name]) => name === "style")) {
+      throw new GuideError(`生成する HTML の <${token.tag}> に style 属性が残っています（CSP で効きません）。クラスと guide.css に置き換えてください`);
+    }
+    assertNoStyleAttributes(token.children ?? []);
+  }
 }
 
 /** HTML の文字として出すために、特別な文字を置き換える。 */

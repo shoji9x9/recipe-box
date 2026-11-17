@@ -239,12 +239,25 @@
     color: var(--ink);
   }
 
+  /* 列の揃え（Markdown の表の :---: と ---:）。scripts/guide-lib.ts が style 属性をこのクラスに置き換える。
+     左（:---。align-left）は、上の th・td の既定のとおりなので書かない。 */
+  & .align-center {
+    text-align: center;
+  }
+
+  /* 数は、桁がそろうよう等幅の数字にする。 */
+  & .align-right {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
   & tbody tr:nth-child(even) {
     background: var(--surface-soft);
   }
 
-  /* 1 列目は、行の名前として太くする。 */
-  & td:first-child {
+  /* 1 列目は、行の名前として太くする。
+     ただし、数を並べる表（右揃えの列がある表。アプリの規模）は太くしない。太字を小計と合計の行に使うので、1 列目が太いと目立たなくなる。 */
+  & td:first-child:not(:has(~ .align-right)) {
     font-weight: 600;
     color: var(--ink);
   }
