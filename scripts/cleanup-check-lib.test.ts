@@ -9,7 +9,6 @@ import {
   cleanupCheck,
   MAX_SINCE_SUCCESS_MS,
   PENDING_CLEANUP_AFTER_MS,
-  RECORDS_OVERDUE_MS,
   UNUSED_DELETE_AFTER_MS,
 } from "./cleanup-check-lib.ts";
 
@@ -23,7 +22,7 @@ function output(rows: unknown[]): string {
 }
 
 function row(lastSuccess: number | null, overdue: Partial<Record<string, unknown>> = {}): string {
-  return output([{ last_success: lastSuccess, overdue_workspaces: 0, overdue_photos: 0, overdue_records: 0, ...overdue }]);
+  return output([{ last_success: lastSuccess, overdue_workspaces: 0, overdue_photos: 0, ...overdue }]);
 }
 
 describe("Rust の値と同じか", () => {
@@ -38,7 +37,6 @@ describe("Rust の値と同じか", () => {
     assert.equal(UNUSED_DELETE_AFTER_MS, 14 * DAY);
     assert.equal(CLEANUP_OVERDUE_MS, DAY);
     assert.equal(PENDING_CLEANUP_AFTER_MS, HOUR);
-    assert.equal(RECORDS_OVERDUE_MS, 2 * DAY);
   });
 });
 
@@ -48,9 +46,7 @@ describe("checkSql", () => {
       checkSql(NOW),
       "SELECT MAX(ran_at) AS last_success, " +
         `(SELECT COUNT(*) FROM workspaces WHERE pinned = FALSE AND last_used_at < ${NOW - 15 * DAY}) AS overdue_workspaces, ` +
-        `(SELECT COUNT(*) FROM photos WHERE pending_since < ${NOW - DAY - HOUR}) AS overdue_photos, ` +
-        `(SELECT COUNT(*) FROM photo_uploads WHERE created_at < ${NOW - 2 * DAY}) ` +
-        `+ (SELECT COUNT(*) FROM workspace_creations WHERE created_at < ${NOW - 2 * DAY}) AS overdue_records ` +
+        `(SELECT COUNT(*) FROM photos WHERE pending_since < ${NOW - DAY - HOUR}) AS overdue_photos ` +
         "FROM cleanup_runs WHERE succeeded = TRUE",
     );
   });
@@ -65,7 +61,7 @@ describe("cleanupCheck", () => {
     assert.equal(MAX_SINCE_SUCCESS_MS, 3 * HOUR);
     assert.deepEqual(cleanupCheck(row(NOW - 30 * 60 * 1000), NOW), {
       ok: true,
-      message: "自動削除は動いている（最後の成功から 0 時間 30 分）",
+      message: "自動削除は動いている。最後の成功から 0 時間 30 分",
     });
     assert.equal(cleanupCheck(row(NOW - MAX_SINCE_SUCCESS_MS), NOW)?.ok, true);
   });
@@ -73,7 +69,7 @@ describe("cleanupCheck", () => {
   test("3 時間を超えて成功していなければ失敗", () => {
     assert.deepEqual(cleanupCheck(row(NOW - 26 * HOUR - 5 * 60 * 1000), NOW), {
       ok: false,
-      message: "自動削除が 3 時間 0 分を超えて成功していない（最後の成功から 26 時間 5 分）",
+      message: "自動削除が 3 時間 0 分を超えて成功していない。最後の成功から 26 時間 5 分",
     });
     assert.equal(cleanupCheck(row(NOW - MAX_SINCE_SUCCESS_MS - 1), NOW)?.ok, false);
   });
@@ -81,12 +77,14 @@ describe("cleanupCheck", () => {
   test("最近に成功していても、消し終えているはずのものが残っていれば失敗（種類だけを出し、数は出さない）", () => {
     assert.deepEqual(cleanupCheck(row(NOW - HOUR, { overdue_workspaces: 2 }), NOW), {
       ok: false,
-      message: "自動削除が消し終えているはずのものが残っている: 使われていないワークスペース（最後の成功から 1 時間 0 分）",
+      message: "自動削除が消し終えているはずのものが残っている: 使われていないワークスペース。最後の成功から 1 時間 0 分",
     });
-    assert.deepEqual(cleanupCheck(row(NOW - HOUR, { overdue_photos: 1, overdue_records: 3 }), NOW), {
+    assert.deepEqual(cleanupCheck(row(NOW - 5 * HOUR, { overdue_workspaces: 1, overdue_photos: 3 }), NOW), {
       ok: false,
       message:
-        "自動削除が消し終えているはずのものが残っている: 書き込みか削除の途中で残った写真の行・1 日の数を数えるための古い記録（最後の成功から 1 時間 0 分）",
+        "自動削除が 3 時間 0 分を超えて成功していない。" +
+        "自動削除が消し終えているはずのものが残っている: 使われていないワークスペース・書き込みか削除の途中で残った写真の行。" +
+        "最後の成功から 5 時間 0 分",
     });
   });
 
@@ -99,7 +97,7 @@ describe("cleanupCheck", () => {
   });
 
   test("時計がずれて未来の日時でも、負の時間を出さない", () => {
-    assert.equal(cleanupCheck(row(NOW + HOUR), NOW)?.message, "自動削除は動いている（最後の成功から 0 時間 0 分）");
+    assert.equal(cleanupCheck(row(NOW + HOUR), NOW)?.message, "自動削除は動いている。最後の成功から 0 時間 0 分");
   });
 
   test("形が違えば undefined（記録が無いと取り違えない）", () => {
@@ -111,12 +109,12 @@ describe("cleanupCheck", () => {
       output([{}]),
       output([null]),
       output([{ last_success: NOW }]),
-      output([{ last_success: NOW, overdue_workspaces: 0, overdue_photos: 0 }]),
+      output([{ last_success: NOW, overdue_workspaces: 0 }]),
       row("1" as unknown as number),
       row(NOW, { overdue_workspaces: "0" }),
       row(NOW, { overdue_photos: -1 }),
-      row(NOW, { overdue_records: 0.5 }),
-      row(NOW, { overdue_records: null }),
+      row(NOW, { overdue_photos: 0.5 }),
+      row(NOW, { overdue_workspaces: null }),
       output([JSON.parse(row(NOW))[0].results[0], JSON.parse(row(NOW))[0].results[0]]),
     ]) {
       assert.equal(cleanupCheck(text, NOW), undefined, text);

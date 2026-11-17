@@ -226,6 +226,7 @@ async fn remove_with_photos<B: Backend>(
 }
 
 /// 最後に使われてから、自動で消すまでの期間（14 日）。
+/// 失敗を知らせる確かめ（`scripts/cleanup-check-lib.ts`）にも同じ値がある。変えたら、そちらも直す。
 pub const UNUSED_DELETE_AFTER_MILLIS: i64 = 14 * DAY_MILLIS;
 
 /// 定期実行の間隔（1 時間）。wrangler.toml の `[triggers]` の `0 * * * *` に合わせる
@@ -287,8 +288,9 @@ const _: () = assert!(CLEANUP_SUBREQUESTS <= MAX_SUBREQUESTS_PER_RUN);
 pub const CLEANUP_OVERDUE_MILLIS: i64 = DAY_MILLIS;
 /// [`CLEANUP_OVERDUE_MILLIS`] の間に動く、定期実行の回数。
 const OVERDUE_RUNS: i64 = CLEANUP_OVERDUE_MILLIS / CLEANUP_INTERVAL_MILLIS;
-// アプリ全体のワークスペースが、すべて同時に対象になっても、その間に消し終える。
-const _: () = assert!(MAX_WORKSPACES_PER_RUN * OVERDUE_RUNS >= MAX_WORKSPACES);
+// 1 日以上にして、アプリ全体のワークスペースが、すべて同時に対象になっても、その間に消し終えるようにする
+// （1 日で消し終えることは、MAX_WORKSPACES_PER_RUN の assert が確かめる）。
+const _: () = assert!(OVERDUE_RUNS >= CLEANUP_RUNS_PER_DAY);
 // アプリ全体の写真の行（最大 40,000）に、すべて同時に印が残っても、片付けの対象になってから、その間に片付け終える。
 const _: () = assert!(
     MAX_WORKSPACES * crate::recipe::MAX_RECIPES_PER_WORKSPACE * photo::MAX_PHOTOS_PER_RECIPE

@@ -18,19 +18,13 @@ export const PENDING_CLEANUP_AFTER_MS = HOUR_MS;
  * 対象を実行ごとにずらして選ぶので、消すたびに失敗するものは、この時間を過ぎても残り、確かめで見つかる。
  */
 export const CLEANUP_OVERDUE_MS = DAY_MS;
-/**
- * 1 日の数を数えるための記録（photo_uploads・workspace_creations）が、消し終えているはずの古さ（2 日）。
- * 自動削除は毎回、UTC の今日の 0 時より前の記録を消すので、2 日より前の記録（昨日の 0 時より前のもの）は、
- * 昨日の 0 時からの実行（24 回以上）で消えているはずである。
- */
-export const RECORDS_OVERDUE_MS = 2 * DAY_MS;
-
 /** 残っていてはいけないものの種類と、ログに出す名前（数は出さない）。 */
 const OVERDUE = {
   overdue_workspaces: "使われていないワークスペース",
   overdue_photos: "書き込みか削除の途中で残った写真の行",
-  overdue_records: "1 日の数を数えるための古い記録",
 } as const;
+// 1 日の数を数えるための古い記録（photo_uploads・workspace_creations）は数えない。消すのは 1 回の batch で、
+// 失敗すればその実行は成功にならない（ずらして選ぶことも無い）ので、最後の成功が 3 時間以内なら残っていないためである。
 
 // 埋め込む日時を整数にする（wrangler d1 execute は値を別に渡せない）。
 function millis(value: number): number {
@@ -44,19 +38,16 @@ function millis(value: number): number {
 /**
  * 最後に成功した日時と、自動削除が消し終えているはずなのに残っているものの数を読む SQL。
  * どれもアプリ全体を対象にする（AGENTS.md の「SQL」の、自動削除のクエリ）。どれも索引で読む
- * （cleanup_runs_by_ran_at・workspaces_by_pinned_last_used_at・photos_by_pending_since・photo_uploads_by_created_at・workspace_creations_by_created_at）。
+ * （cleanup_runs_by_ran_at・workspaces_by_pinned_last_used_at・photos_by_pending_since）。
  * 集計なので、表が空でも 1 行を返す。
  */
 export function checkSql(now: number): string {
   const workspacesBefore = millis(now - UNUSED_DELETE_AFTER_MS - CLEANUP_OVERDUE_MS);
   const photosBefore = millis(now - PENDING_CLEANUP_AFTER_MS - CLEANUP_OVERDUE_MS);
-  const recordsBefore = millis(now - RECORDS_OVERDUE_MS);
   return [
     "SELECT MAX(ran_at) AS last_success,",
     `(SELECT COUNT(*) FROM workspaces WHERE pinned = FALSE AND last_used_at < ${workspacesBefore}) AS overdue_workspaces,`,
-    `(SELECT COUNT(*) FROM photos WHERE pending_since < ${photosBefore}) AS overdue_photos,`,
-    `(SELECT COUNT(*) FROM photo_uploads WHERE created_at < ${recordsBefore})`,
-    `+ (SELECT COUNT(*) FROM workspace_creations WHERE created_at < ${recordsBefore}) AS overdue_records`,
+    `(SELECT COUNT(*) FROM photos WHERE pending_since < ${photosBefore}) AS overdue_photos`,
     "FROM cleanup_runs WHERE succeeded = TRUE",
   ].join(" ");
 }
@@ -96,7 +87,8 @@ export function cleanupCheck(output: string, now: number): CleanupCheck | undefi
     return undefined;
   }
   const overdue = kinds.filter(([key]) => (values[key] as number) > 0).map(([, name]) => name);
-  const since = last === null ? undefined : `（最後の成功から ${elapsed(now - last)}）`;
+  // 経った時間は、どの問題の説明にも見えないよう、別の文にして最後に置く。
+  const since = last === null ? [] : [`最後の成功から ${elapsed(now - last)}`];
   const problems = [
     ...(last === null ? ["自動削除の成功の記録が無い"] : []),
     ...(last !== null && now - last > MAX_SINCE_SUCCESS_MS
@@ -105,7 +97,7 @@ export function cleanupCheck(output: string, now: number): CleanupCheck | undefi
     ...(overdue.length > 0 ? [`自動削除が消し終えているはずのものが残っている: ${overdue.join("・")}`] : []),
   ];
   if (problems.length > 0) {
-    return { ok: false, message: `${problems.join("。")}${since ?? ""}` };
+    return { ok: false, message: [...problems, ...since].join("。") };
   }
-  return { ok: true, message: `自動削除は動いている${since ?? ""}` };
+  return { ok: true, message: ["自動削除は動いている", ...since].join("。") };
 }
