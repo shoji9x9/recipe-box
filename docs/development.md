@@ -198,6 +198,8 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 2. 検出のしかた（detection method）で Threshold を選ぶ。
 3. クエリは custom SQL にし、下の表の番号の SQL を貼って、`<アカウント ID>` を置き換える。最後に `;` を付けない。
    時間の範囲は SQL に書かず、画面の時間の範囲（time range）の欄で、表の「時間の範囲」を選ぶ。SQL に `timestamp` の条件を書くと、「query already contains time predicates on `timestamp`; remove them to use time_range」で断られる。
+   範囲を既定のままにすると、5〜7 は 1 日の量の一部しか数えず、知らせが来なくなるので、必ず表の値にする。表の値を選べないときは、それより長いいちばん近い値を選び、選んだ値を記録する。
+   例外は 4（R2）で、この dataset には `timestamp` の列が無いので、時間の条件（`usageReportTimestamp`）を SQL に書いてあり、画面の欄は既定のままにする（下の「確かめていない」）。
 4. 表の「間隔」を Execution interval に、「条件」の比べ方（`<`・`>`・`>=`）と値をしきい値に入れる。Repeat notification interval は 24 時間にする（続いている間に、1 日に 1 通だけ届く）。
 5. 保存する前に、プレビューでふだんの値を見て、条件に当たらないことを確かめる（表の「ふだんの値」）。
 6. 表の「名前」を付け、通知の先にメール（自分のアドレス）を足して、Create を押す。
@@ -207,7 +209,7 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
 | 1 | `recipe-box: cron が動いていない` | 自動削除の cron が、2 時間に 1 回も成功しない | 2 時間 | 1 時間 | `value` `<` `1` | 2 |
 | 2 | `recipe-box: cron が落ちた` | 自動削除の cron の、成功以外の status（直近 2 時間） | 2 時間 | 1 時間 | `value` `>` `0` | 0 |
 | 3 | `recipe-box: D1 の保存量` | D1 の保存量が、無料の範囲（1 つのデータベースで 500 MB）の 50 %（250,000,000 バイト）を超えた | 24 時間 | 1 時間 | `value` `>` `250000000` | それより十分に小さい |
-| 4 | `recipe-box: R2 の保存量` | R2 の写真のバケットの保存量が、無料の範囲（10 GB-月）の 50 %（5,000,000,000 バイト）を超えた | 24 時間 | 1 時間 | `value` `>` `5000000000` | それより十分に小さい |
+| 4 | `recipe-box: R2 の保存量` | R2 の写真のバケットの保存量が、無料の範囲（10 GB-月）の 50 %（5,000,000,000 バイト）を超えた | 選ばない（SQL に 24 時間と書いてある） | 1 時間 | `value` `>` `5000000000` | それより十分に小さい |
 | 5 | `recipe-box: Workers のリクエスト` | アカウントの Workers のリクエストが、直近の 24 時間で、1 日の無料の範囲（10 万回）の 80 % を超えた | 24 時間 | 1 時間 | `value` `>` `80000` | それより十分に小さい |
 | 6 | `recipe-box: D1 の読んだ行` | D1 の読んだ行が、直近の 24 時間で、1 日の無料の範囲（500 万行）の 80 % を超えた | 24 時間 | 1 時間 | `value` `>` `4000000` | それより十分に小さい |
 | 7 | `recipe-box: D1 の書いた行` | D1 の書いた行が、直近の 24 時間で、1 日の無料の範囲（10 万行）の 80 % を超えた | 24 時間 | 1 時間 | `value` `>` `80000` | それより十分に小さい |
@@ -221,7 +223,7 @@ Monitors は、ダッシュボードでだけ作れる（beta の間は、API・
   自動削除の一部の失敗（`scheduled` は成功で終わる）は、ここでは分からず、上の 1 の確かめで知らせる。
 - 4 の R2 は、アプリの上限でアプリ全体の写真の合計を 5 GB（無料の範囲のちょうど 50 %）までにしている（docs/security.md の「費用の対策」）。超えるのは、どの行からもたどれないデータが残ったときなどで、それを知らせる。
 - 5 は、無料の範囲がアカウントの全体で数えられるので、Worker で絞らない。1 日の量は、Cloudflare が UTC の 0 時で数え直すが、ここでは直近の 24 時間で近似する。
-- 8 は、リクエストが少ないアプリなので、1 回の失敗で割合が大きく振れる。15 分に 3 回以上の失敗があり、かつ 10 % を超えたときだけ知らせる。
+- 8 は、リクエストが少ないアプリなので、1 回の失敗で割合が大きく振れる。30 分に 3 回以上の失敗があり、かつ 10 % を超えたときだけ知らせる。
   `clientDisconnected`（送り手が接続を切った）は、アプリの失敗ではないので除く。
 - 10 は、アプリが自分で返す `500` などの応答が、8 の `status` では成功に数えられうるので、応答の状態コードで別に数える。
 - 9 は、cron の起動を除いて数える（cron は 1 で見る）。毎日のデモの入れ直し（`seed-demo.yml`）が API を呼ぶので、ふだんは 0 にならない。seed の時刻のずれを見込んで 26 時間にする。
@@ -279,12 +281,14 @@ SELECT countIf(httpResponseStatus >= 500) AS value FROM events.workersInvocation
 
 SQL について:
 
-- どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の範囲は画面で選ぶ・最後に `;` を付けない）に合わせてある。
+- どの SQL も、Monitors の決まり（`value` という名前の数を 1 つだけ返す・dataset を 1 つだけ読む・アカウントで絞り込む・時間の範囲は画面で選ぶ（4 を除く）・最後に `;` を付けない）に合わせてある。
 - 結果の行が無いと Monitors は何も知らせないが、`COUNT`・`SUM`・`MAX`・`countIf` の集計は、合う行が無くても 0 の 1 行を返す（確かめ済み）。
   そのため、dataset や列の名前が変わって合う行が無くなっても、3〜8・10 は 0 のままで、知らせも失敗も出ない。毎月の確認で、名前と、プレビューで 0 でない値が出ることを確かめる（1・9 は、行が無くなれば知らせが来る）。
-- 10 個の SQL は、時間の条件を付けた形で、SQL API（`POST /client/v4/analytics/sql`）がどれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。Monitors の画面では、時間の条件を外し、時間の範囲の欄で選ぶ。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
+- 10 個の SQL は、SQL API（`POST /client/v4/analytics/sql`）で、どれも `value` の 1 列・1 行を返すことを確かめた（2026-11）。SQL API では画面の欄が無いので、4 以外は末尾に `AND timestamp >= NOW() - INTERVAL '<表の時間の範囲>'`（例: `'2' HOUR`・`'30' MINUTE`）を足した形で確かめた。SQL API で確かめ直すときも、この条件を足す（足さないと、保存してある期間の全体を数える）。`events.workersInvocations` は 1 行が 1 回の起動で、`status` は文字列（`success`・`clientDisconnected` など）である。
 - **確かめていない**こと:
-  - 4 の R2 の dataset には `timestamp` の列が無く、時刻の列は `usageReportTimestamp` なので、4 だけは時間の条件を SQL に残している。Monitors の画面がこれを受け付けるか（時間の範囲の欄をどう扱うか）は確かめていない。断られたら、時間の条件を外して試し、結果に合わせて文書を直す。
+  - 4 の R2 の dataset には `timestamp` の列が無く、時刻の列は `usageReportTimestamp` なので、4 だけは時間の条件を SQL に残している。Monitors の画面がこれを受け付けるかは確かめていない。
+    断られたら、時間の条件を外さない（外すと、画面の範囲が効かずに保存してある期間の全体の最大を数え、一度 5 GB を超えると減っても知らせ続けうる）。4 は作らずにおき、その結果をこの文書に書く。R2 の保存量は、アプリの上限で 5 GB までに抑えている（docs/security.md の「費用の対策」）。
+  - 表の「時間の範囲」の値（2 時間・24 時間・26 時間・30 分）を、画面の欄で選べるか。
   - `events.` の dataset は、量に応じて間引かれる（adaptive sampling）と公式の文書にある。間引かれると、5〜7 の数を少なく数える。introspection で間引きの重みの列（sample interval など）があれば、`COUNT(*)` をその列の `SUM` に替える。間引かれるのは量の多いときなので、しきい値に近いときほど、知らせが遅れうる。
 - beta の間は、dataset と列の名前が変わりうる。毎月の確認（下の「最低限のメンテナンス」）で、名前を問い合わせて確かめる。
   `GET /client/v4/analytics/sql/introspection?account_tag=<アカウント ID>&dataset_name=<dataset の名前>&include_columns=true` を、Account Analytics Read の権限を持つトークンで呼ぶ（結果は公開の場所に貼らない）。
@@ -341,7 +345,7 @@ Environment `production` は、「Deployment branches and tags」を「Selected 
 ### 毎月
 
 - `dependabot-alert-issue` スキルで、Dependabot の alert から Issue を作る。`mise run audit` も実行する。
-- Cloudflare の Monitors の設定が残っているか（上の「失敗の通知」の 1〜10 があり、通知の先が今のメールか）を、ダッシュボードの Alerts > Monitors で見る。beta の機能で、設定はリポジトリに残らない。
+- Cloudflare の Monitors の設定が残っているか（上の「失敗の通知」の 1〜10 があり、時間の範囲・間隔・条件が表のとおりで、通知の先が今のメールか）を、ダッシュボードの Alerts > Monitors で見る。beta の機能で、設定はリポジトリに残らない。
   SQL が使う dataset と列の名前が変わっていないかも、introspection（上の「Monitors の作り方」）で確かめる。
 - `outdated.yml` の Issue にある mise のツールを、まとめて上げる（`mise install` の後に `mise lock`。AGENTS.md の「ツールの版」）。Node は、使っているメジャーの版のサポートの終わり（EOL）が近くないかも見る。
 
