@@ -136,6 +136,50 @@ Rust から Workers の機能（リクエスト・D1・R2・Rate Limiting など
 
 ビルドは `worker-build` が行います。Rust を Wasm にし、wasm-bindgen で JavaScript との橋渡しのコードを作り、wasm-opt で小さくします。
 
+#### JavaScript と Rust（Wasm）の分担
+
+Rust で書いていても、Worker の中では JavaScript と Rust（Wasm）が一緒に動きます。Workers のランタイム（V8）が動かすのは JavaScript で、Wasm はその JavaScript から読み込まれるためです。
+Hono で書いた Worker なら全部が JavaScript ですが、このアプリでは次のように分かれます。
+
+1. **Workers のランタイム（V8）**: 実行の土台です。リクエストを受け取り、`wrangler.toml` の `main`（`build/index.js`）と、そこから読み込まれる Wasm を、この上で動かします。D1・R2 などの binding と、リクエストの本文のストリームもランタイムが持ちます。
+2. **`build/index.js`**: `worker-build` が作る JavaScript です。wasm-bindgen が作る橋渡し（glue）のコードと、手で書いた [src/photo-stream.js](repo:apps/recipe-box-rs/src/photo-stream.js) を 1 つにまとめ、Wasm（`index_bg.wasm`）を読み込みます。
+   リクエストが来ると、ランタイムがこのファイルの fetch のハンドラーを呼び、ハンドラーが Rust の `#[event(fetch)]` の関数を呼びます。
+   定期実行（Cron Trigger）のときも同じ道で、ランタイムが scheduled のハンドラーを呼び、ハンドラーが Rust の `#[event(scheduled)]` の関数を呼びます（図では省いています）。
+3. **Rust を Wasm にしたもの**: axum の Router・ハンドラー・上限の判定・写真のメタデータの書き換え（[src/metadata.rs](repo:apps/recipe-box-rs/src/metadata.rs)）など、決めることはすべてここで行います。
+   画面の HTML のテンプレートも、ここに入っています。askama は、テンプレートをコンパイルのときに Rust のコードにするので（[askama](#askama)）、テンプレートのファイルは Worker と一緒には配らず、Wasm の一部になります。
+
+<!-- diagram: worker-layers | Worker の中の層と呼ぶ向き。ブラウザのリクエストを Workers のランタイム（V8）が受け、build/index.js の fetch のハンドラーを呼び、ハンドラーが Rust を Wasm にしたもの（#[event(fetch)] と axum・askama のテンプレート・metadata.rs・workers-rs）を呼ぶ。Rust は workers-rs と wasm-bindgen を通して build/index.js の橋渡しと photo-stream.js を呼び、それがランタイムの D1・R2 の binding を呼び、ランタイムが D1・R2 と通信する。静的アセットは、Worker も V8 も動かさずに Cloudflare が返す。応答と結果は、同じ線を逆にたどって戻る -->
+
+図の矢印は、呼ぶ向きです。応答と、呼んだ結果は、同じ線を逆にたどって戻ります。ランタイムから JavaScript、JavaScript から Rust を呼ぶのは、リクエスト（fetch）と定期実行（scheduled）のときです。Rust から JavaScript を呼ぶのは、D1・R2・Rate Limiting・乱数・時計・ログ・photo-stream.js などを使うときです。
+
+- **D1・R2 を使うとき**: Rust が D1・R2 と直接通信するのではありません。D1・R2 の binding は、ランタイムが Worker に渡す JavaScript の値（オブジェクト）です。
+  Rust は workers-rs を通して、wasm-bindgen の橋渡しでその JavaScript の値の関数を呼び、実際の通信はランタイムが行います。
+- **静的アセット**: CSS・画面の JavaScript・解説（`public/`）は、Cloudflare がファイルとして返し、Worker（`build/index.js` と Wasm）も V8 も動きません（[静的アセット](#静的アセット)）。図では、Workers の枠の中に描いています。
+
+JavaScript の値（Request・Response、D1・R2 の binding、ReadableStream）は、Wasm のメモリーに写さず、JavaScript の側に置いたまま、参照（Rust の `JsValue` と、js-sys・web-sys の型）として Rust に渡します。
+中身（バイト列や文字列）を Rust で読むときだけ、Wasm のメモリーに写します。
+
+Rust から JavaScript を呼ぶ道は 3 つあります。
+
+- **workers-rs**: D1・R2・Rate Limiting などを、Rust の型と関数で包んだものです。Hono で `c.env.DB` を使うところを、Rust では workers-rs の型で使います（[src/cloudflare.rs](repo:apps/recipe-box-rs/src/cloudflare.rs)）。
+- **wasm-bindgen で JavaScript の関数を宣言する**: workers-rs に無いものは、`extern "C"` の中に JavaScript の関数の形を書いて直接呼びます。乱数は Web Crypto の `crypto.getRandomValues()` を呼びます。
+
+<!-- code: apps/recipe-box-rs/src/cloudflare.rs#get-random-values -->
+
+- **手で書いた JavaScript のファイルを読み込む**: `#[wasm_bindgen(module = ...)]` で、同じクレートの JavaScript のファイルの関数を、Rust の関数として呼びます。`worker-build` が、そのファイルを `build/index.js` にまとめます。
+
+<!-- code: apps/recipe-box-rs/src/stream.rs#photo-stream-extern -->
+
+写真の本文を JavaScript と Rust でどう分けて扱うか（先頭を含む最初の部分だけを Rust に渡し、残りは JavaScript の側で流す）は、[本文を Wasm に写すときの CPU 時間](#本文を-wasm-に写すときの-cpu-時間)にあります。
+
+##### 境目を越えるときの費用と、テスト
+
+- JavaScript と Rust の境目を越えるたびに、wasm-bindgen の橋渡しのコードが動きます。値を参照で渡すだけなら軽いのですが、バイト列や文字列を写すと、大きさに比例して CPU 時間がかかります。
+  そのため、写真では先頭を含む最初の部分だけを、64 KiB ずつ（足りなければその大きさで）写します（先頭は 1 MiB までなので、読み足しは 16 回まで）。読みすぎた分は Wasm に写さず、JavaScript の側に残して、そのまま R2 に流します。
+- Rust のテスト（`cargo test`）は手元の OS で動き、JavaScript を動かせません。そのため、Rust の側は `Backend` トレイトの偽物で確かめ（[テストの仕組み](#テストの仕組み)）、本文を本文のまま渡す経路を通ります。
+  手で書いた JavaScript は、vitest で、DOM の無い Node の環境で確かめます（[apps/recipe-box-rs/js-tests/worker/](repo:apps/recipe-box-rs/js-tests/worker)。`FixedLengthStream` は代わりのものを置きます）。
+  両方をつないだ経路は、ローカルの Worker に当てるスモークテスト（`mise run smoke`）で確かめます。
+
 ### axum
 
 Rust の Web フレームワークです。パスとメソッドの組（Router）に、ハンドラーの関数を結び付けます。
@@ -186,9 +230,27 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 #### 本文を Wasm に写すときの CPU 時間
 
 写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
-そこで、写真のバイト列をそのまま送る追加では、本文を読みためず、形式を決めてメタデータ（撮った場所など）を取り除くための頭の部分（画像のデータより前）だけを読み、残りはストリームのまま R2 に流します。
-頭の部分は Rust で、長さを変えずに書き換えます（向きだけを残し、ほかは 0 で埋める）。本文の全体を JavaScript に流して書き換えると、CPU 時間が 1 回 150〜200 ms 増えたためです。
-測った値と経緯は [Issue #31](https://github.com/shoji9x9/recipe-box/issues/31) と [Issue #52](https://github.com/shoji9x9/recipe-box/issues/52) に、仕組みは [apps/recipe-box-rs/src/stream.rs](repo:apps/recipe-box-rs/src/stream.rs) と [docs/spec.md の「写真」](repo:docs/spec.md#写真)にあります。
+本文の全体を JavaScript の関数に流して書き換えても、1 回の追加で CPU 時間が 150〜200 ms 増えました。
+そこで、形式を決めてメタデータ（撮った場所など）を取り除く判断は Rust に置き、JavaScript には、写真の最初の部分を読んで Rust に渡すことと、書き換えた最初の部分の後に残りを流すことだけをさせます。
+残りは、ランタイムの組み込みの `pipeTo` で R2 へ流すので、JavaScript の関数も Wasm も通りません。
+Rust は、最初の部分を長さを変えずに書き換えます（向きだけを残し、ほかのメタデータは 0 で埋める）。長さが変わらないので、R2 には `Content-Length` のまま流せます（[apps/recipe-box-rs/src/stream.rs](repo:apps/recipe-box-rs/src/stream.rs)）。
+
+ここで「先頭」は、写真のファイルの初めから、画像のデータ（画素）の直前までです（docs/spec.md とコードでは「頭の部分」と呼びます）。ファイルの形式を示す目印のほか、撮った場所や日時を持つ EXIF、XMP、色の情報（ICC プロファイル）、PNG の文字のチャンクなどが入ります。ふつうの写真では数十 KB で、取り除くメタデータはここにあります。
+Rust に渡す「最初の部分」は、先頭を含むように 64 KiB ずつ読んだもので、先頭の後ろの画像のデータも少し入ります（64 KiB より小さい写真では全体です）。それでも、Rust に写すのは本文のうち最初の 64 KiB ほどだけです。
+
+<!-- diagram: photo-stream | 写真のバイト列を追加するときに、JavaScript と Rust が何を渡し合うか。Rust が photo-stream.js に、先頭を含む本文の最初の部分だけを読むよう指示し、photo-stream.js は最初の部分だけを返す。Rust の metadata.rs が、先頭の位置情報などを 0 で埋める（要点）。Rust が、書き換えた最初の部分だけを渡して R2 へ流すストリームを作るよう指示し、そのストリームを R2 の put に渡す。R2 が読み始めると、書き換えた最初の部分と、JavaScript の側に残した読みすぎた分が書かれ、それを書き終えると、joinPhoto が予約しておいた pipeTo が自動で始まり、本文の残りが JavaScript の関数も Wasm も通らずに R2 へ流れる（要点）。最初の部分のほかは、Rust を通らない。最後に R2 が、書き込みが終わったことを Rust に知らせる（完了通知） -->
+
+図の線の意味: 実線は呼び出し（指示）と、R2 に書かれるデータの流れです。破線は、呼んだ側に返る結果です。赤の太い線は、この図の要点です。
+
+- photo-stream.js は、本文を少しずつ読み（`reader.read()`）、64 KiB たまってから（先頭を調べるのにもっと要るときは、その大きさまで）、まとめて Rust に返します。Rust はそれを待ち、先頭がまだ終わっていなければ、もう一度読むよう指示します。最後に読んだ塊のうち、渡す大きさを超えた分（読みすぎた分）は、Rust に渡さず JavaScript の側に残します。
+- `joinPhoto` は、「書き換えた最初の部分を書く → 読みすぎた分を書く → 本文の残りを `pipeTo` で流す」という順番を予約しておき、R2 に渡すストリームをすぐに返します（この時点では、まだ何も流れません）。
+  R2 の `put` がそのストリームを読み始めると、まず書き換えた最初の部分と読みすぎた分が書かれ、それを書き終えると、予約しておいた `pipeTo` が自動で始まります。`put` を呼んだ Rust は、ほかに何もせず、R2 から完了通知（書き込みが終わったこと）が返るのを待つだけです。
+
+この図は、誰が読み、誰が決め、誰が流すかだけを描いています（D1 に行を入れるところは省いています）。D1 と R2 に書く順序と上限の判定は、[写真の保管](#写真の保管)の図にあります。
+
+<!-- code: apps/recipe-box-rs/src/photo-stream.js#join-photo -->
+
+測った値と経緯は [Issue #31](https://github.com/shoji9x9/recipe-box/issues/31) と [Issue #52](https://github.com/shoji9x9/recipe-box/issues/52) に、決まりは [docs/spec.md の「写真」](repo:docs/spec.md#写真)にあります。
 
 ### リクエストの流れ
 
@@ -276,7 +338,7 @@ IP アドレスごとの回数は、Cloudflare が入れる `cf-connecting-ip` �
 写真は R2 に置き、行（大きさ・形式など）を D1 に置きます。上限は [docs/spec.md の「写真」](repo:docs/spec.md#写真)にあります。
 R2 は無料の範囲を超えると課金されるので、R2 に書く前に D1 で上限を判定します。書く順序は次のとおりです。
 
-<!-- diagram: photo-add | 写真を追加するときの順序。Worker が頭の部分で形式を決めてメタデータを取り除き、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す -->
+<!-- diagram: photo-add | 写真を追加するときの順序。Worker が先頭で形式を決めてメタデータを取り除き、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す -->
 
 - 印の付いた写真は、画面と API に見せません。上限には数えるので、同時に追加されても上限を超えません。
 - 消すときは、行に印を付けて隠してから、R2 のデータを先に消し、D1 の行を消します。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためです。R2 の削除が失敗したら、印を外して元に戻します。
@@ -339,7 +401,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 | DB とクエリの書き方 | D1（SQLite）、標準の SQL、`LIMIT ? OFFSET ?`、`instr` | [テーブル](repo:docs/spec.md#テーブル) | どの DB にするか。SQL は標準の範囲で書いているが、標準から外れる `LIMIT ? OFFSET ?` と `instr`（PostgreSQL なら `strpos`）は、選んだ DB で確かめる。ほかに、上限の判定で条件を左から評価する前提（[費用の対策](repo:docs/security.md#費用の対策)）と、batch のトランザクションの意味も DB で変わる。`LOWER` を使わずアプリで作る `search_name` の決まりを保つ。マイグレーションは足すだけにする |
 | トランザクション | D1 の batch で、数えることと保存することを 1 つにまとめる | [ワークスペースによるデータの分離](repo:docs/spec.md#ワークスペースによるデータの分離) | 上限の判定（同時に追加されても超えない）を、どの分離レベル・ロックで守るか |
 | 写真の保管 | R2。D1 に行を入れて上限を判定してから R2 に書く。小さな版も R2 に置き、合計に数える | [写真](repo:docs/spec.md#写真) | オブジェクトストレージ（R2・S3 など）に置くか、DB に置くか。どちらでも API の仕様は変えない。置き場の料金と制限が変わるので、大きさの上限・合計の上限を見直す（費用の対策を作り直す） |
-| 写真の受け取り | multipart のふつうのフォームと、API はバイト列そのもの。`Content-Length` で先に断る。画面の JavaScript は、写真の後に、ブラウザで作った小さな版を別のリクエストで送る。一覧と詳細は `srcset` で選ばせ、小さな版が無ければ元の写真を出す | [写真の API](repo:docs/spec.md#写真の-api)・[小さな版](repo:docs/spec.md#小さな版) | 本文の上限、形式を頭の部分で決めること、メタデータを取り除くこと。小さな版をどこで作るか（ブラウザか、サーバーか、画像の変換のサービスか）は、CPU 時間の上限と料金で決める。作れないときに元の写真に戻ることを保つ |
+| 写真の受け取り | multipart のふつうのフォームと、API はバイト列そのもの。`Content-Length` で先に断る。画面の JavaScript は、写真の後に、ブラウザで作った小さな版を別のリクエストで送る。一覧と詳細は `srcset` で選ばせ、小さな版が無ければ元の写真を出す | [写真の API](repo:docs/spec.md#写真の-api)・[小さな版](repo:docs/spec.md#小さな版) | 本文の上限、形式を先頭で決めること、メタデータを取り除くこと。小さな版をどこで作るか（ブラウザか、サーバーか、画像の変換のサービスか）は、CPU 時間の上限と料金で決める。作れないときに元の写真に戻ることを保つ |
 | 定期実行 | Cron Trigger（1 時間ごと、使われないワークスペースを消す） | [ワークスペースによるデータの分離](repo:docs/spec.md#ワークスペースによるデータの分離) | 移した先の定期実行の仕組み。途中で使われたワークスペースを消さない確かめ直しを保つ |
 | デモのリセット | GitHub Actions（`seed-demo.yml`）が毎日 seed を流す。写真は wrangler で D1 と R2 に直接入れる | [デモ用のデータ](repo:docs/spec.md#デモ用のデータ) | 写真を入れる部分を書き直す。アプリと同じデータの層（ORM など）で入れられるか |
 | レート制限 | Cloudflare の Rate Limiting（IP アドレスごと、拠点ごとにおおよそ） | [費用の対策](repo:docs/security.md#費用の対策) | 移した先で、何で IP アドレスごとに数えるか（ミドルウェアと共有の記憶、プラットフォームの機能など）。IP アドレスを、送る側が変えられないヘッダーから取る |

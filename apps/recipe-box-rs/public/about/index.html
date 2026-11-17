@@ -258,6 +258,82 @@ async fn fetch(
 }
 </code></pre>
 <p>ビルドは <code>worker-build</code> が行います。Rust を Wasm にし、wasm-bindgen で JavaScript との橋渡しのコードを作り、wasm-opt で小さくします。</p>
+<h4 id="javascript-と-rustwasmの分担">JavaScript と Rust（Wasm）の分担</h4>
+<p>Rust で書いていても、Worker の中では JavaScript と Rust（Wasm）が一緒に動きます。Workers のランタイム（V8）が動かすのは JavaScript で、Wasm はその JavaScript から読み込まれるためです。
+Hono で書いた Worker なら全部が JavaScript ですが、このアプリでは次のように分かれます。</p>
+<ol>
+<li><strong>Workers のランタイム（V8）</strong>: 実行の土台です。リクエストを受け取り、<code>wrangler.toml</code> の <code>main</code>（<code>build/index.js</code>）と、そこから読み込まれる Wasm を、この上で動かします。D1・R2 などの binding と、リクエストの本文のストリームもランタイムが持ちます。</li>
+<li><strong><code>build/index.js</code></strong>: <code>worker-build</code> が作る JavaScript です。wasm-bindgen が作る橋渡し（glue）のコードと、手で書いた <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/photo-stream.js">src/photo-stream.js</a> を 1 つにまとめ、Wasm（<code>index_bg.wasm</code>）を読み込みます。
+リクエストが来ると、ランタイムがこのファイルの fetch のハンドラーを呼び、ハンドラーが Rust の <code>#[event(fetch)]</code> の関数を呼びます。
+定期実行（Cron Trigger）のときも同じ道で、ランタイムが scheduled のハンドラーを呼び、ハンドラーが Rust の <code>#[event(scheduled)]</code> の関数を呼びます（図では省いています）。</li>
+<li><strong>Rust を Wasm にしたもの</strong>: axum の Router・ハンドラー・上限の判定・写真のメタデータの書き換え（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/metadata.rs">src/metadata.rs</a>）など、決めることはすべてここで行います。
+画面の HTML のテンプレートも、ここに入っています。askama は、テンプレートをコンパイルのときに Rust のコードにするので（<a href="#askama">askama</a>）、テンプレートのファイルは Worker と一緒には配らず、Wasm の一部になります。</li>
+</ol>
+<p><a href="/assets/guide/worker-layers.svg"><img src="/assets/guide/worker-layers.svg" alt="Worker の中の層と呼ぶ向き。ブラウザのリクエストを Workers のランタイム（V8）が受け、build/index.js の fetch のハンドラーを呼び、ハンドラーが Rust を Wasm にしたもの（#event(fetch) と axum・askama のテンプレート・metadata.rs・workers-rs）を呼ぶ。Rust は workers-rs と wasm-bindgen を通して build/index.js の橋渡しと photo-stream.js を呼び、それがランタイムの D1・R2 の binding を呼び、ランタイムが D1・R2 と通信する。静的アセットは、Worker も V8 も動かさずに Cloudflare が返す。応答と結果は、同じ線を逆にたどって戻る"></a></p>
+<p>図の矢印は、呼ぶ向きです。応答と、呼んだ結果は、同じ線を逆にたどって戻ります。ランタイムから JavaScript、JavaScript から Rust を呼ぶのは、リクエスト（fetch）と定期実行（scheduled）のときです。Rust から JavaScript を呼ぶのは、D1・R2・Rate Limiting・乱数・時計・ログ・photo-stream.js などを使うときです。</p>
+<ul>
+<li><strong>D1・R2 を使うとき</strong>: Rust が D1・R2 と直接通信するのではありません。D1・R2 の binding は、ランタイムが Worker に渡す JavaScript の値（オブジェクト）です。
+Rust は workers-rs を通して、wasm-bindgen の橋渡しでその JavaScript の値の関数を呼び、実際の通信はランタイムが行います。</li>
+<li><strong>静的アセット</strong>: CSS・画面の JavaScript・解説（<code>public/</code>）は、Cloudflare がファイルとして返し、Worker（<code>build/index.js</code> と Wasm）も V8 も動きません（<a href="#%E9%9D%99%E7%9A%84%E3%82%A2%E3%82%BB%E3%83%83%E3%83%88">静的アセット</a>）。図では、Workers の枠の中に描いています。</li>
+</ul>
+<p>JavaScript の値（Request・Response、D1・R2 の binding、ReadableStream）は、Wasm のメモリーに写さず、JavaScript の側に置いたまま、参照（Rust の <code>JsValue</code> と、js-sys・web-sys の型）として Rust に渡します。
+中身（バイト列や文字列）を Rust で読むときだけ、Wasm のメモリーに写します。</p>
+<p>Rust から JavaScript を呼ぶ道は 3 つあります。</p>
+<ul>
+<li><strong>workers-rs</strong>: D1・R2・Rate Limiting などを、Rust の型と関数で包んだものです。Hono で <code>c.env.DB</code> を使うところを、Rust では workers-rs の型で使います（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">src/cloudflare.rs</a>）。</li>
+<li><strong>wasm-bindgen で JavaScript の関数を宣言する</strong>: workers-rs に無いものは、<code>extern &quot;C&quot;</code> の中に JavaScript の関数の形を書いて直接呼びます。乱数は Web Crypto の <code>crypto.getRandomValues()</code> を呼びます。</li>
+</ul>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/cloudflare.rs">apps/recipe-box-rs/src/cloudflare.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[wasm_bindgen]
+extern &quot;C&quot; {
+    /// Web Crypto の `crypto.getRandomValues()`。暗号に使える質の乱数で `buf` を埋める。
+    #[wasm_bindgen(js_namespace = crypto, js_name = getRandomValues)]
+    fn get_random_values(buf: &amp;mut [u8]);
+}
+</code></pre>
+<ul>
+<li><strong>手で書いた JavaScript のファイルを読み込む</strong>: <code>#[wasm_bindgen(module = ...)]</code> で、同じクレートの JavaScript のファイルの関数を、Rust の関数として呼びます。<code>worker-build</code> が、そのファイルを <code>build/index.js</code> にまとめます。</li>
+</ul>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-rust">#[wasm_bindgen(module = &quot;/src/photo-stream.js&quot;)]
+extern &quot;C&quot; {
+    /// 本文を読む reader と、読んだが渡していない残り（`rest`）を持つ状態を作る。
+    #[wasm_bindgen(catch, js_name = photoReader)]
+    fn photo_reader(body: &amp;web_sys::ReadableStream) -&gt; Result&lt;JsValue, JsValue&gt;;
+
+    /// 少なくとも `min` バイト、多くとも `max` バイトを読んで、1 つの `Uint8Array` にして返す（本文が終われば、それより短い）。
+    /// 読んだ塊のうち `max` を超えた分は、Wasm に写さず、状態の `rest` に残す（[`join_photo`] が R2 に流す）。
+    #[wasm_bindgen(catch, js_name = readAtLeast)]
+    fn read_at_least(state: &amp;JsValue, min: u32, max: u32) -&gt; Result&lt;Promise, JsValue&gt;;
+
+    /// 断った写真の本文を、読まずに捨てる。
+    #[wasm_bindgen(js_name = discardPhoto)]
+    fn discard_photo(state: &amp;JsValue);
+
+    /// reader を付けていない本文を、読まずに取り消す。
+    #[wasm_bindgen(js_name = cancelBody)]
+    fn cancel_body(body: &amp;web_sys::ReadableStream);
+
+    /// reader を外し、`head`（書き換えた頭）・状態の `rest`・`body` の残りを続けて流す、長さ `length` のストリームを返す。
+    /// 残りは JavaScript を通さず、組み込みの `pipeTo` で流す。R2 が読み始めるまでは、何も流れない。
+    #[wasm_bindgen(catch, js_name = joinPhoto)]
+    fn join_photo(
+        body: &amp;web_sys::ReadableStream,
+        state: &amp;JsValue,
+        head: &amp;Uint8Array,
+        length: u32,
+    ) -&gt; Result&lt;web_sys::ReadableStream, JsValue&gt;;
+}
+</code></pre>
+<p>写真の本文を JavaScript と Rust でどう分けて扱うか（先頭を含む最初の部分だけを Rust に渡し、残りは JavaScript の側で流す）は、<a href="#%E6%9C%AC%E6%96%87%E3%82%92-wasm-%E3%81%AB%E5%86%99%E3%81%99%E3%81%A8%E3%81%8D%E3%81%AE-cpu-%E6%99%82%E9%96%93">本文を Wasm に写すときの CPU 時間</a>にあります。</p>
+<h5 id="境目を越えるときの費用とテスト">境目を越えるときの費用と、テスト</h5>
+<ul>
+<li>JavaScript と Rust の境目を越えるたびに、wasm-bindgen の橋渡しのコードが動きます。値を参照で渡すだけなら軽いのですが、バイト列や文字列を写すと、大きさに比例して CPU 時間がかかります。
+そのため、写真では先頭を含む最初の部分だけを、64 KiB ずつ（足りなければその大きさで）写します（先頭は 1 MiB までなので、読み足しは 16 回まで）。読みすぎた分は Wasm に写さず、JavaScript の側に残して、そのまま R2 に流します。</li>
+<li>Rust のテスト（<code>cargo test</code>）は手元の OS で動き、JavaScript を動かせません。そのため、Rust の側は <code>Backend</code> トレイトの偽物で確かめ（<a href="#%E3%83%86%E3%82%B9%E3%83%88%E3%81%AE%E4%BB%95%E7%B5%84%E3%81%BF">テストの仕組み</a>）、本文を本文のまま渡す経路を通ります。
+手で書いた JavaScript は、vitest で、DOM の無い Node の環境で確かめます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/js-tests/worker">apps/recipe-box-rs/js-tests/worker/</a>。<code>FixedLengthStream</code> は代わりのものを置きます）。
+両方をつないだ経路は、ローカルの Worker に当てるスモークテスト（<code>mise run smoke</code>）で確かめます。</li>
+</ul>
 <h3 id="axum">axum</h3>
 <p>Rust の Web フレームワークです。パスとメソッドの組（Router）に、ハンドラーの関数を結び付けます。
 Hono と同じく、ミドルウェア（middleware）で前後の処理を足せます。このアプリは、書き込む API の前に、回数と本文の大きさを確かめる middleware を付けています。</p>
@@ -338,9 +414,60 @@ Workers は 1 つのスレッドで動くので、実際には別のスレッド
 </ul>
 <h4 id="本文を-wasm-に写すときの-cpu-時間">本文を Wasm に写すときの CPU 時間</h4>
 <p>写真を送るリクエストの本文を、いったん Wasm のメモリーに読みためると、4 MB の写真で CPU 時間が数十 ms かかりました。無料のプランの上限（1 回 10 ms）を大きく超えます。
-そこで、写真のバイト列をそのまま送る追加では、本文を読みためず、形式を決めてメタデータ（撮った場所など）を取り除くための頭の部分（画像のデータより前）だけを読み、残りはストリームのまま R2 に流します。
-頭の部分は Rust で、長さを変えずに書き換えます（向きだけを残し、ほかは 0 で埋める）。本文の全体を JavaScript に流して書き換えると、CPU 時間が 1 回 150〜200 ms 増えたためです。
-測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> と <a href="https://github.com/shoji9x9/recipe-box/issues/52">Issue #52</a> に、仕組みは <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a> と <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
+本文の全体を JavaScript の関数に流して書き換えても、1 回の追加で CPU 時間が 150〜200 ms 増えました。
+そこで、形式を決めてメタデータ（撮った場所など）を取り除く判断は Rust に置き、JavaScript には、写真の最初の部分を読んで Rust に渡すことと、書き換えた最初の部分の後に残りを流すことだけをさせます。
+残りは、ランタイムの組み込みの <code>pipeTo</code> で R2 へ流すので、JavaScript の関数も Wasm も通りません。
+Rust は、最初の部分を長さを変えずに書き換えます（向きだけを残し、ほかのメタデータは 0 で埋める）。長さが変わらないので、R2 には <code>Content-Length</code> のまま流せます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/stream.rs">apps/recipe-box-rs/src/stream.rs</a>）。</p>
+<p>ここで「先頭」は、写真のファイルの初めから、画像のデータ（画素）の直前までです（docs/spec.md とコードでは「頭の部分」と呼びます）。ファイルの形式を示す目印のほか、撮った場所や日時を持つ EXIF、XMP、色の情報（ICC プロファイル）、PNG の文字のチャンクなどが入ります。ふつうの写真では数十 KB で、取り除くメタデータはここにあります。
+Rust に渡す「最初の部分」は、先頭を含むように 64 KiB ずつ読んだもので、先頭の後ろの画像のデータも少し入ります（64 KiB より小さい写真では全体です）。それでも、Rust に写すのは本文のうち最初の 64 KiB ほどだけです。</p>
+<p><a href="/assets/guide/photo-stream.svg"><img src="/assets/guide/photo-stream.svg" alt="写真のバイト列を追加するときに、JavaScript と Rust が何を渡し合うか。Rust が photo-stream.js に、先頭を含む本文の最初の部分だけを読むよう指示し、photo-stream.js は最初の部分だけを返す。Rust の metadata.rs が、先頭の位置情報などを 0 で埋める（要点）。Rust が、書き換えた最初の部分だけを渡して R2 へ流すストリームを作るよう指示し、そのストリームを R2 の put に渡す。R2 が読み始めると、書き換えた最初の部分と、JavaScript の側に残した読みすぎた分が書かれ、それを書き終えると、joinPhoto が予約しておいた pipeTo が自動で始まり、本文の残りが JavaScript の関数も Wasm も通らずに R2 へ流れる（要点）。最初の部分のほかは、Rust を通らない。最後に R2 が、書き込みが終わったことを Rust に知らせる（完了通知）"></a></p>
+<p>図の線の意味: 実線は呼び出し（指示）と、R2 に書かれるデータの流れです。破線は、呼んだ側に返る結果です。赤の太い線は、この図の要点です。</p>
+<ul>
+<li>photo-stream.js は、本文を少しずつ読み（<code>reader.read()</code>）、64 KiB たまってから（先頭を調べるのにもっと要るときは、その大きさまで）、まとめて Rust に返します。Rust はそれを待ち、先頭がまだ終わっていなければ、もう一度読むよう指示します。最後に読んだ塊のうち、渡す大きさを超えた分（読みすぎた分）は、Rust に渡さず JavaScript の側に残します。</li>
+<li><code>joinPhoto</code> は、「書き換えた最初の部分を書く → 読みすぎた分を書く → 本文の残りを <code>pipeTo</code> で流す」という順番を予約しておき、R2 に渡すストリームをすぐに返します（この時点では、まだ何も流れません）。
+R2 の <code>put</code> がそのストリームを読み始めると、まず書き換えた最初の部分と読みすぎた分が書かれ、それを書き終えると、予約しておいた <code>pipeTo</code> が自動で始まります。<code>put</code> を呼んだ Rust は、ほかに何もせず、R2 から完了通知（書き込みが終わったこと）が返るのを待つだけです。</li>
+</ul>
+<p>この図は、誰が読み、誰が決め、誰が流すかだけを描いています（D1 に行を入れるところは省いています）。D1 と R2 に書く順序と上限の判定は、<a href="#%E5%86%99%E7%9C%9F%E3%81%AE%E4%BF%9D%E7%AE%A1">写真の保管</a>の図にあります。</p>
+<p class="cite"><a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/photo-stream.js">apps/recipe-box-rs/src/photo-stream.js</a> から:</p>
+<pre class="scroll" tabindex="0" role="region" aria-label="コード（横に動かせる）"><code class="language-javascript">/**
+ * reader を外し、`head`（書き換えた頭）・`rest`・本文の残りを続けて流す、長さ `length` のストリームを返す。
+ * 本文の残りは JavaScript を通さず、組み込みの pipeTo で流す。読む側（R2）が読み始めるまでは、何も流れない。
+ * 長さが実際の本文と違えば、FixedLengthStream が失敗し、読む側も失敗する。
+ * @param {ReadableStream&lt;Uint8Array&gt;} body
+ * @param {PhotoReader} state
+ * @param {Uint8Array} head
+ * @param {number} length
+ * @returns {ReadableStream&lt;Uint8Array&gt;}
+ */
+export function joinPhoto(body, state, head, length) {
+  state.reader.releaseLock();
+  /** @type {FixedLengthStream} */
+  let fixed;
+  try {
+    fixed = new FixedLengthStream(length);
+  } catch (error) {
+    cancelBody(body);
+    throw error;
+  }
+  const { readable, writable } = fixed;
+  const writer = writable.getWriter();
+  const rest = state.rest;
+  writer
+    .write(head)
+    .then(() =&gt; (rest === null ? undefined : writer.write(rest)))
+    .then(() =&gt; {
+      writer.releaseLock();
+      return body.pipeTo(writable);
+    })
+    // 読む側（R2）が失敗するか取り消すと、書き込みか pipeTo が失敗する。本文の残りを取り消す
+    // （pipeTo の途中なら pipeTo が取り消すので、ここでは何もしない）。
+    .catch(() =&gt; {
+      cancelBody(body);
+    });
+  return readable;
+}
+</code></pre>
+<p>測った値と経緯は <a href="https://github.com/shoji9x9/recipe-box/issues/31">Issue #31</a> と <a href="https://github.com/shoji9x9/recipe-box/issues/52">Issue #52</a> に、決まりは <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。</p>
 <h3 id="リクエストの流れ">リクエストの流れ</h3>
 <p><a href="/assets/guide/request-flow.svg"><img src="/assets/guide/request-flow.svg" alt="リクエストの流れ。静的アセットに当たればファイルを返す。当たらなければ Worker の入口に進む。ルートが無ければ 404 か 405、書き込みの回数・本文の大きさ・送り元が許す範囲になければ 429・413・403 で断る。通れば、ワークスペースを使うルートなら使うワークスペースを決め（API で ID が誤っていれば 400 か 404 で断る。画面で自分のワークスペースも共有のデモも無ければ「はじめる」画面へ移す）、ハンドラーが入力を確かめ（通らなければ断る）、D1・R2 を使う。上限などで失敗すれば断り、うまくいけば応答を返す"></a></p>
 <p>図の見方: 楕円は始まりと終わりです。紫のひし形は「はい」と「いいえ」で先が分かれる問いで、断る応答は必ずひし形から出ます。赤の四角はこのアプリのコードの処理です。処理の中で決まる失敗（D1 に書くときに数える上限など）は、処理の後の「うまくいったか？」から断ります。赤の破線は断る応答を返す流れで、色の見分けにくい人や白黒の印刷でも通常の流れと区別できるよう、色に加えて破線にしています。</p>
@@ -549,7 +676,7 @@ let results = db
 <h3 id="写真の保管">写真の保管</h3>
 <p>写真は R2 に置き、行（大きさ・形式など）を D1 に置きます。上限は <a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F">docs/spec.md の「写真」</a>にあります。
 R2 は無料の範囲を超えると課金されるので、R2 に書く前に D1 で上限を判定します。書く順序は次のとおりです。</p>
-<p><a href="/assets/guide/photo-add.svg"><img src="/assets/guide/photo-add.svg" alt="写真を追加するときの順序。Worker が頭の部分で形式を決めてメタデータを取り除き、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す"></a></p>
+<p><a href="/assets/guide/photo-add.svg"><img src="/assets/guide/photo-add.svg" alt="写真を追加するときの順序。Worker が先頭で形式を決めてメタデータを取り除き、D1 で上限を数えて、書き込みの終わっていない印を付けた行を入れてから、本文をストリームのまま R2 に書く。書けなければ D1 の行を消す。書けたら行の印を外し、行が無くなっていて外せなければ R2 のデータを消す"></a></p>
 <ul>
 <li>印の付いた写真は、画面と API に見せません。上限には数えるので、同時に追加されても上限を超えません。</li>
 <li>消すときは、行に印を付けて隠してから、R2 のデータを先に消し、D1 の行を消します。逆にすると、R2 の削除が失敗したときに、どの行からもたどれないデータが R2 に残るためです。R2 の削除が失敗したら、印を外して元に戻します。</li>
@@ -690,7 +817,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 <td>写真の受け取り</td>
 <td>multipart のふつうのフォームと、API はバイト列そのもの。<code>Content-Length</code> で先に断る。画面の JavaScript は、写真の後に、ブラウザで作った小さな版を別のリクエストで送る。一覧と詳細は <code>srcset</code> で選ばせ、小さな版が無ければ元の写真を出す</td>
 <td><a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%86%99%E7%9C%9F%E3%81%AE-api">写真の API</a>・<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E5%B0%8F%E3%81%95%E3%81%AA%E7%89%88">小さな版</a></td>
-<td>本文の上限、形式を頭の部分で決めること、メタデータを取り除くこと。小さな版をどこで作るか（ブラウザか、サーバーか、画像の変換のサービスか）は、CPU 時間の上限と料金で決める。作れないときに元の写真に戻ることを保つ</td>
+<td>本文の上限、形式を先頭で決めること、メタデータを取り除くこと。小さな版をどこで作るか（ブラウザか、サーバーか、画像の変換のサービスか）は、CPU 時間の上限と料金で決める。作れないときに元の写真に戻ることを保つ</td>
 </tr>
 <tr>
 <td>定期実行</td>

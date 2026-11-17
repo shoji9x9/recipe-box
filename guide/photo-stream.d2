@@ -1,0 +1,31 @@
+# 写真のバイト列を追加するときに、JavaScript と Rust（Wasm）が何を渡し合うか。mise run guide が SVG にする（docs/development.md の「解説」）。
+# 誰が読み、誰が決め、誰が流すかだけを描く。D1 と R2 に書く順序と上限の判定は、photo-add の図が描く。
+# 線の意味（本文の図の下にも書く）:
+# - 実線: 呼び出し（指示）と、R2 に書かれるデータの流れ。
+# - 破線: 呼んだ側に返る結果。
+# - 赤の太い線: この図の要点（先頭のメタデータを 0 で埋めること、本文の残りが JavaScript も Wasm も通らないこと）。
+...@_style
+# 線の文字を斜体にしない（_style.d2）。
+(** -> **)[*].style.italic: false
+
+shape: sequence_diagram
+
+classes: {
+  result: {style: {stroke-dash: 4; stroke: "#6a6a6a"}}
+  key: {style: {stroke: "#e00b41"; stroke-width: 3; font-color: "#e00b41"; bold: true}}
+}
+
+runtime: ランタイム\n（リクエストの本文） {class: service}
+js: "photo-stream.js\n（手で書いた JavaScript）" {class: app}
+rust: "Rust\n（stream.rs・metadata.rs）" {class: app}
+r2: R2 {class: store}
+
+runtime -> rust: リクエストを渡す（本文はまだ読まない）
+rust -> js: 先頭を含む最初の部分\n（64 KiB ほど）だけを読むよう指示\n（readAtLeast）
+js -> rust: 最初の部分だけを返す\n（残りは Rust に渡さない） {class: result}
+rust -> rust: metadata.rs が、先頭の位置情報などを\n0 で埋める {class: key}
+rust -> js: 書き換えた最初の部分だけを渡し、\nR2 へ流すストリームを作るよう指示\n（joinPhoto）
+js -> rust: R2 に渡すストリームを返す\n（まだ何も流れていない） {class: result}
+rust -> r2: ストリームを渡して書くよう指示（put）
+runtime -> r2: 本文の残りを pipeTo で流す\n（最初の部分と読みすぎた分を書き終えると\n自動で始まる。JavaScript の関数も Wasm も通らない） {class: key}
+r2 -> rust: 完了通知\n（R2 への書き込みが終わった） {class: result}
