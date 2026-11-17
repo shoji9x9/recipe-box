@@ -176,12 +176,13 @@ p {
 /* 入力: 白地、細い線、角 8px。フォーカスは、欄の外に 2px の黒い線（outline）を出す（光彩は付けない）。
    線を枠（border）と別にするので、誤りのある欄（赤い枠）でもフォーカスが分かる。
    outline は、強制カラーモード（Windows のハイコントラスト）でも、システムの色で残る（box-shadow は消える）。 */
+/* 欄の名前は、補足（.note。灰色の細字）と見分けるため、本文の色の太字にする（docs/design.md の「文字」） */
 label {
   display: block;
   margin: var(--space-6) 0 var(--space-2);
   font-size: 14px;
-  font-weight: 500;
-  color: var(--muted);
+  font-weight: 600;
+  color: var(--ink);
 }
 
 input,
@@ -621,6 +622,16 @@ button.primary.danger-fill {
   color: var(--muted);
 }
 
+/* 欄の名前と欄の間に置く補足は、欄の名前に寄せる */
+label + .note {
+  margin: 0 0 var(--space-2);
+}
+
+/* ワークスペースの ID は、切り替えの欄と同じ等幅の字で出す */
+.workspace-id {
+  font-family: var(--font-mono);
+}
+
 .multiline {
   margin: 0;
   white-space: pre-wrap;
@@ -656,11 +667,17 @@ button.primary.danger-fill {
   border-bottom: 1px solid var(--hairline-soft);
   background: var(--surface-soft);
 
-  & p {
+  /* 文ごとに 1 つの p にして、広い画面では文の途中で折り返さない。
+     狭い画面で折り返すときは、日本語の文節の切れ目で折り返す（word-break: auto-phrase。対応していないブラウザは、ふつうの折り返し） */
+  & .demo-text {
     flex: 1 1 320px;
     max-width: var(--width-content);
-    margin: 0;
     font-size: 14px;
+    word-break: auto-phrase;
+  }
+
+  & p {
+    margin: 0;
   }
 
   & form {

@@ -30,7 +30,11 @@
     {#- 共有のデモを見ている間は、どの画面にも出す。 #}
     {%- if layout.demo_shared %}
     <section class="demo-banner" aria-label="共有のデモ">
-      <p>誰でも見て編集できる、共有のデモです。個人情報や、人に見られて困ることを書かないでください。デモは毎日 4 時（日本時間）に元に戻り、登録したレシピも消えます。</p>
+      {#- 文ごとに行を分け、広い画面では文の途中で折り返さない。 #}
+      <div class="demo-text">
+        <p>誰でも見て編集できる、共有のデモです。個人情報や、人に見られて困ることを書かないでください。</p>
+        <p>デモは毎日 4 時（日本時間）に元に戻り、登録したレシピも消えます。</p>
+      </div>
       <form method="post" action="/workspace">
         <button type="submit" class="primary">自分だけのレシピ帳を作る</button>
       </form>
@@ -38,7 +42,10 @@
     {%- endif %}
     {%- if layout.demo_visiting %}
     <section class="demo-banner" aria-label="共有のデモ">
-      <p>共有のデモを表示しています。ここでの登録や編集は、誰にでも見えます。1 時間たつと、自分のレシピ帳に戻ります。</p>
+      <div class="demo-text">
+        <p>共有のデモを表示しています。ここでの登録や編集は、誰にでも見えます。</p>
+        <p>1 時間たつと、自分のレシピ帳に戻ります。</p>
+      </div>
       <form method="post" action="/workspace/own">
         <button type="submit" class="primary">自分のレシピ帳に戻る</button>
       </form>
