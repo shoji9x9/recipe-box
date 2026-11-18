@@ -2,7 +2,14 @@
 // 判定の関数は直接呼び、happy-dom の DOM に画面を置いて確かめる。
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { focusHeading, invokeOnClick, reannounceMessages, supportsInvokers } from "../public/assets/page.js";
+import {
+  cancelPendingImages,
+  focusHeading,
+  invokeOnClick,
+  reannounceMessages,
+  restoreImages,
+  supportsInvokers,
+} from "../public/assets/page.js";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -148,5 +155,90 @@ describe("Invoker Commands に対応していないブラウザでのダイア�
     // 削除を送るボタン（commandfor の無いボタン）は扱わない。
     expect(click('button[type="submit"]')).toBe(false);
     expect(showModal).not.toHaveBeenCalled();
+  });
+});
+
+describe("htmx で入れ替えるときの、読み込み中の写真の取りやめ", () => {
+  /**
+   * 写真を 3 枚置く。1 枚目は読み終えたもの、2 枚目は読み込み中のもの（srcset のある小さな版）、
+   * 3 枚目は入れ替える先（#results）の外の読み込み中のもの。happy-dom は写真を読まないので、complete を決めて置く。
+   * src を外せば complete は true になる（ブラウザと同じ）。
+   */
+  function placeImages() {
+    document.body.innerHTML = `<main><h1>レシピの一覧</h1><section id="results">
+      <img id="done" src="/recipes/r1/photos/p1" alt="">
+      <img id="loading" src="/recipes/r2/photos/p2/thumbnail" srcset="/recipes/r2/photos/p2/thumbnail 1280w, /recipes/r2/photos/p2 4000w" alt=""></section>
+      <img id="outside" src="/recipes/r3/photos/p3" alt=""></main>`;
+    const done = document.getElementById("done") as HTMLImageElement;
+    const loading = document.getElementById("loading") as HTMLImageElement;
+    const outside = document.getElementById("outside") as HTMLImageElement;
+    for (const img of [done, loading, outside]) {
+      Object.defineProperty(img, "complete", { get: () => img === done || !img.hasAttribute("src") });
+    }
+    return { done, loading, outside, results: document.getElementById("results") as HTMLElement };
+  }
+
+  function send(target: Element, xhr: XMLHttpRequest) {
+    target.dispatchEvent(new CustomEvent("htmx:beforeSend", { bubbles: true, detail: { target, xhr } }));
+  }
+
+  test("入れ替える先の、読み終えていない写真だけ src と srcset を外して隠し、戻せる", () => {
+    const { done, loading, outside, results } = placeImages();
+    const cancelled = cancelPendingImages(results);
+    expect(cancelled).toHaveLength(1);
+    expect(done.getAttribute("src")).toBe("/recipes/r1/photos/p1");
+    expect(outside.getAttribute("src")).toBe("/recipes/r3/photos/p3");
+    expect(loading.hasAttribute("src")).toBe(false);
+    expect(loading.hasAttribute("srcset")).toBe(false);
+    expect(loading.hasAttribute("data-load-cancelled")).toBe(true);
+
+    restoreImages(cancelled);
+    expect(loading.getAttribute("src")).toBe("/recipes/r2/photos/p2/thumbnail");
+    expect(loading.getAttribute("srcset")).toBe("/recipes/r2/photos/p2/thumbnail 1280w, /recipes/r2/photos/p2 4000w");
+    expect(loading.hasAttribute("data-load-cancelled")).toBe(false);
+  });
+
+  test("画面から外れた写真（入れ替えで消えたもの）には、src を戻さない", () => {
+    const { loading, results } = placeImages();
+    const cancelled = cancelPendingImages(results);
+    loading.remove();
+    restoreImages(cancelled);
+    expect(loading.hasAttribute("src")).toBe(false);
+  });
+
+  test("要求を送るときに取りやめ、入れ替わらずに要求が終われば（回線が切れたなど）戻す", () => {
+    const { loading } = placeImages();
+    const xhr = new XMLHttpRequest();
+    send(document.body, xhr);
+    expect(loading.hasAttribute("src")).toBe(false);
+    xhr.dispatchEvent(new Event("loadend"));
+    expect(loading.getAttribute("src")).toBe("/recipes/r2/photos/p2/thumbnail");
+  });
+
+  test("要求が並んでも、それぞれが取りやめた写真を、それぞれの終わりで戻す", () => {
+    const { loading, outside, results } = placeImages();
+    const first = new XMLHttpRequest();
+    const second = new XMLHttpRequest();
+    send(results, first);
+    send(document.body, second);
+    expect(loading.hasAttribute("src")).toBe(false);
+    expect(outside.hasAttribute("src")).toBe(false);
+    // 2 つ目の終わりでは、2 つ目が取りやめた写真（#results の外）だけを戻す。
+    second.dispatchEvent(new Event("loadend"));
+    expect(outside.getAttribute("src")).toBe("/recipes/r3/photos/p3");
+    expect(loading.hasAttribute("src")).toBe(false);
+    first.dispatchEvent(new Event("loadend"));
+    expect(loading.getAttribute("src")).toBe("/recipes/r2/photos/p2/thumbnail");
+  });
+
+  test("戻る・進むで htmx が画面を読み直すときも取りやめ、読めなければ戻す", () => {
+    const { loading } = placeImages();
+    const xhr = new XMLHttpRequest();
+    document.body.dispatchEvent(
+      new CustomEvent("htmx:historyCacheMiss", { bubbles: true, detail: { historyElt: document.body, xhr } }),
+    );
+    expect(loading.hasAttribute("src")).toBe(false);
+    xhr.dispatchEvent(new Event("loadend"));
+    expect(loading.getAttribute("src")).toBe("/recipes/r2/photos/p2/thumbnail");
   });
 });

@@ -839,3 +839,8 @@ footer {
     color: var(--muted);
   }
 }
+
+/* 画面を入れ替えるときに読み込みを取りやめた写真（page.js）。壊れた写真の印や alt の文字を出さず、場所だけを残す */
+img[data-load-cancelled] {
+  visibility: hidden;
+}
