@@ -490,7 +490,8 @@ export function joinPhoto(body, state, head, length) {
 <h3 id="javascript-が動かなくても使える作り">JavaScript が動かなくても使える作り</h3>
 <p>画面は、JavaScript が動かなくても、すべての操作ができます（<a href="https://github.com/shoji9x9/recipe-box/blob/main/docs/spec.md#%E7%94%BB%E9%9D%A2">docs/spec.md の「画面」</a>）。JavaScript は、使い心地を良くするためだけに使います。</p>
 <ul>
-<li>画面の移動とフォームは、ふつうのリンクとフォーム（<code>&lt;a&gt;</code>・<code>&lt;form method=&quot;post&quot;&gt;</code>）です。<code>&lt;body hx-boost=&quot;true&quot;&gt;</code>（<code>hx-boost</code> の属性）で、htmx が動けば、ページの全体を読み直さずに中身を入れ替えます。htmx が動かなければ、ふつうに移動します。</li>
+<li>画面の移動とフォームは、ふつうのリンクとフォーム（<code>&lt;a&gt;</code>・<code>&lt;form method=&quot;post&quot;&gt;</code>）です。<code>&lt;body hx-boost=&quot;true&quot;&gt;</code>（<code>hx-boost</code> の属性）で、htmx が動けば、ページの全体を読み直さずに中身を入れ替えます。htmx が動かなければ、ふつうに移動します。
+htmx は中身を入れ替えるだけなので、ブラウザは移る前の画面の写真を読み続けます。遅い回線では、それが次の画面を待たせるので、移るときに、読み終えていない写真の読み込みを取りやめます（<code>page.js</code>）。</li>
 <li>書き込みは、POST の後に別の画面へ移す（リダイレクトする）ので、再読み込みで二重に送りません。</li>
 <li>削除の確認のダイアログは、Invoker Commands（<code>commandfor</code>・<code>command</code> 属性）で開閉します。ボタンの属性だけで <code>&lt;dialog&gt;</code> を開けるので、スクリプトが要りません。
 Invoker Commands に対応していない少し古いブラウザでは、小さなスクリプト（<code>page.js</code>）が同じ属性を読んで、同じダイアログを開きます。</li>
@@ -511,7 +512,7 @@ Invoker Commands に対応していない少し古いブラウザでは、小さ
 &lt;/dialog&gt;
 {%- endmacro %}
 </code></pre>
-<p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送り、その後に一覧と詳細に出す小さな版を作って送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）と、画面が移った後のフォーカスと古いブラウザでのダイアログを補うもの（<code>page.js</code>）だけです。写真と検索のものは、動かなければふつうのフォームとして働きます。</p>
+<p>自分で書いた JavaScript は、写真をまとめて 1 枚ずつ送り、その後に一覧と詳細に出す小さな版を作って送るもの（<code>photo-upload.js</code>）と、日本語の入力の変換中に検索しないもの（<code>search.js</code>）と、画面を移るときの写真の取りやめと、移った後のフォーカスと、古いブラウザでのダイアログを補うもの（<code>page.js</code>）だけです。写真と検索のものは、動かなければふつうのフォームとして働きます。</p>
 <h3 id="テストの仕組み">テストの仕組み</h3>
 <p>アプリが外の世界（DB・オブジェクトストレージ・レート制限・乱数・時計）に頼る部分は、<code>Backend</code> トレイトにまとめています。</p>
 <p>次は、トレイトの先頭（乱数・時計・回数の制限）だけです。ワークスペース・レシピ・写真を読み書きするメソッドが続きます（全体は <a href="https://github.com/shoji9x9/recipe-box/blob/main/apps/recipe-box-rs/src/backend.rs">apps/recipe-box-rs/src/backend.rs</a>）。</p>
