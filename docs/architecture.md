@@ -78,7 +78,7 @@ Dependabot の更新のうち自動でマージされたもの（`dependabot-aut
 | --- | --- |
 | 言語 | Rust。開発用の Node のスクリプト（seed など）は TypeScript（Node がそのまま動かす）。画面の小さな JavaScript は、ビルドしないよう JavaScript のまま（型は JSDoc） |
 | Web フレームワーク | [axum](https://github.com/tokio-rs/axum)（[workers-rs](https://github.com/cloudflare/workers-rs) の `http` 機能で Workers 上で動かす） |
-| 画面 | [askama](https://github.com/askama-rs/askama)（HTML テンプレート）と [htmx](https://htmx.org/)。編集の画面で写真をまとめて追加し、追加・削除の後に写真の欄だけを入れ替える小さな JavaScript（`apps/recipe-box-rs/public/assets/photo-upload.js`）と、検索で日本語の変換中に検索しないための JavaScript（`apps/recipe-box-rs/public/assets/search.js`）と、hx-boost で画面を移るときの読み込み中の写真の取りやめと、移った後のフォーカスと、Invoker Commands に対応していないブラウザでの削除のダイアログの開閉を補う JavaScript（`apps/recipe-box-rs/public/assets/page.js`）だけを自分で書く。どれも ES モジュール。ビルドの手順を増やさないよう、TypeScript にせず JavaScript のまま配り、型は JSDoc で書いて `tsc --noEmit` で確かめる |
+| 画面 | [askama](https://github.com/askama-rs/askama)（HTML テンプレート）と [htmx](https://htmx.org/)。編集の画面で写真をまとめて追加し、追加・削除の後に写真の欄だけを入れ替える小さな JavaScript（`apps/recipe-box-rs/public/assets/photo-upload.js`）と、検索で日本語の変換中に検索しないための JavaScript（`apps/recipe-box-rs/public/assets/search.js`）と、htmx で入れ替えるときの読み込み中の写真の取りやめと、hx-boost で移った後のフォーカスと、Invoker Commands に対応していないブラウザでの削除のダイアログの開閉を補う JavaScript（`apps/recipe-box-rs/public/assets/page.js`）だけを自分で書く。どれも ES モジュール。ビルドの手順を増やさないよう、TypeScript にせず JavaScript のまま配り、型は JSDoc で書いて `tsc --noEmit` で確かめる |
 | スタイル | 1 つの CSS ファイル（`apps/recipe-box-rs/public/assets/style.css`）。色・主な余白・幅を変数にし、CSS の入れ子（`&`）で部品ごとにまとめる。文字の役割などの見た目の決まりは [design.md](design.md) |
 | 実行環境 | Cloudflare Workers |
 | DB | Cloudflare D1 |
