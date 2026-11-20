@@ -364,7 +364,7 @@ GitHub は、公開リポジトリで 60 日活動が無いと、schedule で動
 | 手元で調べるための読み取り専用の Cloudflare のトークン | 作ったなら、期限が切れる前に作り直すか、要らなければ消す |
 | `docs/security.md` と、この文書の「本番のログ」の料金 | 「2026-11-30 まで」と「2026-12-01 から」の 2 つを書いている。2026-12-01 を過ぎたら、新しい料金だけの書き方に直す |
 | `docs/security.md` の費用の表の「2026-11 時点」（`guide/about.md` にもある） | 料金と無料の範囲は変わる。公式の文書で確かめ直したら、値と時点を直す |
-| mise の Rust・Node の版と、`worker-build`・`worker`（`=0.8.7`）の固定 | `outdated.yml` の Issue と Dependabot で上げる。`worker-build`（`mise.toml`）と `worker`（`apps/recipe-box-rs/Cargo.toml`）は同じ版にそろえて一緒に上げる |
+| mise の Rust・Node の版と、`worker-build`・`worker`（`=0.9.0`）の固定 | `outdated.yml` の Issue と Dependabot で上げる。`worker-build`（`mise.toml`）と `worker`（`apps/recipe-box-rs/Cargo.toml`）は同じ版にそろえて一緒に上げる |
 | CI の `runs-on: ubuntu-latest` | 指す Ubuntu の版は GitHub が変える。CI が急に落ちたら、まずランナーの版の変化を疑う |
 | 解説の「アプリの規模」の表 | commit のたびに数が変わるが、lint では確かめない。大きな機能を足したときや、利用者に求められたときに、`mise run size` と `mise run guide` で数え直す（上の「解説（/about）」） |
 | Cloudflare の Monitors（上の「失敗の通知」） | 設定が消えていないかを毎月見る（上の「毎月」）。beta が終わって dataset や列の名前が変われば、SQL を直し、この文書も直す |

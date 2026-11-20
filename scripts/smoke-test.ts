@@ -53,6 +53,10 @@ let status = 0;
 let body = Buffer.alloc(0);
 let responseHeaders = new Headers();
 
+// 手元の Worker（localhost）に当てているか。
+// Cloudflare の端は、圧縮するときなどに応答の長さのヘッダーを付け替えるので、長さは手元でだけ確かめる。
+const isLocal = ["localhost", "127.0.0.1"].includes(new URL(baseUrl).hostname);
+
 /** 1 × 1 の透明な PNG（68 バイト）。 */
 const PNG_1X1 = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c6360000200000500017a5eab3f0000000049454e44ae426082",
@@ -242,6 +246,24 @@ async function localSql(sql: string): Promise<unknown[]> {
   const rows = d1Rows(await wrangler("--local", "d1", "execute", "DB", "--json", "--command", sql));
   if (rows === undefined) fail("wrangler の d1 execute --json の出力の形が、思ったものと違う");
   return rows;
+}
+
+/**
+ * 圧縮を断って GET したとき、本文の長さを Content-Length で示している（chunked でない）か（docs/spec.md の「API」）。
+ * 圧縮すると長さが前もって決まらず chunked になるので、`Accept-Encoding: identity` で確かめる。
+ * 最後の応答（status・body・responseHeaders）は変えない。
+ */
+async function expectFixedLength(path: string, workspace: string, what: string): Promise<void> {
+  if (!isLocal) return;
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { "X-Workspace-Id": workspace, "Accept-Encoding": "identity" },
+  });
+  const length = (await response.arrayBuffer()).byteLength;
+  if (response.status !== 200) fail(`${what} の状態コードが 200 でない（${response.status}）`);
+  if (response.headers.get("transfer-encoding") !== null) fail(`${what} が chunked で返った`);
+  if (response.headers.get("content-length") !== String(length)) {
+    fail(`${what} の Content-Length が、本文の長さ（${length} バイト）と違う`);
+  }
 }
 
 function checkedId(id: string): string {
@@ -495,6 +517,7 @@ async function main(): Promise<void> {
   console.log("一覧と検索");
   await request("GET", "/api/recipes", a);
   expect(200, "GET /api/recipes");
+  await expectFixedLength("/api/recipes", workspaceA, "レシピの一覧（JSON）");
   const listA = json<RecipeList>();
   if (listA.recipes.length !== 2) fail("一覧の件数が 2 でない");
   if (listA.recipes[0]?.name !== "100% Juice") fail("一覧が新しい順でない");
@@ -631,6 +654,7 @@ async function main(): Promise<void> {
   if (json<PhotoList>().photos.length !== 1) fail("写真の一覧が 1 件でない");
   await request("GET", `/api/recipes/${recipeId}/photos/${photoId}`, a);
   expect(200, "GET /api/recipes/{id}/photos/{photo_id}");
+  await expectFixedLength(`/api/recipes/${recipeId}/photos/${photoId}`, workspaceA, "写真");
   if (body.length !== located.bytes.length) fail("R2 から読んだ写真の長さが、送ったものと違う");
   if (body.includes(LOCATION_MARK)) fail("R2 から読んだ写真に、位置情報が残っている");
   if (!body.includes(ORIENTATION_ONLY_EXIF)) fail("R2 から読んだ写真に、向きが残っていない");

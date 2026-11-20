@@ -804,7 +804,7 @@ pub async fn index<B: Backend>(
             },
         ));
     };
-    let params = params.map(|Query(params)| params).unwrap_or_default();
+    let params = params.map_or_default(|Query(params)| params);
     let (pattern, page) = match recipe::parse_list_params(&params) {
         Ok(parsed) => parsed,
         // 検索の条件が正しくなければ、エラーの画面ではなく一覧の画面に誤りを出す。
@@ -814,8 +814,7 @@ pub async fn index<B: Backend>(
             let q = params
                 .iter()
                 .find(|(key, _)| key == "q")
-                .map(|(_, value)| value.clone())
-                .unwrap_or_default();
+                .map_or_default(|(_, value)| value.clone());
             return Ok(render(
                 StatusCode::BAD_REQUEST,
                 &ListPage {
