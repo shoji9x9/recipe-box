@@ -276,6 +276,9 @@ stateDiagram-v2
 | `GET /api/recipes/:id/photos/:photo_id` | 写真のデータ |
 | `DELETE /api/recipes/:id/photos/:photo_id` | 写真の削除 |
 
+応答の本文（JSON と写真）は、圧縮しないとき（`Accept-Encoding: identity`）、長さを `Content-Length` で示して返す（chunked にしない）。
+圧縮するときは、長さが前もって決まらないので chunked になる。Cloudflare の端も、圧縮するときなどに、このヘッダーを付け替える。
+
 失敗したときは、状態コードと次の形の本文を返す。`error` は機械向けのコード、`message` は人向けの説明である。
 入力の項目が正しくないときだけ、どの項目かを `field` で示す。
 
