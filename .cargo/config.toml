@@ -1,0 +1,4 @@
+# 公開から 7 日たっていない版を選ばない（サプライチェーン攻撃の対策。docs/security.md）。
+# 依存を足すときや cargo update のときに、Cargo がこれより新しい版を選ばない（Rust 1.100 から）。
+[registry]
+global-min-publish-age = "7 days"

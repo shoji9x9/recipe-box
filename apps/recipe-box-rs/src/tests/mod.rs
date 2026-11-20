@@ -84,8 +84,7 @@ pub async fn send(app: Router, request: Request<Body>) -> TestResponse {
         response
             .headers()
             .get(name)
-            .map(|value| value.to_str().unwrap().to_owned())
-            .unwrap_or_default()
+            .map_or_default(|value| value.to_str().unwrap().to_owned())
     };
     let content_type = header_text(header::CONTENT_TYPE);
     let allow = header_text(header::ALLOW);

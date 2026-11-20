@@ -384,7 +384,7 @@ R2 は無料の範囲を超えると課金されるので、R2 に書く前に D
 | --- | --- |
 | ツールの版 | mise で入れ、`mise.lock` で版とチェックサムを固定する |
 | 依存の版 | `Cargo.lock`・`pnpm-lock.yaml` で固定する。CI は lockfile と食い違うと失敗する |
-| 7 日の待ち | 公開から 7 日たっていない版を使わない（Dependabot・mise・pnpm） |
+| 7 日の待ち | 公開から 7 日たっていない版を使わない（Dependabot・mise・pnpm・Cargo） |
 | 依存の検査 | cargo-deny（脆弱性・ライセンス・取得元）、pnpm の署名の確かめ |
 | GitHub Actions | workflow lockfile で、使う action を commit に固定する。job ごとに最小の権限だけを与える |
 | 秘密情報 | gitleaks（commit の前と CI）、GitHub の secret scanning |
