@@ -128,6 +128,8 @@ Worker の CPU 時間を抑えるため、ファイルの頭の部分（画像�
   - mise: `minimum_release_age = "7d"`
   - pnpm: `minimumReleaseAge: 10080`（単位は分）
   - Cargo: `.cargo/config.toml` の `registry.global-min-publish-age = "7 days"`（Rust 1.100 から）。依存を足すときと `cargo update` のときに、これより新しい版を選ばない。
+    `cargo update --precise` で版を指定しても断るので、脆弱性を直す版でも 7 日待つ。Dependabot の security update が、この設定のために作れないこともある。
+    急ぎで要るときは、理由を PR に書いたうえで、その 1 回だけ `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <クレート> --precise <版>` で入れる（設定は消さない）。
 - 依存はすべて lockfile で固定する（`Cargo.lock`・`pnpm-lock.yaml`・`mise.lock`）。CI は lockfile と食い違うと失敗する。
   mise が `cargo install` で入れる worker-build は、配布元の `Cargo.lock` に従って `--locked` でビルドされる。ただし `cargo install` は Cargo の待ち日数の設定を使わないので、worker-build の版は公開から 7 日たったものを手で選ぶ。
 - GitHub Actions は workflow lockfile（`.github/workflows/actions.lock`）で、使う action とその action が使う action を commit に固定する。
