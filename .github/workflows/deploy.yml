@@ -63,7 +63,7 @@ jobs:
         if: steps.cred.outputs.present == 'true'
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v5.2.7
+      - uses: jdx/mise-action@v5.2.9
         if: steps.cred.outputs.present == 'true'
         with:
           cache: true

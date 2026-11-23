@@ -94,7 +94,7 @@ jobs:
               --jq ".[] | select($people or $bot) | \"### \\(.user.login)（\\(.created_at)、\\(.path):\\(.line // .original_line)、id \\(.id)、返信先 \\(.in_reply_to_id // \"なし\")）\\n\\n\\(.body)\\n\""
           } > "$dir/pr.md"
           gh pr diff "$PR" --repo "$REPO" > "$dir/pr.diff"
-      - uses: anthropics/claude-code-action@v1.0.269
+      - uses: anthropics/claude-code-action@v1.0.276
         id: review
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
