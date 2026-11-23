@@ -179,8 +179,8 @@ importers:
         specifier: ^26.6.6
         version: 26.6.6
       chrome-devtools-mcp:
-        specifier: 1.12.0
-        version: 1.12.0
+        specifier: 1.13.0
+        version: 1.13.0
       happy-dom:
         specifier: ^21.0.4
         version: 21.0.4
@@ -997,8 +997,8 @@ packages:
     resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
     engines: {node: '>=18'}
 
-  chrome-devtools-mcp@1.12.0:
-    resolution: {integrity: sha512-lAGpH0zXT1ZdaPefP1KK/MvxwihOlu7VGQ7p4wbhD9OhN17vUC4KWk/ImUYR9DE4s+7r4r0ySV4xr2OkTa7ZMA==}
+  chrome-devtools-mcp@1.13.0:
+    resolution: {integrity: sha512-Yf4qhS0+2oo7c+gOySMDHQt4ZL/yKXG2Mxxzjk0gcArINtcQ3tLiQVzAW6g2nsyQzAGhkcLwWWBAtlx3Bg+Spg==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=23}
     hasBin: true
     peerDependencies:
@@ -2079,7 +2079,7 @@ snapshots:
 
   chai@6.3.0: {}
 
-  chrome-devtools-mcp@1.12.0: {}
+  chrome-devtools-mcp@1.13.0: {}
 
   cliui@9.0.1:
     dependencies:
