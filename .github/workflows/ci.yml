@@ -29,7 +29,7 @@ jobs:
         with:
           persist-credentials: false
       # mise.toml のツールを、mise.lock の版とチェックサムのとおりに入れる。
-      - uses: jdx/mise-action@v5.2.7
+      - uses: jdx/mise-action@v5.2.9
         with:
           cache: true
       - name: Check mise.lock is up to date
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v5.2.7
+      - uses: jdx/mise-action@v5.2.9
         with:
           cache: true
       - name: Install Node packages
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v5.2.7
+      - uses: jdx/mise-action@v5.2.9
         with:
           cache: true
       # JavaScript のテスト（vitest。画面とスクリプト）に要る。
@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v5.2.7
+      - uses: jdx/mise-action@v5.2.9
         with:
           cache: true
       - name: Install Node packages
@@ -134,7 +134,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jdx/mise-action@v5.2.7
+      - uses: jdx/mise-action@v5.2.9
         with:
           cache: true
       - name: Scan history for secrets
