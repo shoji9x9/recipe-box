@@ -14,6 +14,7 @@
       "Bash(pnpm modern-web-guidance*)",
       "Bash(yarn *modern-web-guidance*)",
       "Bash(node *modern-web.mjs*)",
+      "Bash(node *legacy-scan.mjs*)",
       "Bash(node_modules/.bin/modern-web-guidance*)",
       "Bash(./node_modules/.bin/modern-web-guidance*)"
     ]
