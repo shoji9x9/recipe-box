@@ -385,6 +385,7 @@ GitHub は、公開リポジトリで 60 日活動が無いと、schedule で動
    ```
 
    Dependabot の PR も止めるなら、`.github/dependabot.yml` を消す PR をマージする。
+
 2. `apps/recipe-box-rs` で Worker を消す（`wrangler login` が要る）。Cron Trigger・secret・binding も一緒に消える。
 
    ```bash
@@ -410,6 +411,7 @@ GitHub は、公開リポジトリで 60 日活動が無いと、schedule で動
    ```
 
 6. `pnpm exec wrangler d1 list` と `pnpm exec wrangler r2 bucket list` と、Cloudflare のダッシュボードで、Worker・D1・R2 が消えたことを確かめる。
+
 7. トークンを消す。
    - Cloudflare のダッシュボードで、デプロイ用の API トークン（`CLOUDFLARE_API_TOKEN`）と、ほかに作ったトークンがあれば、それも消す。
    - GitHub の Settings → Environments で、`production` と `claude-review` の secret を消す。Environment そのものは消さない（workflow を有効にし直したときに、main だけを許す設定の無い Environment が作り直されないようにするため）。
