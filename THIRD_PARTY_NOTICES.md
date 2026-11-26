@@ -47,7 +47,7 @@ SOFTWARE.
 
 - 置き場所: `.claude/skills/modern-web-guidance/`
 - 出典: <https://github.com/GoogleChrome/modern-web-guidance> の `skills/modern-web-guidance/`
-- 入れた commit: `341268561baaff256927c931ec8215dbd30e3cee`
+- 入れた commit: `4dd968349e54ca45a05dd5c818fb035c9054b022`
 - ライセンス: Apache License 2.0（全文は下）。入れた commit のリポジトリには、NOTICE のファイルは無い。
 - 変えた点:
   - `gh skill install` が `SKILL.md` の frontmatter を書き換えた（出典を記録する `metadata` の項目を足し、項目を並べ替え、`description` の YAML の書き方を変え、frontmatter の後の空行を除いた）。本文は変えていない。
